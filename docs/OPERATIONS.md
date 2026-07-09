@@ -55,6 +55,13 @@ python3 -m unittest tests.test_fusion_reader_v2 -v
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
 ```
 
+Estado auditado el 2026-07-09:
+
+- `tests.test_fusion_reader_v2`: `240 OK`
+- `tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress`: `35 OK`
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `334 OK`
+- `./scripts/verify_voice_port_isolation.sh`: depende del owner real de `7853` y de artefactos locales de Doctora; puede fallar por frontera/entorno aunque el código propio de Fusion esté verde
+
 ## Si 7853 no engancha
 
 1. revisar `runtime/fusion_reader_v2/tts_owner.json`

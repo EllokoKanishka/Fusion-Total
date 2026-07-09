@@ -656,7 +656,10 @@ def is_docling_gpu_available() -> bool:
 
 
 def _get_docling_gpu_env() -> Path:
-    return Path("/home/lucy-ubuntu/Escritorio/Fusion Total/runtime/fusion_reader_v2/pdf_engine_benchmark/venvs/docling_gpu_venv")
+    configured = os.environ.get("FUSION_READER_DOCLING_GPU_ENV", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(__file__).resolve().parents[1] / "runtime" / "fusion_reader_v2" / "pdf_engine_benchmark" / "venvs" / "docling_gpu_venv"
 
 
 def _convert_with_docling_gpu(
