@@ -59,8 +59,10 @@ Estado auditado el 2026-07-09:
 
 - `tests.test_fusion_reader_v2`: `240 OK`
 - `tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress`: `35 OK`
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `334 OK`
-- `./scripts/verify_voice_port_isolation.sh`: depende del owner real de `7853` y de artefactos locales de Doctora; puede fallar por frontera/entorno aunque el código propio de Fusion esté verde
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `335 OK`
+- `./scripts/verify_voice_port_isolation.sh`: ahora separa `FUSION STRICT CHECKS` de `EXTERNAL BOUNDARY / DOCTORA INFO`
+- resultado local actual: `FINAL RESULT: OK_WITH_WARNINGS`
+- si faltan bitácoras, memoria o referencias externas de Doctora, eso sale como `WARN` externo y ya no se mezcla con un fallo estricto de aislamiento de Fusion
 
 ## Si 7853 no engancha
 
