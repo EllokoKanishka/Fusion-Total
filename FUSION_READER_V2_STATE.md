@@ -70,10 +70,13 @@ Reglas:
 ```text
 tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
-test discovery completa: 334 tests OK
-verify_voice_port_isolation.sh: FAIL en esta auditoría local
-  - faltan archivos esperados bajo Doctora (`bitacora_mantenimiento.md` y `memoria/bitacora_mantenimiento.md`)
+test discovery completa: 335 tests OK
+verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
+  - checks estrictos de Fusion y warnings externos de Doctora quedan separados
+  - `7852` seguía libre
+  - no hubo evidencia de que Fusion apuntara a `7854`
   - `7853` no estaba escuchando con owner válido al momento de correr el check
+  - faltan archivos esperados bajo Doctora (`bitacora_mantenimiento.md` y `memoria/bitacora_mantenimiento.md`)
 ```
 
 ## Consolidación funcional reciente

@@ -149,6 +149,20 @@ class TTSTests(unittest.TestCase):
         self.assertIn('RUNTIME_DIR="${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}"', text)
         self.assertIn('fusion_reader_v2.pid', text)
 
+    def test_voice_port_isolation_verifier_separates_strict_and_external_sections(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "scripts" / "verify_voice_port_isolation.sh").read_text(encoding="utf-8")
+        self.assertIn("FUSION STRICT CHECKS", text)
+        self.assertIn("EXTERNAL BOUNDARY / DOCTORA INFO", text)
+        self.assertIn("FINAL RESULT", text)
+        self.assertIn("FUSION STRICT CHECKS: $(strict_status)", text)
+        self.assertIn("EXTERNAL BOUNDARY / DOCTORA INFO: $(external_status)", text)
+        self.assertIn("FINAL RESULT: $(final_status)", text)
+        self.assertIn("OK_WITH_EXTERNAL_WARNINGS", text)
+        self.assertIn("OK_WITH_STRICT_WARNINGS", text)
+        self.assertIn("external_warn \"missing file: $file\"", text)
+        self.assertIn("strict_fail \"missing file: $file\"", text)
+
     def test_voice_catalog_returns_available_voices(self):
         class VoiceTTS(NullTTSProvider):
             def voices(self): return ["voice1.wav", "voice2.wav"]

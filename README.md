@@ -75,9 +75,11 @@ Validación vigente:
 ```text
 tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
-test discovery completa: 334 tests OK
+test discovery completa: 335 tests OK
 ```
 
 Nota operativa:
 
-- `./scripts/verify_voice_port_isolation.sh` depende del estado real de `7853` con `tts_owner.json` válido y de la frontera local con Doctora; no siempre da `OK` en una máquina parcialmente levantada o con artefactos externos incompletos.
+- `./scripts/verify_voice_port_isolation.sh` separa ahora los checks estrictos de Fusion de los warnings informativos de frontera con Doctora.
+- Si `7853` no está levantado con owner válido, puede devolver `OK_WITH_WARNINGS` sin confundir eso con un uso indebido de `7852` o `7854`.
+- Faltantes documentales o de memoria en Doctora aparecen como warnings externos y ya no derriban por sí solos la validación estricta del repo Fusion.
