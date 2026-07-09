@@ -1,6 +1,6 @@
 # Fusion Reader v2 — Estado de Continuidad
 
-Fecha: 2026-05-08
+Fecha: 2026-07-09
 
 Esta es la hoja corta para retomar el proyecto sin perderse. La historia larga
 vive en `docs/HISTORY.md` y en los documentos históricos de diseño.
@@ -68,9 +68,12 @@ Reglas:
 ## Validación vigente
 
 ```text
-tests.test_fusion_reader_v2: 216 OK
-verify_voice_port_isolation.sh: OK
+tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
+test discovery completa: 334 tests OK
+verify_voice_port_isolation.sh: FAIL en esta auditoría local
+  - faltan archivos esperados bajo Doctora (`bitacora_mantenimiento.md` y `memoria/bitacora_mantenimiento.md`)
+  - `7853` no estaba escuchando con owner válido al momento de correr el check
 ```
 
 ## Consolidación funcional reciente

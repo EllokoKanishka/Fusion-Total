@@ -73,7 +73,11 @@ python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_
 Validación vigente:
 
 ```text
-tests.test_fusion_reader_v2: 119 OK
-verify_voice_port_isolation.sh: OK
+tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
+test discovery completa: 334 tests OK
 ```
+
+Nota operativa:
+
+- `./scripts/verify_voice_port_isolation.sh` depende del estado real de `7853` con `tts_owner.json` válido y de la frontera local con Doctora; no siempre da `OK` en una máquina parcialmente levantada o con artefactos externos incompletos.

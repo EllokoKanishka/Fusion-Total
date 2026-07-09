@@ -8,6 +8,7 @@ from unittest import mock
 from fusion_reader_v2.documents import import_document_bytes, structured_plain_ocr_text, repair_ocr_spacing
 from fusion_reader_v2.pdf_to_docx import (
     _clean_ocr_line,
+    _get_docling_gpu_env,
     _is_noise_line,
     _detect_heading,
     _should_merge_with_previous,
@@ -104,6 +105,20 @@ class PDFToWordTests(unittest.TestCase):
         with mock.patch("fusion_reader_v2.pdf_to_docx.Path.home", return_value=Path("/tmp/fake-home")):
             with mock.patch("fusion_reader_v2.pdf_to_docx.Path.exists", return_value=True):
                 self.assertEqual(find_downloads_dir(), Path("/tmp/fake-home/Descargas"))
+
+    def test_docling_gpu_env_prefers_env_and_otherwise_uses_repo_relative_default(self):
+        previous = os.environ.get("FUSION_READER_DOCLING_GPU_ENV")
+        try:
+            os.environ["FUSION_READER_DOCLING_GPU_ENV"] = "/tmp/docling-env"
+            self.assertEqual(_get_docling_gpu_env(), Path("/tmp/docling-env"))
+            os.environ.pop("FUSION_READER_DOCLING_GPU_ENV", None)
+            expected = Path("fusion_reader_v2/pdf_to_docx.py").resolve().parents[1] / "runtime" / "fusion_reader_v2" / "pdf_engine_benchmark" / "venvs" / "docling_gpu_venv"
+            self.assertEqual(_get_docling_gpu_env(), expected)
+        finally:
+            if previous is None:
+                os.environ.pop("FUSION_READER_DOCLING_GPU_ENV", None)
+            else:
+                os.environ["FUSION_READER_DOCLING_GPU_ENV"] = previous
 
     def test_pdf_to_docx_conversion_creates_real_docx_with_text(self):
         root = Path(tempfile.mkdtemp())
