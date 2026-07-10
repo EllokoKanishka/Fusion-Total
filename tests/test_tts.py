@@ -261,6 +261,7 @@ class TTSTests(unittest.TestCase):
         app = test_app(tts=provider)
         app.load_text("doc", "Doc", "Uno.\n\nDos.", prefetch=True)
         with app._prefetch_lock:
+            old_executor = app._executor
             future = Future()
             app._prefetch_futures[1] = future
         app.prepare_document()
@@ -270,7 +271,12 @@ class TTSTests(unittest.TestCase):
         self.assertEqual(app.prepare_status()["status"], "running")
         app.set_voice("female_01.wav")
         self.assertEqual(len(app._prefetch_futures), 0)
+        self.assertIsNot(app._executor, old_executor)
+        self.assertIsNone(app._prefetch_future)
+        self.assertIsNone(app._prefetch_index)
+        self.assertIsNone(app._prefetch_started_ts)
         self.assertTrue(future.cancelled())
+        self.assertEqual(app.status()["prefetch_indexes"], [])
         for _ in range(20):
             if app.prepare_status()["status"] != "running": break
             time.sleep(0.01)

@@ -3022,6 +3022,7 @@ Sigue en otra línea y mantiene la misma idea.
         app.load_text("doc", "Doc", "Uno.\n\nDos.", prefetch=True)
         # Mock prefetch future
         with app._prefetch_lock:
+            old_executor = app._executor
             future = Future()
             app._prefetch_futures[1] = future
         
@@ -3038,7 +3039,12 @@ Sigue en otra línea y mantiene la misma idea.
         
         # Verify prefetch cleared
         self.assertEqual(len(app._prefetch_futures), 0)
+        self.assertIsNot(app._executor, old_executor)
+        self.assertIsNone(app._prefetch_future)
+        self.assertIsNone(app._prefetch_index)
+        self.assertIsNone(app._prefetch_started_ts)
         self.assertTrue(future.cancelled())
+        self.assertEqual(app.status()["prefetch_indexes"], [])
         # Verify prepare canceled (it goes to idle when finished/canceled)
         # wait a bit for thread to exit
         for _ in range(20):

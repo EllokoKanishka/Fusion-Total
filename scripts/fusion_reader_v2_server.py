@@ -1083,6 +1083,7 @@ INDEX_HTML = r"""<!doctype html>
     let activeReadRequest = 0;
     let audioExportPollingJobId = '';
     let voiceCatalogRefreshInFlight = false;
+    let busyLeaseCount = 0;
     const dialogue = {
       active: false,
       stream: null,
@@ -1193,10 +1194,30 @@ INDEX_HTML = r"""<!doctype html>
       return true;
     }
 
-    function setBusy(isBusy) {
+    function syncBusyControls() {
+      const isBusy = busyLeaseCount > 0;
       [els.prevBtn, els.readBtn, els.repeatBtn, els.nextBtn, els.jumpBtn, els.sendChatBtn, els.saveNoteBtn].forEach(btn => {
         btn.disabled = isBusy;
       });
+    }
+
+    function beginBusyLease() {
+      busyLeaseCount += 1;
+      syncBusyControls();
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        busyLeaseCount = Math.max(0, busyLeaseCount - 1);
+        syncBusyControls();
+      };
+    }
+
+    function setBusy(isBusy) {
+      busyLeaseCount = Math.max(0, busyLeaseCount + (isBusy ? 1 : -1));
+      syncBusyControls();
     }
 
     function log(text) {
@@ -1505,9 +1526,9 @@ INDEX_HTML = r"""<!doctype html>
     async function changeVoice() {
       const voice = els.voiceSelect.value;
       if (!voice) return;
-      resetAudioLifecycle('Cambiando voz; audio anterior detenido.');
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Cambiando voz; audio anterior detenido.');
         const data = await api('/api/voice', { voice });
         renderStatus(data);
         log(`Voz cambiada a ${voice}.`);
@@ -1515,7 +1536,7 @@ INDEX_HTML = r"""<!doctype html>
         log(`No pude cambiar la voz: ${err.message}`);
         await refreshVoices();
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -1800,14 +1821,17 @@ INDEX_HTML = r"""<!doctype html>
 
     async function clearDocument() {
       if (!confirm('¿Limpiar el documento activo?')) return;
-      resetAudioLifecycle('Documento y audio anteriores descartados.');
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Documento y audio anteriores descartados.');
         const res = await fetch('/api/document/clear', { method: 'POST' });
         const data = await res.json();
         renderStatus(data);
         addChatMessage('system', 'Documento activo eliminado.');
       } catch (err) {
         alert('Error al limpiar documento: ' + err.message);
+      } finally {
+        releaseBusy();
       }
     }
 
@@ -1942,13 +1966,16 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function promoteReference(docId) {
-      resetAudioLifecycle('Cambiando documento principal; audio anterior detenido.');
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Cambiando documento principal; audio anterior detenido.');
         const data = await api('/api/reference/promote', { doc_id: docId });
         renderStatus(data);
         log(data.message || 'Documento de consulta promovido a principal.');
       } catch (err) {
         log(`No pude promover la consulta: ${err.message}`);
+      } finally {
+        releaseBusy();
       }
     }
 
@@ -2339,11 +2366,11 @@ INDEX_HTML = r"""<!doctype html>
         return;
       }
       const role = els.referenceModeToggle.checked ? 'reference' : 'main';
-      if (role === 'main') {
-        resetAudioLifecycle('Cargando documento nuevo; audio anterior detenido.');
-      }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
+        if (role === 'main') {
+          resetAudioLifecycle('Cargando documento nuevo; audio anterior detenido.');
+        }
         log(role === 'reference' ? 'Agregando documento de consulta...' : 'Preparando documento...');
         setImportProgress(0);
         els.uploadInfo.textContent = `${file.name}: convirtiendo para ${role === 'reference' ? 'consulta' : 'lectura'}...`;
@@ -2375,7 +2402,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude cargar el archivo: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2468,27 +2495,27 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function navigate(path, body = {}) {
-      invalidatePendingRead();
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
+        invalidatePendingRead();
         const data = await api(path, body);
         renderStatus(data);
         log('Ubicación actualizada.');
       } catch (err) {
         log(`No pude navegar: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
     async function readCurrent() {
-      invalidatePendingRead();
-      const sequence = audioLifecycleSequence;
-      const request = activeReadRequest;
+      const releaseBusy = beginBusyLease();
       const controller = new AbortController();
-      activeReadController = controller;
-      setBusy(true);
       try {
+        invalidatePendingRead();
+        const sequence = audioLifecycleSequence;
+        const request = activeReadRequest;
+        activeReadController = controller;
         log('Solicitud aceptada: comprobando cache y generando el bloque si hace falta...');
         const data = await api('/api/read', { play: false }, { signal: controller.signal });
         if (!playAudio(data, sequence, request)) return;
@@ -2503,8 +2530,8 @@ INDEX_HTML = r"""<!doctype html>
       } finally {
         if (activeReadController === controller) {
           activeReadController = null;
-          setBusy(false);
         }
+        releaseBusy();
       }
     }
 

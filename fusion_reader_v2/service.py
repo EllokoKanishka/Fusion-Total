@@ -77,6 +77,7 @@ class FusionReaderV2:
         self._prefetch_future: Future[AudioArtifact] | None = None
         self._prefetch_index: int | None = None
         self._prefetch_started_ts: float | None = None
+        self._prefetch_promoted_keys: set[tuple] = set()
         self._tts_lock = threading.Lock()
         self._tts_gate = threading.Condition()
         self._interactive_tts_pending = 0
@@ -815,17 +816,17 @@ class FusionReaderV2:
     def _synthesize_cached(self, text: str) -> AudioArtifact:
         return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language)
 
-    def _synthesize_cached_with_settings(self, text: str, voice: str, language: str, *, interactive: bool = False) -> AudioArtifact:
+    def _synthesize_cached_with_settings(self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None) -> AudioArtifact:
         cached = self.cache.get(text, voice, language)
         if cached:
             return cached
         while not interactive:
             with self._tts_gate:
-                while self._interactive_tts_pending:
+                while self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key):
                     self._tts_gate.wait()
             self._tts_lock.acquire()
             with self._tts_gate:
-                if not self._interactive_tts_pending:
+                if not self._interactive_tts_pending or self._prefetch_key_is_promoted_locked(prefetch_key):
                     break
             self._tts_lock.release()
         if interactive:
@@ -938,14 +939,26 @@ class FusionReaderV2:
     def _prefetch_index_from_key(self, key) -> int:
         return int(key[1]) if isinstance(key, tuple) else int(key)
 
+    def _prefetch_key_is_promoted_locked(self, key: tuple | None) -> bool:
+        return bool(key is not None and key in self._prefetch_promoted_keys)
+
+    def _promote_prefetch_key(self, key: tuple) -> None:
+        with self._tts_gate:
+            self._prefetch_promoted_keys.add(key)
+            self._tts_gate.notify_all()
+
+    def _forget_prefetch_promotion(self, key: tuple) -> None:
+        with self._tts_gate:
+            if key in self._prefetch_promoted_keys:
+                self._prefetch_promoted_keys.discard(key)
+                self._tts_gate.notify_all()
+
     def _artifact_for_index(self, generation: int, index: int, text: str, voice: str, language: str) -> AudioArtifact:
         key = self._prefetch_key(generation, index, text, voice, language)
         with self._prefetch_lock:
             future = self._prefetch_futures.get(key)
         if future:
-            with self._tts_gate:
-                self._interactive_tts_pending -= 1
-                self._tts_gate.notify_all()
+            self._promote_prefetch_key(key)
             try:
                 artifact = future.result(timeout=self.prefetch_wait_seconds)
                 self._forget_prefetch(key, future)
@@ -955,9 +968,7 @@ class FusionReaderV2:
                 self._reset_prefetch_queue(future)
                 return AudioArtifact(False, provider=self.tts.name, detail="prefetch_timeout")
             finally:
-                with self._tts_gate:
-                    self._interactive_tts_pending += 1
-                    self._tts_gate.notify_all()
+                self._forget_prefetch_promotion(key)
         cached = self.cache.get(text, voice, language)
         if cached:
             return cached
@@ -986,7 +997,7 @@ class FusionReaderV2:
             existing = self._prefetch_futures.get(key)
             if existing and not existing.done():
                 return
-            future = self._executor.submit(self._synthesize_cached_with_settings, text, voice, language)
+            future = self._executor.submit(self._synthesize_cached_with_settings, text, voice, language, prefetch_key=key)
             self._prefetch_futures[key] = future
             self._prefetch_started[key] = time.time()
             self._set_primary_prefetch_locked()
@@ -1014,6 +1025,7 @@ class FusionReaderV2:
     def _reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
         with self._prefetch_lock:
             stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
+            stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
             if self._prefetch_future is not stale_future and not stale_keys:
                 return
             old_executor = self._executor
@@ -1025,6 +1037,17 @@ class FusionReaderV2:
             self._prefetch_index = None
             self._prefetch_started_ts = None
             self._set_primary_prefetch_locked()
+        for future in stale_futures:
+            future.cancel()
+        if stale_keys:
+            with self._tts_gate:
+                removed = False
+                for key in stale_keys:
+                    if key in self._prefetch_promoted_keys:
+                        self._prefetch_promoted_keys.discard(key)
+                        removed = True
+                if removed:
+                    self._tts_gate.notify_all()
         old_executor.shutdown(wait=False, cancel_futures=True)
 
     def read_current(self, play: bool = True) -> dict:
@@ -2160,13 +2183,8 @@ class FusionReaderV2:
         self.voice.voice = voice
         self._persist_session_state()
 
-        # Cancel active prefetches to avoid mixed voices
-        with self._prefetch_lock:
-            for future in self._prefetch_futures.values():
-                if not future.done():
-                    future.cancel()
-            self._prefetch_futures.clear()
-            self._prefetch_started.clear()
+        # Cancel active prefetches to avoid mixed voices and stale queue state
+        self._clear_prefetch_queue()
 
         # If preparation is running, we should probably stop it or it will mix voices
         if self.prepare_status().get("status") == "running":
@@ -2957,8 +2975,7 @@ class FusionReaderV2:
 
     def _clear_prefetch_queue(self) -> None:
         with self._prefetch_lock:
-            if not self._prefetch_futures:
-                return
+            tracked_futures = list(self._prefetch_futures.values())
             old_executor = self._executor
             self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
             self._prefetch_futures = {}
@@ -2966,6 +2983,12 @@ class FusionReaderV2:
             self._prefetch_future = None
             self._prefetch_index = None
             self._prefetch_started_ts = None
+        for future in tracked_futures:
+            future.cancel()
+        with self._tts_gate:
+            if self._prefetch_promoted_keys:
+                self._prefetch_promoted_keys.clear()
+            self._tts_gate.notify_all()
         old_executor.shutdown(wait=False, cancel_futures=True)
 
     def _shorten_dialogue_answer(self, answer: str) -> str:

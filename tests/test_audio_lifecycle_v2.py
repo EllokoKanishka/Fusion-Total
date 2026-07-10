@@ -50,6 +50,51 @@ class OrderedTTS(ControlledTTS):
         return AudioArtifact(True, path=Path(name), provider=self.name)
 
 
+class PriorityTTS(NullTTSProvider):
+    name = "priority_tts"
+
+    def __init__(self):
+        super().__init__()
+        self.available = True
+        self.order: list[str] = []
+        self._events_lock = threading.Lock()
+        self._started_events: dict[str, threading.Event] = {}
+        self._release_events: dict[str, threading.Event] = {}
+
+    def _events_for(self, text: str) -> tuple[threading.Event, threading.Event]:
+        with self._events_lock:
+            started = self._started_events.setdefault(text, threading.Event())
+            release = self._release_events.setdefault(text, threading.Event())
+            return started, release
+
+    def started_event(self, text: str) -> threading.Event:
+        return self._events_for(text)[0]
+
+    def release_text(self, text: str) -> None:
+        self._events_for(text)[1].set()
+
+    def order_snapshot(self) -> list[str]:
+        with self._events_lock:
+            return list(self.order)
+
+    def synthesize(self, text, voice="", language="es"):
+        with self._events_lock:
+            self.calls.append((text, voice, language))
+            self.order.append(text)
+            started = self._started_events.setdefault(text, threading.Event())
+            release = self._release_events.setdefault(text, threading.Event())
+            started.set()
+        release.wait(2)
+        if not self.available:
+            return AudioArtifact(False, provider=self.name, detail="tts_down")
+        fd, name = tempfile.mkstemp(prefix="priority_", suffix=".wav")
+        os.close(fd)
+        with wave.open(name, "wb") as wav:
+            wav.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+            wav.writeframes(b"\0\0" * 80)
+        return AudioArtifact(True, path=Path(name), provider=self.name)
+
+
 class AudioLifecycleV2Tests(unittest.TestCase):
     def test_navigation_returns_enriched_identity_without_advancing_generation(self):
         app = test_app()
@@ -226,6 +271,53 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         app._prepare_thread.join(2)
         self.assertEqual(app.prepare_status()["status"], "done")
 
+    def test_exact_prefetch_promotion_keeps_interactive_priority_until_audio_is_ready(self):
+        tts = PriorityTTS()
+        app = test_app(tts=tts)
+        app.load_text("a", "A", "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.", prefetch=False)
+        app.session.document.chunks = ["One.", "Two.", "Three.", "Four.", "Five."]
+        app.prepare_document(start="beginning")
+        self.assertTrue(tts.started_event("One.").wait(1))
+        app.jump(5)
+        exact_key = app._prefetch_key(app._document_generation, 4, "Five.", app.voice.voice, app.voice.language)
+        with app._prefetch_lock:
+            exact_future = app._prefetch_futures.get(exact_key)
+            self.assertIsNotNone(exact_future)
+            self.assertFalse(exact_future.done())
+        result = {}
+        reader = threading.Thread(target=lambda: result.update(app.read_current(play=False)))
+        reader.start()
+        try:
+            with app._tts_gate:
+                self.assertTrue(app._tts_gate.wait_for(lambda: app._interactive_tts_pending > 0, timeout=1))
+                self.assertEqual(app._interactive_tts_pending, 1)
+                self.assertFalse(app._tts_gate.wait_for(lambda: app._interactive_tts_pending == 0, timeout=0.1))
+            self.assertEqual(tts.order_snapshot(), ["One."])
+            tts.release_text("One.")
+            self.assertTrue(tts.started_event("Five.").wait(1))
+            self.assertEqual(tts.order_snapshot(), ["One.", "Five."])
+            self.assertFalse(tts.started_event("Two.").is_set())
+            self.assertFalse(tts.started_event("Three.").is_set())
+            self.assertFalse(tts.started_event("Four.").is_set())
+            tts.release_text("Five.")
+            reader.join(2)
+            self.assertFalse(reader.is_alive())
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["requested_chunk_index"], 4)
+            self.assertEqual(result["requested_doc_id"], "a")
+            tts.release_text("Two.")
+            tts.release_text("Three.")
+            tts.release_text("Four.")
+            if app._prepare_thread:
+                app._prepare_thread.join(2)
+            self.assertEqual(app.prepare_status()["status"], "done")
+        finally:
+            for text in ("One.", "Two.", "Three.", "Four.", "Five."):
+                tts.release_text(text)
+            reader.join(2)
+            if app._prepare_thread:
+                app._prepare_thread.join(2)
+
     def test_tts_runtime_state_distinguishes_starting_and_down(self):
         tts = ControlledTTS()
         app = test_app(tts=tts)
@@ -269,6 +361,31 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)
         self.assertIn('self._result(409 if result.get("stale") else 200, result)', text)
+
+    def test_frontend_busy_leases_are_balanced_for_resetting_operations(self):
+        text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        self.assertIn("let busyLeaseCount = 0;", text)
+        self.assertIn("function beginBusyLease()", text)
+        self.assertIn("busyLeaseCount = Math.max(0, busyLeaseCount + (isBusy ? 1 : -1));", text)
+
+        blocks = {
+            "changeVoice()": ("async function changeVoice()", "async function ensureVoiceCatalog()", "resetAudioLifecycle"),
+            "clearDocument()": ("async function clearDocument()", "async function setLaboratoryMode(mode)", "resetAudioLifecycle"),
+            "promoteReference(docId)": ("async function promoteReference(docId)", "async function removeReference(docId)", "resetAudioLifecycle"),
+            "loadFile(file)": ("async function loadFile(file)", "function canConvertPdf(file)", "resetAudioLifecycle"),
+            "navigate(path, body = {})": ("async function navigate(path, body = {})", "async function readCurrent()", "invalidatePendingRead();"),
+            "readCurrent()": ("async function readCurrent()", "async function pollPrepare()", "invalidatePendingRead();"),
+        }
+        for name, (start_marker, end_marker, first_action) in blocks.items():
+            block = text[text.index(start_marker):text.index(end_marker)]
+            self.assertIn("beginBusyLease()", block)
+            self.assertIn("releaseBusy();", block)
+            self.assertIn("try {", block)
+            self.assertIn("finally {", block)
+            self.assertLess(block.index("beginBusyLease()"), block.index(first_action))
+        read_block = text[text.index("async function readCurrent()"):text.index("async function pollPrepare()")]
+        self.assertIn("if (activeReadController === controller) {", read_block)
+        self.assertIn("activeReadController = null;", read_block)
 
 
 if __name__ == "__main__":

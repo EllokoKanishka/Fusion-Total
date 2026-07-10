@@ -5,9 +5,11 @@
 - `next`, `previous` y `jump` conservan el snapshot público enriquecido, incluida la generación documental y el estado de audio.
 - Cada ejecución de preparación usa un `Event` de cancelación nuevo; cancelar y reiniciar en el mismo documento funciona sin workers superpuestos.
 - Documento, bloque, texto, voz e idioma forman una única identidad de lectura. Un resultado de una voz anterior queda `stale` y el prefetch solo se comparte por clave exacta.
-- Un `Condition` registra lecturas interactivas pendientes y coordina la adquisición del lock del proveedor. Prepare, prefetch y export no pueden iniciar una unidad TTS nueva mientras espera una lectura.
+- Un `Condition` registra lecturas interactivas pendientes y coordina la adquisición del lock del proveedor. Prepare, prefetch y export no pueden iniciar una unidad TTS nueva mientras espera una lectura; un future exacto puede promocionarse por clave y solo esa clave cruza el gate mientras la lectura sigue pendiente.
 - La prioridad es cooperativa entre unidades: una inferencia que ya entró al proveedor no se puede interrumpir.
 - Cambiar de voz invalida requests, detiene lectura continua y vacía el reproductor antes de publicar el status nuevo.
+- Cambiar de voz limpia la cola de prefetch de forma canónica, cancela futures pendientes y no deja estado primario stale.
+- El frontend usa leases contables de busy para que clear, promote, load, voice, navigate y read no se liberen entre sí cuando se cruzan abortos y requests nuevos.
 
 ## Síntomas y causas verificadas
 
@@ -73,9 +75,11 @@ fallback `7851`, nunca `7852` ni `7854`.
 
 Los tests usan TTS controlado por Events, sin modelos ni sleeps largos. Cubren
 reemplazo A/B, prefetch índice cero, clear pendiente, prepare viejo, lecturas
-simultáneas, cache con health down, promoción y contrato frontend/API.
+simultáneas, cache con health down, promoción, prioridad exacta del future y
+contrato frontend/API.
 
-Prueba manual con Playwright y TTS Fusion `7853` sano:
+Prueba manual inicial del primer commit del PR, con Playwright y TTS Fusion
+`7853` sano:
 
 - A desde cache: `ready_ms=0`; interacción completa observada ~1.73 s.
 - Clear: reproductor verificado con `src=null`, `currentTime=0`, `paused=true`.
@@ -84,9 +88,12 @@ Prueba manual con Playwright y TTS Fusion `7853` sano:
 - El texto visible y el único audio asignado después del reemplazo fueron B;
   nunca se reasignó audio de A.
 
-El TTS real terminó demasiado rápido para forzar de forma reproducible una
-carrera durante inferencia; esa ventana y la prioridad frente a prepare se
-validan con TTS controlado por Events.
+Validación final:
+
+- la carrera de prioridad exacta se validó con TTS controlado por Events;
+- el ownership del busy se validó con pruebas estructurales del frontend;
+- no se repitió audio real final porque `8010` y `7853` estaban apagados;
+- no inventé un resultado manual que no se haya ejecutado.
 
 ## Riesgos restantes
 
