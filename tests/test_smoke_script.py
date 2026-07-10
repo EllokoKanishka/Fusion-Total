@@ -23,6 +23,9 @@ class SmokeScriptTests(unittest.TestCase):
         text = Path("scripts/smoke_fusion_reader_v2.sh").read_text(encoding="utf-8")
         for forbidden in ("fuser -k", "pkill", "killall", "rm -rf", "git push", "gh pr merge"):
             self.assertNotIn(forbidden, text)
+        verify = Path("scripts/verify_voice_port_isolation.sh").read_text(encoding="utf-8")
+        for forbidden in ("path.write_text", 'data["owner_pid"]', 'python3 - "$OWNER_FILE"'):
+            self.assertNotIn(forbidden, verify)
 
     def test_verify_warning_results_are_preserved(self):
         text = Path("scripts/smoke_fusion_reader_v2.sh").read_text(encoding="utf-8")

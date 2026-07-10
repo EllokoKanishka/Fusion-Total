@@ -20,7 +20,12 @@
 
 - Se reequilibró el layout con sidebars más anchas, lectura centrada y ancho máximo por caracteres.
 - Se separó visualmente `Lectura activa` de `Consulta` y la carga como consulta vuelve a quedar explícita por archivo.
-- El TTS ahora puede reconciliar un `owner_pid` stale con el proceso vivo en `7853`, y la UI muestra errores legibles y desactiva `Leer/Repetir` cuando no corresponde.
+- El provider TTS operativo puede reconciliar de forma atómica un `owner_pid`
+  stale con el proceso vivo validado en `7853`; una falla de escritura de
+  metadata no invalida ese listener ya verificado.
+- `verify_voice_port_isolation.sh` y el smoke permanecen read-only: reconocen
+  y reportan metadata stale, pero no reparan ni modifican runtime.
+- La UI muestra errores legibles y desactiva `Leer/Repetir` cuando no corresponde.
 - La preparación expone bloque actual, total, porcentaje y terminales correctos para `done`, `error` o `canceled`.
 - El pipeline PDF conserva texto bruto y limpio, baja el umbral para confiar en text layer útil y aplica heurísticas conservadoras para headers y palabras partidas.
 

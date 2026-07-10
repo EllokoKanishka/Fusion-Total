@@ -115,16 +115,7 @@ owner_file_matches_fusion() {
   [[ -r "/proc/$listener_pid/cmdline" ]] || return 1
   tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "tts_server:app" || return 1
   tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "--port $FUSION_TTS_PORT" || return 1
-
-  python3 - "$OWNER_FILE" "$listener_pid" <<'PY' >/dev/null 2>&1 || true
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-pid = int(sys.argv[2])
-data = json.loads(path.read_text(encoding="utf-8"))
-data["owner_pid"] = pid
-path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-PY
+  strict_warn "Fusion TTS listener is valid but owner_pid metadata is stale; runtime reconciliation is needed"
   return 0
 }
 

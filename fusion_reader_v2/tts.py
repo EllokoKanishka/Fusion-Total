@@ -159,11 +159,31 @@ class AllTalkProvider(TTSProvider):
     def _rewrite_owner_pid(self, data: dict, owner_pid: int) -> None:
         updated = dict(data)
         updated["owner_pid"] = int(owner_pid)
+        temporary: Path | None = None
         try:
             self.owner_file.parent.mkdir(parents=True, exist_ok=True)
-            self.owner_file.write_text(json.dumps(updated, indent=2, ensure_ascii=False), encoding="utf-8")
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.owner_file.parent,
+                prefix=f".{self.owner_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                json.dump(updated, handle, indent=2, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.owner_file)
+            temporary = None
         except Exception:
             return
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def _reconcile_owner_pid(self, data: dict, port: int) -> int | None:
         listener_pid = self._listening_pid(port)
