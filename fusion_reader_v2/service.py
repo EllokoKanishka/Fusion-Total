@@ -999,6 +999,8 @@ class FusionReaderV2:
             "synthesis_ms": artifact.duration_ms,
             "ready_ms": ready_ms,
         }
+        if not artifact.ok:
+            out["error"] = self._human_tts_error(artifact.detail, action="read")
         self._record_voice_metric("read", out, text)
         return out
 
@@ -1071,6 +1073,22 @@ class FusionReaderV2:
         total = len(document.chunks)
         start_index = self.session.cursor if start != "beginning" else 0
         order = list(range(start_index, total)) + list(range(0, start_index))
+        uncached = [index for index in order if not self.cache.get(document.chunks[index], self.voice.voice, self.voice.language)]
+        if uncached:
+            tts_health = self.tts.health()
+            if not bool(tts_health.get("ok")):
+                cached_now = total - len(uncached)
+                self._finish_prepare(
+                    "error",
+                    self._human_tts_error(str(tts_health.get("detail") or ""), action="prepare"),
+                    current=cached_now,
+                    total=total,
+                    cached=cached_now,
+                    generated=0,
+                    failed=len(uncached),
+                    generation=generation,
+                )
+                return
         cached = generated = failed = processed = 0
         for index in order:
             if self._prepare_cancel.is_set():
@@ -1092,7 +1110,31 @@ class FusionReaderV2:
                     failed += 1
             processed += 1
             self._update_prepare_status(processed, total, cached, generated, failed, generation=generation)
-        self._finish_prepare("done", "Documento preparado en cache.", processed, total, cached, generated, failed, generation=generation)
+        if failed and not generated and not cached:
+            self._finish_prepare(
+                "error",
+                self._human_tts_error("tts_prepare_failed", action="prepare"),
+                processed,
+                total,
+                cached,
+                generated,
+                failed,
+                generation=generation,
+            )
+            return
+        if failed:
+            self._finish_prepare(
+                "done",
+                f"Preparación completada con fallas: {failed} bloque(s) sin audio.",
+                processed,
+                total,
+                cached,
+                generated,
+                failed,
+                generation=generation,
+            )
+            return
+        self._finish_prepare("done", "Documento preparado para lectura.", processed, total, cached, generated, failed, generation=generation)
 
     def _reset_prepare_for_new_document(self) -> None:
         self._prepare_cancel.set()
@@ -1109,6 +1151,26 @@ class FusionReaderV2:
                 return
             time.sleep(0.2)
 
+    def _human_tts_error(self, detail: str, *, action: str = "read") -> str:
+        clean = str(detail or "").strip()
+        if clean.startswith("tts_owner_"):
+            return "El servicio de voz no está disponible para Fusion. Iniciá el TTS de Fusion o seleccioná un motor válido."
+        if clean.startswith("tts_foreign_doctora_lucy_port"):
+            return "La voz disponible pertenece a otro proyecto. Fusion no va a usar ese puerto."
+        if clean.startswith("tts_historic_unassigned_port"):
+            return "El puerto histórico 7852 no es válido para la voz de Fusion."
+        if clean in {"empty_tts_text", "no_current_chunk"}:
+            return "No encontré texto legible para leer en este bloque."
+        if "timed out" in clean or "timeout" in clean:
+            return "La voz tardó demasiado en responder. Probemos otra vez en unos segundos."
+        if clean.startswith("http_400"):
+            return "La voz rechazó este bloque tal como llegó. Probá con otro bloque o con una voz distinta."
+        if clean.startswith("http_") or "Connection refused" in clean or "refused" in clean:
+            return "El servicio de voz no respondió desde Fusion. Iniciá TTS o seleccioná otro motor."
+        if action == "prepare":
+            return "No pude preparar el audio porque la voz no está disponible en este momento."
+        return "No pude leer este bloque porque la voz no está disponible en este momento."
+
     def _update_prepare_status(self, current: int, total: int, cached: int, generated: int, failed: int, generation: int) -> None:
         with self._prepare_lock:
             if generation != self._prepare_generation:
@@ -1121,7 +1183,7 @@ class FusionReaderV2:
                     "cached": cached,
                     "generated": generated,
                     "failed": failed,
-                    "message": f"Preparando audio {cached + generated + failed}/{total}.",
+                    "message": f"Preparando bloque {cached + generated + failed} de {total}.",
                     "updated_ts": time.time(),
                 }
             )

@@ -97,10 +97,35 @@ owner_file_matches_fusion() {
 
   local owner_pid
   owner_pid="$(sed -n 's/.*"owner_pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$OWNER_FILE" | head -1)"
-  [[ -n "$owner_pid" ]] || return 1
-  [[ -r "/proc/$owner_pid/cmdline" ]] || return 1
-  tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "tts_server:app" || return 1
-  tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "--port $FUSION_TTS_PORT" || return 1
+  if [[ -n "$owner_pid" ]] && [[ -r "/proc/$owner_pid/cmdline" ]]; then
+    if tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "tts_server:app" \
+      && tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "--port $FUSION_TTS_PORT"; then
+      return 0
+    fi
+  fi
+
+  local listener_pid=""
+  if command -v lsof >/dev/null 2>&1; then
+    listener_pid="$(lsof -tiTCP:"$FUSION_TTS_PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
+  fi
+  if [[ -z "$listener_pid" ]] && command -v ss >/dev/null 2>&1; then
+    listener_pid="$(ss -ltnp 2>/dev/null | grep -F ":$FUSION_TTS_PORT" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
+  fi
+  [[ -n "$listener_pid" ]] || return 1
+  [[ -r "/proc/$listener_pid/cmdline" ]] || return 1
+  tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "tts_server:app" || return 1
+  tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "--port $FUSION_TTS_PORT" || return 1
+
+  python3 - "$OWNER_FILE" "$listener_pid" <<'PY' >/dev/null 2>&1 || true
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+pid = int(sys.argv[2])
+data = json.loads(path.read_text(encoding="utf-8"))
+data["owner_pid"] = pid
+path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+PY
+  return 0
 }
 
 latest_relevant_doctora_boveda() {

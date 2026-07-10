@@ -122,6 +122,30 @@ class TTSTests(unittest.TestCase):
                 if value is None: os.environ.pop(key, None)
                 else: os.environ[key] = value
 
+    def test_alltalk_recovers_stale_owner_pid_from_live_listener(self):
+        keys = ["FUSION_READER_GPU_TTS_PORT", "FUSION_READER_REQUIRE_TTS_OWNER", "FUSION_READER_TTS_OWNER_FILE"]
+        previous = {key: os.environ.get(key) for key in keys}
+        with tempfile.TemporaryDirectory() as tmp:
+            owner_file = Path(tmp) / "tts_owner.json"
+            owner_file.write_text(json.dumps({"owner": "fusion_reader_v2", "port": 7853, "owner_pid": 999999}), encoding="utf-8")
+            try:
+                os.environ["FUSION_READER_GPU_TTS_PORT"] = "7853"
+                os.environ["FUSION_READER_REQUIRE_TTS_OWNER"] = "1"
+                os.environ["FUSION_READER_TTS_OWNER_FILE"] = str(owner_file)
+                provider = AllTalkProvider(base_url="http://127.0.0.1:7853")
+                with mock.patch.object(provider, "_listening_pid", return_value=4321), \
+                     mock.patch.object(provider, "_listener_matches_fusion_tts", return_value=True), \
+                     mock.patch.object(provider, "_cmdline_for_pid", side_effect=FileNotFoundError()):
+                    ok, detail = provider._owner_guard()
+                self.assertTrue(ok)
+                self.assertEqual(detail, "")
+                rewritten = json.loads(owner_file.read_text(encoding="utf-8"))
+                self.assertEqual(rewritten["owner_pid"], 4321)
+            finally:
+                for key, value in previous.items():
+                    if value is None: os.environ.pop(key, None)
+                    else: os.environ[key] = value
+
     def test_fusion_launchers_do_not_auto_claim_antigravity_tts_port(self):
         root = Path(__file__).resolve().parents[1]
         launchers = [root / "scripts" / "start_fusion_reader_v2.sh", root / "scripts" / "open_fusion_reader.sh", root / "scripts" / "start_reader_neural_tts_gpu_5090.sh"]

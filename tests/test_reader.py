@@ -9,6 +9,7 @@ from fusion_reader_v2.reader import Document
 from tests.helpers import (
     test_app,
     NullTTSProvider,
+    FailingTTSProvider,
     make_reading_document,
     make_reading_sections,
     manual_document,
@@ -217,6 +218,29 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(status["main_document"]["title"], "Principal")
         self.assertEqual(len(status["reference_documents"]), 1)
         self.assertEqual(status["reference_documents"][0]["doc_id"], "ref")
+
+    def test_prepare_document_reports_error_when_tts_is_unavailable(self):
+        app = test_app(tts=FailingTTSProvider())
+        app.session.load(manual_document("doc", "Doc", ["Uno.", "Dos."]))
+        started = app.prepare_document()
+        self.assertEqual(started["status"], "running")
+        for _ in range(50):
+            status = app.prepare_status()
+            if status["status"] == "error":
+                break
+            time.sleep(0.01)
+        status = app.prepare_status()
+        self.assertEqual(status["status"], "error")
+        self.assertIn("voz no está disponible", status["message"])
+        self.assertEqual(status["failed"], 2)
+
+    def test_read_current_returns_friendly_tts_error(self):
+        app = test_app(tts=FailingTTSProvider())
+        app.load_text("doc", "Doc", "Uno.", prefetch=False)
+        out = app.read_current(play=False)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["detail"], "tts_down")
+        self.assertIn("voz no está disponible", out["error"])
 
     def test_promote_reference_swaps_main_and_previous_main_becomes_reference(self):
         app = test_app()

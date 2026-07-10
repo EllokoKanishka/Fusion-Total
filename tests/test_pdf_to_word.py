@@ -5,7 +5,7 @@ import zipfile
 import time
 from pathlib import Path
 from unittest import mock
-from fusion_reader_v2.documents import import_document_bytes, structured_plain_ocr_text, repair_ocr_spacing
+from fusion_reader_v2.documents import import_document_bytes, structured_plain_ocr_text, repair_ocr_spacing, clean_pdf_text
 from fusion_reader_v2.pdf_to_docx import (
     _clean_ocr_line,
     _get_docling_gpu_env,
@@ -35,6 +35,16 @@ class PDFToWordTests(unittest.TestCase):
         self.assertEqual(doc.doc_id, "cuento")
         self.assertEqual(doc.source_type, "text")
         self.assertIn("Dos.", doc.text)
+
+    def test_clean_pdf_text_repairs_split_words_and_drops_mechanical_headers(self):
+        raw = "[Pagina 1]\nREP UB UC A VII 339\nca ve rna y som bras\neduca ción y prisión con tra\n514..\n"
+        clean = clean_pdf_text(raw)
+        self.assertIn("caverna", clean)
+        self.assertIn("sombras", clean)
+        self.assertIn("educación", clean)
+        self.assertIn("prisión contra", clean)
+        self.assertNotIn("REP UB UC A VII 339", clean)
+        self.assertNotIn("514..", clean)
 
     def test_import_docx_document(self):
         root = Path(tempfile.mkdtemp())
@@ -95,6 +105,20 @@ class PDFToWordTests(unittest.TestCase):
         text = repair_ocr_spacing("Elabad llegó en elaño nuevo.")
         self.assertIn("El abad", text)
         self.assertIn("el año", text)
+
+    def test_import_pdf_keeps_raw_text_when_pdf_uses_text_layer(self):
+        pdf = make_simple_pdf_bytes([
+            "REP UB UC A VII 339",
+            "ca ve rna y som bras",
+            "educa ción y prisión con tra",
+            "ca ve rna y som bras otra vez",
+            "educa ción y prisión con tra otra vez",
+        ])
+        doc = import_document_bytes("mito.pdf", pdf)
+        self.assertEqual(doc.source_type, "pdf")
+        self.assertTrue(doc.raw_text)
+        self.assertIn("REP UB UC A VII 339", doc.raw_text)
+        self.assertIn("caverna", doc.text)
 
     def test_safe_output_name_strips_weird_input_and_keeps_docx_suffix(self):
         out = safe_output_name("../hola rara?.pdf")
