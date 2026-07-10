@@ -248,12 +248,25 @@ class AutoSTTProvider(STTProvider):
 
 
 def default_stt_provider() -> STTProvider:
-    selected = os.environ.get("FUSION_READER_STT_PROVIDER", "auto").strip().lower()
+    selected = normalize_stt_provider(os.environ.get("FUSION_READER_STT_PROVIDER", "auto"))
     if selected == "cli":
-        return WhisperCliSTTProvider()
+        provider = WhisperCliSTTProvider()
+    elif selected == "server":
+        provider = FasterWhisperServerSTTProvider()
+    else:
+        provider = AutoSTTProvider()
+    provider.requested_provider = selected
+    return provider
+
+
+def normalize_stt_provider(value: str | None) -> str:
+    """Return the canonical STT mode; unknown values preserve legacy auto behavior."""
+    selected = str(value or "auto").strip().lower()
     if selected in {"server", "faster_whisper", "faster-whisper"}:
-        return FasterWhisperServerSTTProvider()
-    return AutoSTTProvider()
+        return "server"
+    if selected == "cli":
+        return "cli"
+    return "auto"
 
 
 def _default_whisper_command() -> str:

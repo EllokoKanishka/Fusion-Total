@@ -7,6 +7,13 @@ UI_PORT="${FUSION_READER_V2_PORT:-8010}"
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
+STT_PROVIDER_RAW="${FUSION_READER_STT_PROVIDER:-auto}"
+case "${STT_PROVIDER_RAW,,}" in
+  cli) STT_PROVIDER="cli" ;;
+  server|faster_whisper|faster-whisper) STT_PROVIDER="server" ;;
+  *) STT_PROVIDER="auto" ;;
+esac
+STT_COMMAND="${FUSION_READER_STT_COMMAND:-whisper}"
 OLLAMA_PORT="${FUSION_READER_OLLAMA_PORT:-11434}"
 SEARXNG_URL="${FUSION_READER_SEARXNG_URL:-http://127.0.0.1:8080}"
 HISTORIC_PORT=7852
@@ -108,14 +115,33 @@ else
   info "CPU fallback TTS ${CPU_TTS_PORT} is not listening"
 fi
 
-if port_is_listening "$STT_PORT"; then
+info "requested STT provider: ${STT_PROVIDER} (value: ${STT_PROVIDER_RAW})"
+if [[ "$STT_PROVIDER" == "cli" ]]; then
+  if command -v "$STT_COMMAND" >/dev/null 2>&1 || [[ -x "$STT_COMMAND" ]]; then
+    ok "Whisper CLI command is available: ${STT_COMMAND}"
+  else
+    warn "Whisper CLI command is unavailable: ${STT_COMMAND}"
+  fi
+  if port_is_listening "$STT_PORT"; then
+    info "STT server ${STT_PORT} is listening but is not required in cli mode"
+  else
+    info "STT server ${STT_PORT} is not listening and is not required in cli mode"
+  fi
+elif port_is_listening "$STT_PORT"; then
   if curl_json_ok "http://127.0.0.1:${STT_PORT}/health"; then
     ok "STT ${STT_PORT} is listening and /health responds"
   else
     warn "STT ${STT_PORT} is listening but /health did not respond cleanly"
   fi
 else
-  warn "STT ${STT_PORT} is not listening"
+  warn "STT ${STT_PORT} is not listening for provider ${STT_PROVIDER}"
+  if [[ "$STT_PROVIDER" == "auto" ]]; then
+    if command -v "$STT_COMMAND" >/dev/null 2>&1 || [[ -x "$STT_COMMAND" ]]; then
+      ok "Whisper CLI fallback is available: ${STT_COMMAND}"
+    else
+      warn "Whisper CLI fallback is unavailable: ${STT_COMMAND}"
+    fi
+  fi
 fi
 
 if port_is_listening "$OLLAMA_PORT"; then

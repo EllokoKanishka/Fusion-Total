@@ -204,7 +204,12 @@ usa principalmente biblioteca estándar:
 ### STT
 
 - `FUSION_READER_STT_PROVIDER`
-  - `auto`, `server` o `cli`
+  - default `auto`; valores canónicos `auto`, `server` o `cli`
+  - aliases de server: `faster_whisper`, `faster-whisper`; valores inválidos se
+    normalizan conservadoramente a `auto`
+- `FUSION_READER_STT_ENV`
+  - entorno Python del server; prioridad sobre `FUSION_READER_GPU_ENV`, que se
+    mantiene como fallback compatible
 - `FUSION_READER_STT_URL`
   - base URL del server STT; default `http://127.0.0.1:8021`
 - `FUSION_READER_STT_PORT`
@@ -357,6 +362,8 @@ Su auditoría consolidada vive en `docs/LOCAL_DEFAULTS_V2.md`.
 
 - levanta el server STT local en `8021`;
 - usa `scripts/fusion_reader_v2_stt_server.py`;
+- resuelve Python como `FUSION_READER_STT_ENV` → `FUSION_READER_GPU_ENV` →
+  default local histórico, sin crear ni mover entornos;
 - puede degradar a CPU/int8 si la guardia de convivencia GPU lo exige.
 
 ### `scripts/verify_voice_port_isolation.sh`

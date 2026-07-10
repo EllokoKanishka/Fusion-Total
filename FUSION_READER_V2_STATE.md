@@ -31,6 +31,10 @@ Si STT, Ollama o el diálogo fallan, `Leer` debe seguir funcionando.
 - TTS Doctora/Antigravity: `http://127.0.0.1:7854`
 - STT principal configurado: `http://127.0.0.1:8021`
 - STT efectivo actual: `whisper_cli` (fallback visible en UI cuando `8021` no responde)
+- Contrato STT: `auto` por default; `server` usa exclusivamente Faster Whisper
+  `8021`; `cli` usa exclusivamente Whisper CLI y no inicia `8021`.
+- Entorno server STT: `FUSION_READER_STT_ENV` → `FUSION_READER_GPU_ENV`
+  (compatibilidad) → default histórico.
 - LLM local: Ollama `qwen3:14b-q8_0`
 - Voz default: `female_03.wav`
 - Idioma default: `es`
@@ -223,7 +227,8 @@ Notas:
 
 ## Pendientes reales
 
-- decidir si `8021` debe ser parte del launcher principal o si `whisper_cli` queda como camino operativo aceptado;
+- separar físicamente el entorno Faster Whisper del entorno histórico
+  compartido, sin moverlo durante esta consolidación;
 - exponer aún mejor en UI el provider STT efectivo durante diálogo oral y fallback real;
 - probar `Dialogar` con micrófono real en más escenarios;
 - ajustar fino VAD/barge-in según ruido ambiente y eco;

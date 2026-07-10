@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${FUSION_READER_V2_PORT:-8010}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
+STT_PROVIDER_RAW="${FUSION_READER_STT_PROVIDER:-auto}"
+case "${STT_PROVIDER_RAW,,}" in
+  cli) STT_PROVIDER="cli" ;;
+  server|faster_whisper|faster-whisper) STT_PROVIDER="server" ;;
+  *) STT_PROVIDER="auto" ;;
+esac
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 URL="http://127.0.0.1:${PORT}/"
@@ -69,7 +75,11 @@ wait_for_fusion_gpu() {
   return 1
 }
 
-if ! curl -fsS "$STT_URL" >/dev/null 2>&1; then
+echo "STT provider solicitado: ${STT_PROVIDER} (valor: ${STT_PROVIDER_RAW})" >>"$LOG_FILE"
+if [[ "$STT_PROVIDER" == "cli" ]]; then
+  echo "STT server ${STT_PORT}: inicio omitido porque el provider es cli." >>"$LOG_FILE"
+elif ! curl -fsS "$STT_URL" >/dev/null 2>&1; then
+  echo "STT server ${STT_PORT}: intentando iniciar para provider ${STT_PROVIDER}." >>"$LOG_FILE"
   (
     cd "$ROOT"
     if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
