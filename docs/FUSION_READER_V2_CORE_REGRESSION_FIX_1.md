@@ -48,10 +48,18 @@
 
 ## Resultados
 
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v` → `352 OK`
-- `bash scripts/verify_voice_port_isolation.sh` → `OK_WITH_EXTERNAL_WARNINGS`
-- `bash scripts/smoke_fusion_reader_v2.sh` → `OK_WITH_WARNINGS`
-- Runtime manual: TTS `7853` listo, lectura de bloque correcta, preparación correcta, referencia separada, clearing del principal conserva consultas.
+- Validación final posterior al rebase sobre PR #9 y a la restauración read-only
+  de verify/smoke: `Ran 362 tests in 27.022s` — `OK`.
+- `py_compile` de documents, service, TTS, dialogue y server: `OK`.
+- `bash -n` de smoke, verify, launcher y launcher STT: `OK`.
+- `verify_voice_port_isolation.sh`: código `0`,
+  `FINAL RESULT: OK_WITH_EXTERNAL_WARNINGS`; puerto `7852` libre.
+- `smoke_fusion_reader_v2.sh`: código `0`,
+  `FINAL RESULT: OK_WITH_WARNINGS`.
+- Verify y smoke no modificaron el owner file: SHA-256 y mtime permanecieron
+  idénticos antes y después de ambos diagnósticos.
+- La prueba manual de TTS `7853`, lectura, preparación, referencia separada y
+  limpieza del principal es histórica; no se repitió durante este cierre.
 
 ## Warnings conocidos
 
