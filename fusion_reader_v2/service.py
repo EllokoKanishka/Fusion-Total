@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import threading
 import time
@@ -71,12 +72,15 @@ class FusionReaderV2:
         self.tts_segment_chars = max(240, int(os.environ.get("FUSION_READER_TTS_SEGMENT_CHARS", "900")))
         self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
         self._prefetch_lock = threading.Lock()
-        self._prefetch_futures: dict[int, Future[AudioArtifact]] = {}
-        self._prefetch_started: dict[int, float] = {}
+        self._prefetch_futures: dict[tuple, Future[AudioArtifact]] = {}
+        self._prefetch_started: dict[tuple, float] = {}
         self._prefetch_future: Future[AudioArtifact] | None = None
         self._prefetch_index: int | None = None
         self._prefetch_started_ts: float | None = None
         self._tts_lock = threading.Lock()
+        self._document_generation = 0
+        self._read_request_sequence = 0
+        self._read_lock = threading.Lock()
         self._prepare_lock = threading.Lock()
         self._prepare_cancel = threading.Event()
         self._prepare_thread: threading.Thread | None = None
@@ -107,6 +111,8 @@ class FusionReaderV2:
         self.session_state_path = Path(session_state_path) if session_state_path else None
         self.dialogue_trace_path = (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         self._restore_session_state()
+        if self.session.document:
+            self._document_generation = max(1, self._document_generation)
 
     def _effective_reasoning_mode(self, *, dialogue: bool = False) -> dict:
         requested = str(self.reasoning_mode or "thinking")
@@ -505,7 +511,7 @@ class FusionReaderV2:
         source_path: str = "",
         source_type: str = "",
     ) -> dict:
-        self._reset_prepare_for_new_document()
+        self._begin_document_lifecycle()
         self._laboratory_focus = {}
         status = self.session.load(Document.from_text(doc_id, title, text))
         self._main_source_path = str(source_path or "")
@@ -514,7 +520,7 @@ class FusionReaderV2:
         self._persist_session_state(text=str(text or ""), source_path=source_path, source_type=source_type)
         if prefetch:
             self.prefetch_current()
-        return status
+        return self.status()
 
     def load_file(self, path: str | Path, prefetch: bool = True) -> dict:
         p = Path(path)
@@ -565,7 +571,7 @@ class FusionReaderV2:
         if not record:
             return {"ok": False, "error": "reference_not_found"}
         previous_main = self._main_document_record()
-        self._reset_prepare_for_new_document()
+        self._begin_document_lifecycle()
         status = self.session.load(Document.from_text(str(record.get("doc_id") or ""), str(record.get("title") or ""), str(record.get("text") or "")))
         self._main_source_path = str(record.get("source_path") or "")
         self._main_source_type = str(record.get("source_type") or "text")
@@ -787,9 +793,18 @@ class FusionReaderV2:
             out["prefetch_index"] = self._prefetch_index
             out["prefetch_done"] = bool(self._prefetch_future and self._prefetch_future.done())
             out["prefetch_age_ms"] = int((time.time() - self._prefetch_started_ts) * 1000) if self._prefetch_started_ts else 0
-            out["prefetch_indexes"] = sorted(self._prefetch_futures)
-            out["prefetch_done_indexes"] = sorted(index for index, future in self._prefetch_futures.items() if future.done())
+            out["prefetch_indexes"] = sorted({self._prefetch_index_from_key(key) for key in self._prefetch_futures})
+            out["prefetch_done_indexes"] = sorted({self._prefetch_index_from_key(key) for key, future in self._prefetch_futures.items() if future.done()})
             out["prefetch_ahead"] = self.prefetch_ahead
+        out["document_generation"] = self._document_generation
+        current_text = self.session.current_chunk()
+        cached_audio = bool(current_text and self.cache.get(current_text, self.voice.voice, self.voice.language))
+        out["audio_state"] = "cached" if cached_audio else ("needs_generation" if current_text else "empty")
+        out["audio_ready"] = cached_audio
+        out["audio_cached"] = cached_audio
+        tts_health = dict(out.get("tts") or {})
+        detail = str(tts_health.get("detail") or "").lower()
+        out["tts_state"] = "ready" if tts_health.get("ok") else ("starting" if "start" in detail or "loading" in detail else "temporarily_unavailable")
         out["prepare"] = self.prepare_status()
         out["audio_export"] = self.audio_export_overview()
         out["notes"] = self.notes_summary()
@@ -902,20 +917,30 @@ class FusionReaderV2:
             parts.append(current)
         return parts
 
-    def _artifact_for_index(self, index: int, text: str) -> AudioArtifact:
+    def _prefetch_key(self, generation: int, index: int, text: str) -> tuple:
+        return (generation, index, self.voice.voice, self.voice.language, hashlib.sha256(text.encode("utf-8")).hexdigest())
+
+    def _prefetch_index_from_key(self, key) -> int:
+        return int(key[1]) if isinstance(key, tuple) else int(key)
+
+    def _artifact_for_index(self, generation: int, index: int, text: str) -> AudioArtifact:
+        key = self._prefetch_key(generation, index, text)
         with self._prefetch_lock:
-            future = self._prefetch_futures.get(index)
+            future = self._prefetch_futures.get(key)
             if not future and self._prefetch_index == index:
                 future = self._prefetch_future
         if future:
             try:
                 artifact = future.result(timeout=self.prefetch_wait_seconds)
-                self._forget_prefetch(index, future)
+                self._forget_prefetch(key, future)
                 return artifact
             except TimeoutError:
-                self._forget_prefetch(index, future)
+                self._forget_prefetch(key, future)
                 self._reset_prefetch_queue(future)
                 return AudioArtifact(False, provider=self.tts.name, detail="prefetch_timeout")
+        cached = self.cache.get(text, self.voice.voice, self.voice.language)
+        if cached:
+            return cached
         return self._synthesize_cached(text)
 
     def prefetch_current(self) -> None:
@@ -933,20 +958,22 @@ class FusionReaderV2:
         if not document or index < 0 or index >= len(document.chunks):
             return
         text = document.chunks[index]
+        generation = self._document_generation
+        key = self._prefetch_key(generation, index, text)
         with self._prefetch_lock:
-            existing = self._prefetch_futures.get(index)
+            existing = self._prefetch_futures.get(key)
             if existing and not existing.done():
                 return
             future = self._executor.submit(self._synthesize_cached, text)
-            self._prefetch_futures[index] = future
-            self._prefetch_started[index] = time.time()
+            self._prefetch_futures[key] = future
+            self._prefetch_started[key] = time.time()
             self._set_primary_prefetch_locked()
 
-    def _forget_prefetch(self, index: int, future: Future[AudioArtifact]) -> None:
+    def _forget_prefetch(self, key, future: Future[AudioArtifact]) -> None:
         with self._prefetch_lock:
-            if self._prefetch_futures.get(index) is future:
-                self._prefetch_futures.pop(index, None)
-                self._prefetch_started.pop(index, None)
+            if self._prefetch_futures.get(key) is future:
+                self._prefetch_futures.pop(key, None)
+                self._prefetch_started.pop(key, None)
             if self._prefetch_future is future:
                 self._set_primary_prefetch_locked()
 
@@ -957,21 +984,21 @@ class FusionReaderV2:
             self._prefetch_started_ts = None
             return
         current = self.session.cursor
-        index = min(self._prefetch_futures, key=lambda item: (abs(item - current), item))
-        self._prefetch_index = index
-        self._prefetch_future = self._prefetch_futures[index]
-        self._prefetch_started_ts = self._prefetch_started.get(index)
+        key = min(self._prefetch_futures, key=lambda item: (abs(self._prefetch_index_from_key(item) - current), self._prefetch_index_from_key(item)))
+        self._prefetch_index = self._prefetch_index_from_key(key)
+        self._prefetch_future = self._prefetch_futures[key]
+        self._prefetch_started_ts = self._prefetch_started.get(key)
 
     def _reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
         with self._prefetch_lock:
-            stale_indexes = [index for index, future in self._prefetch_futures.items() if future is stale_future]
-            if self._prefetch_future is not stale_future and not stale_indexes:
+            stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
+            if self._prefetch_future is not stale_future and not stale_keys:
                 return
             old_executor = self._executor
             self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-            for index in stale_indexes:
-                self._prefetch_futures.pop(index, None)
-                self._prefetch_started.pop(index, None)
+            for key in stale_keys:
+                self._prefetch_futures.pop(key, None)
+                self._prefetch_started.pop(key, None)
             self._prefetch_future = None
             self._prefetch_index = None
             self._prefetch_started_ts = None
@@ -979,12 +1006,32 @@ class FusionReaderV2:
         old_executor.shutdown(wait=False, cancel_futures=True)
 
     def read_current(self, play: bool = True) -> dict:
+        document = self.session.document
         text = self.session.current_chunk()
         if not text:
             return {**self.session.status(), "ok": False, "error": "no_current_chunk"}
+        generation = self._document_generation
+        doc_id = str(document.doc_id if document else "")
+        index = self.session.cursor
+        voice = self.voice.voice
+        language = self.voice.language
+        with self._read_lock:
+            self._read_request_sequence += 1
+            request_id = self._read_request_sequence
         started = time.perf_counter()
-        artifact = self._artifact_for_index(self.session.cursor, text)
+        cached_before = bool(self.cache.get(text, voice, language))
+        artifact = self._artifact_for_index(generation, index, text)
         ready_ms = int((time.perf_counter() - started) * 1000)
+        current = self.session.document
+        stale = generation != self._document_generation or not current or current.doc_id != doc_id or self.session.cursor != index or self.session.current_chunk() != text
+        if stale:
+            return {
+                **self.session.status(), "ok": False, "stale": True, "cancelled": True,
+                "detail": "document_generation_changed", "error": "Lectura cancelada porque cambió el documento.",
+                "document_generation": generation, "requested_doc_id": doc_id,
+                "requested_chunk_index": index, "read_request_id": request_id,
+                "ready_ms": ready_ms, "audio_state": "cancelled",
+            }
         if play and artifact.ok:
             self._play(artifact.path)
         self.prefetch_next()
@@ -998,6 +1045,20 @@ class FusionReaderV2:
             "provider": artifact.provider,
             "synthesis_ms": artifact.duration_ms,
             "ready_ms": ready_ms,
+            "queue_wait_ms": max(0, ready_ms - int(artifact.duration_ms or 0)),
+            "generation_ms": int(artifact.duration_ms or 0),
+            "cache_hit": bool(cached_before or artifact.cached),
+            "document_generation": generation,
+            "requested_doc_id": doc_id,
+            "requested_chunk_index": index,
+            "read_request_id": request_id,
+            "voice": voice,
+            "language": language,
+            "audio_state": "ready" if artifact.ok else "error",
+            "audio_ready": bool(artifact.ok),
+            "audio_cached": bool(artifact.cached),
+            "stale": False,
+            "cancelled": False,
         }
         if not artifact.ok:
             out["error"] = self._human_tts_error(artifact.detail, action="read")
@@ -1029,7 +1090,7 @@ class FusionReaderV2:
         with self._prepare_lock:
             if self._prepare_thread and self._prepare_thread.is_alive():
                 return dict(self._prepare_status)
-            self._prepare_cancel.clear()
+            cancel_event = self._prepare_cancel
             self._prepare_generation += 1
             generation = self._prepare_generation
             now = time.time()
@@ -1037,6 +1098,7 @@ class FusionReaderV2:
                 **self._new_prepare_status(),
                 "status": "running",
                 "doc_id": document.doc_id,
+                "document_generation": self._document_generation,
                 "title": document.title,
                 "total": len(document.chunks),
                 "message": "Preparando audio del documento...",
@@ -1045,7 +1107,7 @@ class FusionReaderV2:
             }
             self._prepare_thread = threading.Thread(
                 target=self._prepare_worker,
-                args=(document.doc_id, start, generation),
+                args=(document.doc_id, start, generation, self._document_generation, cancel_event),
                 name="fusion-reader-v2-prepare",
                 daemon=True,
             )
@@ -1065,9 +1127,9 @@ class FusionReaderV2:
         with self._prepare_lock:
             return dict(self._prepare_status)
 
-    def _prepare_worker(self, doc_id: str, start: str, generation: int) -> None:
+    def _prepare_worker(self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event) -> None:
         document = self.session.document
-        if not document or document.doc_id != doc_id:
+        if not document or document.doc_id != doc_id or document_generation != self._document_generation:
             self._finish_prepare("error", "El documento activo cambió antes de preparar audio.", generation=generation)
             return
         total = len(document.chunks)
@@ -1091,14 +1153,14 @@ class FusionReaderV2:
                 return
         cached = generated = failed = processed = 0
         for index in order:
-            if self._prepare_cancel.is_set():
+            if cancel_event.is_set():
                 self._finish_prepare("canceled", "Preparación cancelada.", processed, total, cached, generated, failed, generation=generation)
                 return
             current_document = self.session.document
-            if not current_document or current_document.doc_id != doc_id:
+            if not current_document or current_document.doc_id != doc_id or document_generation != self._document_generation:
                 self._finish_prepare("canceled", "Preparación detenida porque cambió el documento.", processed, total, cached, generated, failed, generation=generation)
                 return
-            self._wait_for_interactive_tts()
+            self._wait_for_interactive_tts(cancel_event)
             text = current_document.chunks[index]
             if self.cache.get(text, self.voice.voice, self.voice.language):
                 cached += 1
@@ -1137,19 +1199,27 @@ class FusionReaderV2:
         self._finish_prepare("done", "Documento preparado para lectura.", processed, total, cached, generated, failed, generation=generation)
 
     def _reset_prepare_for_new_document(self) -> None:
-        self._prepare_cancel.set()
+        old_cancel = self._prepare_cancel
+        old_cancel.set()
         with self._prepare_lock:
             self._prepare_generation += 1
             self._prepare_status = self._new_prepare_status()
-        self._prepare_cancel.clear()
+            self._prepare_cancel = threading.Event()
+            self._prepare_thread = None
 
-    def _wait_for_interactive_tts(self) -> None:
-        while not self._prepare_cancel.is_set():
+    def _wait_for_interactive_tts(self, cancel_event: threading.Event | None = None) -> None:
+        event = cancel_event or self._prepare_cancel
+        while not event.is_set():
             with self._prefetch_lock:
                 busy = any(not future.done() for future in self._prefetch_futures.values())
             if not busy:
                 return
             time.sleep(0.2)
+
+    def _begin_document_lifecycle(self) -> None:
+        self._document_generation += 1
+        self._reset_prepare_for_new_document()
+        self._clear_prefetch_queue()
 
     def _human_tts_error(self, detail: str, *, action: str = "read") -> str:
         clean = str(detail or "").strip()
@@ -2171,15 +2241,13 @@ class FusionReaderV2:
         ]
 
     def clear_document(self) -> dict:
+        self._begin_document_lifecycle()
         self.session.document = None
         self.session.cursor = 0
         self.session.state = "idle"
         self.session.updated_ts = time.time()
         self._main_source_path = ""
         self._main_source_type = ""
-        with self._prepare_lock:
-            self._prepare_cancel.set()
-            self._prepare_status = self._new_prepare_status()
         self._persist_session_state()
         self._append_dialogue_trace({
             "ts": time.time(),

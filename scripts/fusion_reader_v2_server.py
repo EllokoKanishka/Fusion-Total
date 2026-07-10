@@ -1078,6 +1078,9 @@ INDEX_HTML = r"""<!doctype html>
     let lastRenderedDocId = '';
     let lastRenderedBlockIndex = 0;
     let lastRenderedBlockText = '';
+    let audioLifecycleSequence = 0;
+    let activeReadController = null;
+    let activeReadRequest = 0;
     let audioExportPollingJobId = '';
     let voiceCatalogRefreshInFlight = false;
     const dialogue = {
@@ -1123,12 +1126,13 @@ INDEX_HTML = r"""<!doctype html>
       sampleRate: 48000
     };
 
-    async function api(path, body) {
+    async function api(path, body, requestOptions = {}) {
       const options = body === undefined ? {} : {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       };
+      Object.assign(options, requestOptions || {});
       const res = await fetch(path, options);
       const data = await res.json();
       if (!res.ok || data.ok === false) {
@@ -1583,10 +1587,10 @@ INDEX_HTML = r"""<!doctype html>
       els.ttsStatus.textContent = ttsState.label;
       if (els.ttsChip) els.ttsChip.title = ttsState.tooltip || ttsState.label;
       const ttsMessage = ttsState.tooltip || 'TTS no disponible';
-      const canRead = ttsActionAvailable(data);
+      const canRead = Boolean(data && data.document && data.document.loaded && data.text);
       if (els.readBtn) {
         els.readBtn.disabled = !canRead;
-        els.readBtn.title = canRead ? 'Leer bloque actual' : ttsMessage;
+        els.readBtn.title = canRead ? (ttsActionAvailable(data) ? 'Leer bloque actual' : 'Intentar leer; el backend comprobará cache y TTS actual') : ttsMessage;
       }
       if (els.repeatBtn) {
         els.repeatBtn.disabled = !canRead;
@@ -1795,6 +1799,7 @@ INDEX_HTML = r"""<!doctype html>
 
     async function clearDocument() {
       if (!confirm('¿Limpiar el documento activo?')) return;
+      resetAudioLifecycle('Documento y audio anteriores descartados.');
       try {
         const res = await fetch('/api/document/clear', { method: 'POST' });
         const data = await res.json();
@@ -1936,6 +1941,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function promoteReference(docId) {
+      resetAudioLifecycle('Cambiando documento principal; audio anterior detenido.');
       try {
         const data = await api('/api/reference/promote', { doc_id: docId });
         renderStatus(data);
@@ -2240,14 +2246,41 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    function playAudio(data) {
+    function invalidatePendingRead() {
+      audioLifecycleSequence += 1;
+      activeReadRequest += 1;
+      if (activeReadController) {
+        activeReadController.abort();
+        activeReadController = null;
+      }
+    }
+
+    function resetAudioLifecycle(message = '') {
+      invalidatePendingRead();
+      els.continuousToggle.checked = false;
+      try { els.player.pause(); } catch (_) {}
+      try { els.player.currentTime = 0; } catch (_) {}
+      els.player.removeAttribute('src');
+      els.player.load();
+      if (message) log(message);
+    }
+
+    function playAudio(data, expectedSequence, expectedRequest) {
       if (!data.audio_url) {
-        return;
+        return false;
+      }
+      const currentGeneration = Number(status && status.document_generation || 0);
+      const currentDocId = String(status && status.doc_id || '');
+      const currentIndex = Math.max(0, Number(status && status.current || 1) - 1);
+      if (data.stale || data.cancelled || expectedSequence !== audioLifecycleSequence || expectedRequest !== activeReadRequest || Number(data.document_generation || 0) !== currentGeneration || String(data.requested_doc_id || '') !== currentDocId || Number(data.requested_chunk_index) !== currentIndex) {
+        log('Audio descartado porque cambió el documento o el bloque.');
+        return false;
       }
       els.player.src = data.audio_url;
       els.player.play().catch(() => {
         log('Audio generado. Tocá play si el navegador bloqueó la reproducción automática.');
       });
+      return true;
     }
 
     function addChatMessage(kind, text) {
@@ -2302,9 +2335,12 @@ INDEX_HTML = r"""<!doctype html>
         els.uploadInfo.textContent = `${file.name}: formato no soportado todavía.`;
         return;
       }
+      const role = els.referenceModeToggle.checked ? 'reference' : 'main';
+      if (role === 'main') {
+        resetAudioLifecycle('Cargando documento nuevo; audio anterior detenido.');
+      }
       setBusy(true);
       try {
-        const role = els.referenceModeToggle.checked ? 'reference' : 'main';
         log(role === 'reference' ? 'Agregando documento de consulta...' : 'Preparando documento...');
         setImportProgress(0);
         els.uploadInfo.textContent = `${file.name}: convirtiendo para ${role === 'reference' ? 'consulta' : 'lectura'}...`;
@@ -2325,7 +2361,6 @@ INDEX_HTML = r"""<!doctype html>
         const convertedKb = data.converted_bytes ? ` Texto convertido: ${Math.max(1, Math.round(data.converted_bytes / 1024))} KB.` : '';
         els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
         setReferenceMode(false);
-        els.player.removeAttribute('src');
         if (data.role !== 'reference' && els.autoReadToggle.checked) {
           log('Texto cargado. Generando voz del primer bloque...');
           await readCurrent();
@@ -2430,6 +2465,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function navigate(path, body = {}) {
+      invalidatePendingRead();
       setBusy(true);
       try {
         const data = await api(path, body);
@@ -2443,20 +2479,26 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function readCurrent() {
-      if (!ttsActionAvailable(status)) {
-        log(friendlyTtsMessage(status && status.services && status.services.tts && status.services.tts.detail));
-        return;
-      }
+      invalidatePendingRead();
+      const sequence = audioLifecycleSequence;
+      const request = activeReadRequest;
+      const controller = new AbortController();
+      activeReadController = controller;
       setBusy(true);
       try {
-        log('Generando voz neural...');
-        const data = await api('/api/read', { play: false });
-        playAudio(data);
-        log(`${data.cached ? 'Audio listo desde cache.' : 'Audio neural generado.'} Listo en ${data.ready_ms} ms; sintesis ${data.synthesis_ms || 0} ms.`);
+        log('Solicitud aceptada: comprobando cache y generando el bloque si hace falta...');
+        const data = await api('/api/read', { play: false }, { signal: controller.signal });
+        if (!playAudio(data, sequence, request)) return;
+        log(`${data.cached ? 'Audio listo desde cache.' : 'Audio neural generado.'} Listo en ${data.ready_ms} ms; síntesis ${data.synthesis_ms || 0} ms.`);
       } catch (err) {
+        if (err && err.name === 'AbortError') {
+          log('Lectura cancelada por cambio de documento o bloque.');
+          return;
+        }
         const friendly = err && err.data && (err.data.error || err.data.detail) ? friendlyTtsMessage(err.data.error || err.data.detail) : friendlyTtsMessage(err.message);
         log(`Falló la voz: ${friendly}`);
       } finally {
+        if (activeReadController === controller) activeReadController = null;
         setBusy(false);
       }
     }
@@ -3948,7 +3990,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, APP.clear_document())
                 return
             if path == "/api/read":
-                self._result(200, APP.read_current(play=bool(payload.get("play", False))))
+                result = APP.read_current(play=bool(payload.get("play", False)))
+                self._result(409 if result.get("stale") else 200, result)
                 return
             if path == "/api/next":
                 self._json(200, APP.next())

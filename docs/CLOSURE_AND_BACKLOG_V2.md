@@ -8,6 +8,9 @@ de reparación y consolidación formada por los PR #2, #3, #4, #5, #6, #7, #9 y
 #8. Los trabajos siguientes deben tener objetivos funcionales concretos y estar
 guiados por el backlog.
 
+Actualización posterior: `docs/AUDIO_LIFECYCLE_REPAIR_V2.md` documenta el
+primer desarrollo funcional después de este snapshot; no reabre la auditoría.
+
 ## 1. Alcance del cierre
 
 La fase estabilizó, verificó y documentó el sistema existente. Consolidó

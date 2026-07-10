@@ -4,6 +4,9 @@ La fase de reparación/consolidación está cerrada en
 `docs/CLOSURE_AND_BACKLOG_V2.md`; este archivo conserva los procedimientos
 operativos diarios sin duplicar el backlog.
 
+El contrato vigente de carga, lectura, cache, cancelación y reproductor está en
+`docs/AUDIO_LIFECYCLE_REPAIR_V2.md`.
+
 ## Arranque recomendado
 
 ```bash

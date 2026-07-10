@@ -781,7 +781,7 @@ class FusionReaderV2Tests:
         read_current = text[read_start:read_end]
         self.assertIn("const data = await api('/api/read'", read_current)
         self.assertNotIn("renderStatus(data)", read_current)
-        self.assertIn("playAudio(data)", read_current)
+        self.assertIn("playAudio(data, sequence, request)", read_current)
 
     def legacy_server_ui_resets_reader_viewport_only_on_real_block_changes(self):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
