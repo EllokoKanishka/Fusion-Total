@@ -1,0 +1,6 @@
+# Core Python dependencies for Fusion Reader v2.
+# This file covers the installable repo-local path only.
+# It does not replace system binaries or dedicated GPU environments.
+
+Pillow
+python-docx

@@ -21,8 +21,12 @@ mencionan solo como frontera externa o dependencia opcional de convivencia.
 
 - `python3` en `PATH` es obligatorio para los launchers y para la suite de
   tests.
-- El repo no declara todavía un `requirements.txt`/`pyproject.toml` único para
-  v2.
+- Base instalable mínima del repo:
+  `requirements/fusion-reader-v2.txt`
+- Dependencias opcionales separadas:
+  `requirements/fusion-reader-v2-optional.txt`
+- Estos archivos no reemplazan ni modelan binarios del sistema, entornos GPU
+  dedicados ni sistemas externos.
 - La referencia más explícita de versión aparece en los entornos GPU
   documentados y en los scripts que apuntan a `python3.11`, por lo que Python
   3.11 es la base más confirmada para voz GPU y stacks auxiliares.
@@ -37,9 +41,19 @@ Dependencias confirmadas por imports o por ejecución directa desde el repo:
 - `python-docx`
   - `fusion_reader_v2/md_to_docx.py`
   - usada para escribir DOCX editables
+
+Estas quedan cubiertas por `requirements/fusion-reader-v2.txt`.
+
+### Optional Python packages in-repo
+
 - `faster-whisper`
   - `scripts/fusion_reader_v2_stt_server.py`
   - usada por el server STT en `8021`
+- `openai-whisper`
+  - opcional para obtener el comando `whisper` desde un entorno Python local
+  - no cambia el hecho de que Fusion hoy usa el binario/CLI como fallback
+
+Estas quedan agrupadas en `requirements/fusion-reader-v2-optional.txt`.
 
 ### Optional Python runtimes / dedicated environments
 
@@ -353,6 +367,21 @@ usa principalmente biblioteca estándar:
 
 ## Verification commands
 
+Requirements mínimos del repo:
+
+```bash
+python3 -m pip install -r requirements/fusion-reader-v2.txt
+python3 -m pip install -r requirements/fusion-reader-v2-optional.txt  # opcional
+```
+
+Límites del manifiesto:
+
+- no instala `curl`, `ffmpeg`, `pdftotext`, `pdfinfo`, `pdftoppm`, `tesseract`,
+  `ss` ni otros binarios del sistema;
+- no instala AllTalk GPU, Docling GPU ni otros entornos dedicados;
+- no reemplaza `verify` ni `smoke`;
+- no cambia el runtime actual del repo por sí mismo.
+
 Validación mínima actual:
 
 ```bash
@@ -398,16 +427,18 @@ curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
 
 ## Known gaps
 
-- sigue faltando un manifiesto instalable único tipo `requirements.txt` o
-  `pyproject.toml` para toda la ruta v2;
+- ahora existe un manifiesto mínimo instalable en `requirements/`, pero sigue
+  faltando un lockfile o empaquetado más fuerte tipo `pyproject.toml` para toda
+  la ruta v2;
 - varios scripts todavía traen defaults absolutos locales para entornos externos
   (`FUSION_READER_GPU_ENV`, `DIRECT_CHAT_ALLTALK_DIR`,
   `DIRECT_CHAT_ALLTALK_PYTHON`);
 - el camino STT aceptado sigue siendo híbrido:
   `8021` principal, `whisper_cli` como fallback;
 - `fusion_reader_v2/service.py` sigue concentrando muchas responsabilidades;
-- la ruta PDF/OCR mezcla camino textual rápido, OCR fallback y Docling GPU, pero
-  no tiene todavía un manifiesto de instalación automatizable;
+- la ruta PDF/OCR mezcla camino textual rápido, OCR fallback y Docling GPU; el
+  manifiesto nuevo cubre solo el tramo Python del repo y no automatiza todavía
+  los binarios ni el entorno dedicado de Docling;
 - `verify_voice_port_isolation.sh` sigue leyendo frontera externa de Doctora por
   diseño informativo;
 - el runtime GPU de AllTalk y el runtime GPU de Docling siguen siendo entornos
