@@ -56,6 +56,7 @@ Si Dialogar parece lento, mirar primero esa etiqueta o `services.tts.url` en `/a
 ```bash
 python3 -m unittest tests.test_fusion_reader_v2 -v
 ./scripts/verify_voice_port_isolation.sh
+./scripts/smoke_fusion_reader_v2.sh
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
 ```
 
@@ -63,11 +64,13 @@ Estado auditado el 2026-07-09:
 
 - `tests.test_fusion_reader_v2`: `240 OK`
 - `tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress`: `35 OK`
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `335 OK`
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `339 OK`
 - `./scripts/verify_voice_port_isolation.sh`: ahora separa `FUSION STRICT CHECKS` de `EXTERNAL BOUNDARY / DOCTORA INFO`
 - resultado local actual: `FINAL RESULT: OK_WITH_WARNINGS`
 - si faltan bitácoras, memoria o referencias externas de Doctora, eso sale como `WARN` externo y ya no se mezcla con un fallo estricto de aislamiento de Fusion
 - para revisar puertos, servicios, binarios y env vars sin repartir la info entre varios archivos, usar `docs/DEPENDENCIES_V2.md`
+- `./scripts/smoke_fusion_reader_v2.sh` sirve como smoke de solo lectura: no levanta servicios, no mata procesos y usa `OK_WITH_WARNINGS` cuando hay componentes opcionales apagados
+- la diferencia histórica `335` vs `337` quedó explicada por la suma de `tests/test_dependencies_manifest.py`; el total actual `339` agrega además `tests/test_smoke_script.py`
 
 ## Si 7853 no engancha
 
