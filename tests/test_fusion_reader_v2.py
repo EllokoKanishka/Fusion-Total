@@ -794,12 +794,12 @@ class FusionReaderV2Tests:
 
     def legacy_server_ui_reader_layout_starts_chunks_from_top(self):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
-        self.assertIn(".reader {\n      overflow: auto;\n      padding: 24px clamp(24px, 3vw, 40px) 14px;\n      display: flex;\n      align-items: stretch;", server)
+        self.assertIn(".reader {\n      overflow: auto;\n      padding: 24px clamp(26px, 3vw, 42px) 14px;\n      display: flex;\n      justify-content: center;\n      align-items: stretch;", server)
         chunk_start = server.index(".chunk {")
         chunk_end = server.index(".chunk.empty {", chunk_start)
         chunk_css = server[chunk_start:chunk_end]
         self.assertIn("width: 100%;", chunk_css)
-        self.assertIn("max-width: none;", chunk_css)
+        self.assertIn("max-width: 72ch;", chunk_css)
         self.assertIn("margin: 0;", chunk_css)
         self.assertNotIn("max-width: 980px;", chunk_css)
         self.assertNotIn("transform: translateY(-8%);", chunk_css)

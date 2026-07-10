@@ -5,6 +5,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import tempfile
 import time
 import unicodedata
@@ -121,6 +122,76 @@ class AllTalkProvider(TTSProvider):
         except ValueError:
             return None
 
+    def _cmdline_for_pid(self, pid: int) -> str:
+        cmdline_path = Path("/proc") / str(pid) / "cmdline"
+        return cmdline_path.read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+
+    def _listening_pid(self, port: int) -> int | None:
+        commands = (
+            ["lsof", "-tiTCP:%s" % port, "-sTCP:LISTEN"],
+            ["ss", "-ltnp"],
+        )
+        for command in commands:
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=2.0, check=False)
+            except Exception:
+                continue
+            output = (result.stdout or "").strip()
+            if not output:
+                continue
+            if command[0] == "lsof":
+                first = output.splitlines()[0].strip()
+                if first.isdigit():
+                    return int(first)
+                continue
+            match = re.search(rf":{port}\b.*pid=(\d+)", output)
+            if match:
+                return int(match.group(1))
+        return None
+
+    def _listener_matches_fusion_tts(self, pid: int, port: int) -> bool:
+        try:
+            cmdline = self._cmdline_for_pid(pid)
+        except Exception:
+            return False
+        return "tts_server:app" in cmdline and f"--port {port}" in cmdline
+
+    def _rewrite_owner_pid(self, data: dict, owner_pid: int) -> None:
+        updated = dict(data)
+        updated["owner_pid"] = int(owner_pid)
+        temporary: Path | None = None
+        try:
+            self.owner_file.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.owner_file.parent,
+                prefix=f".{self.owner_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                json.dump(updated, handle, indent=2, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.owner_file)
+            temporary = None
+        except Exception:
+            return
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _reconcile_owner_pid(self, data: dict, port: int) -> int | None:
+        listener_pid = self._listening_pid(port)
+        if not listener_pid or not self._listener_matches_fusion_tts(listener_pid, port):
+            return None
+        self._rewrite_owner_pid(data, listener_pid)
+        return listener_pid
+
     def _owner_guard(self, url: str | None = None) -> tuple[bool, str]:
         port = self._local_port(url)
         gpu_port = _configured_gpu_tts_port()
@@ -147,15 +218,27 @@ class AllTalkProvider(TTSProvider):
         try:
             owner_pid = int(data.get("owner_pid"))
         except (TypeError, ValueError):
-            return False, "tts_owner_pid_missing"
-        cmdline_path = Path("/proc") / str(owner_pid) / "cmdline"
+            reconciled_pid = self._reconcile_owner_pid(data, gpu_port)
+            if reconciled_pid:
+                owner_pid = reconciled_pid
+            else:
+                return False, "tts_owner_pid_missing"
         try:
-            cmdline = cmdline_path.read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+            cmdline = self._cmdline_for_pid(owner_pid)
         except FileNotFoundError:
+            reconciled_pid = self._reconcile_owner_pid(data, gpu_port)
+            if reconciled_pid:
+                return True, ""
             return False, f"tts_owner_pid_stale:{owner_pid}"
         except Exception as exc:
+            reconciled_pid = self._reconcile_owner_pid(data, gpu_port)
+            if reconciled_pid:
+                return True, ""
             return False, f"tts_owner_pid_unreadable:{exc}"
         if "tts_server:app" not in cmdline or f"--port {gpu_port}" not in cmdline:
+            reconciled_pid = self._reconcile_owner_pid(data, gpu_port)
+            if reconciled_pid:
+                return True, ""
             return False, f"tts_owner_pid_mismatch:{owner_pid}"
         return True, ""
 

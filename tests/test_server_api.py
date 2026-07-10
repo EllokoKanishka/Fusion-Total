@@ -40,6 +40,9 @@ class ServerAPITests(unittest.TestCase):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
         self.assertIn("referenceModeToggle", server)
         self.assertIn("/api/reference/promote", server)
+        self.assertIn("cargado como documento principal", server)
+        self.assertIn("Cargar este archivo como consulta", server)
+        self.assertIn("Lectura activa", server)
 
     def test_server_upload_ui_accepts_dotx_like_backend(self):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
@@ -125,6 +128,19 @@ class ServerAPITests(unittest.TestCase):
         self.assertIn("ensureVoiceCatalog", server)
         self.assertIn("voiceCatalogRefreshInFlight", server)
         self.assertIn("gotMany && hadMany", server)
+
+    def test_server_ui_surfaces_friendly_tts_blocking_message_and_disables_read(self):
+        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        self.assertIn("friendlyTtsMessage", server)
+        self.assertIn("TTS bloqueado", server)
+        self.assertIn("els.readBtn.disabled = !canRead;", server)
+        self.assertIn("El TTS de Fusion está vivo pero no quedó validado como propio.", server)
+
+    def test_server_ui_restores_prepare_progress_detail(self):
+        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        self.assertIn("Preparando documento: ${label}", server)
+        self.assertIn("Documento listo: ${label}", server)
+        self.assertIn("bloque ${Math.min(done, total)} de ${total}", server)
 
 from tests.helpers import attach_legacy_tests
 

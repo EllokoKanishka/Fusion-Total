@@ -83,7 +83,7 @@ INDEX_HTML = r"""<!doctype html>
       min-height: 100vh;
       background: var(--bg);
       color: var(--text);
-      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
     }
     button, input, textarea {
       font: inherit;
@@ -92,7 +92,7 @@ INDEX_HTML = r"""<!doctype html>
     .app {
       height: 100vh;
       display: grid;
-      grid-template-columns: minmax(220px, 270px) minmax(0, 1fr) minmax(220px, 270px);
+      grid-template-columns: minmax(280px, 330px) minmax(560px, 1fr) minmax(280px, 330px);
       grid-template-rows: minmax(0, 58vh) minmax(280px, 42vh);
     }
     aside, main, .lab {
@@ -251,7 +251,17 @@ INDEX_HTML = r"""<!doctype html>
       border-top: 1px solid var(--line);
       padding-top: 10px;
       display: grid;
+      gap: 12px;
+    }
+    .reference-section {
+      display: grid;
       gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .reference-section:first-of-type {
+      padding-top: 0;
+      border-top: 0;
     }
     .audio-export-grid {
       display: grid;
@@ -315,6 +325,13 @@ INDEX_HTML = r"""<!doctype html>
     }
     .reference-card-main .reference-title {
       font-size: 13px;
+    }
+    .reference-label {
+      color: var(--accent-2);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
     .reference-caret {
       color: var(--muted);
@@ -489,16 +506,18 @@ INDEX_HTML = r"""<!doctype html>
     .dot.warn { background: var(--warn); }
     .reader {
       overflow: auto;
-      padding: 24px clamp(24px, 3vw, 40px) 14px;
+      padding: 24px clamp(26px, 3vw, 42px) 14px;
       display: flex;
+      justify-content: center;
       align-items: stretch;
     }
     .chunk {
       width: 100%;
-      max-width: none;
+      max-width: 72ch;
       margin: 0;
-      font-size: 22px;
-      line-height: 1.45;
+      font-size: clamp(19px, 1.45vw, 21px);
+      line-height: 1.68;
+      letter-spacing: 0.01em;
       color: var(--text);
       overflow-wrap: anywhere;
     }
@@ -747,6 +766,10 @@ INDEX_HTML = r"""<!doctype html>
     .header-selectors select {
       max-width: 120px;
     }
+    .reader-status-inline {
+      font-size: 12px;
+      color: var(--muted);
+    }
     .reasoning-caption {
       color: var(--muted);
       font-size: 10px;
@@ -802,7 +825,8 @@ INDEX_HTML = r"""<!doctype html>
         min-height: 45vh;
       }
       .chunk {
-        font-size: 20px;
+        max-width: none;
+        font-size: 19px;
       }
       .topbar {
         align-items: flex-start;
@@ -843,7 +867,8 @@ INDEX_HTML = r"""<!doctype html>
         <p id="pdfToWordInfo" class="upload-info" style="margin: 0;"></p>
         <a id="pdfToWordDownload" href="#" class="upload-info" style="display:none; font-weight: bold;" download>Descargar</a>
       </div>
-      <label class="toggle upload-toggle"><input id="referenceModeToggle" type="checkbox"> Agregar como consulta</label>
+      <label class="toggle upload-toggle"><input id="referenceModeToggle" type="checkbox"> Cargar este archivo como consulta</label>
+      <p class="upload-info" style="margin: 2px 0 0;">Por defecto, el archivo entra como documento principal. La consulta se agrega sólo si activás esta opción para esa carga.</p>
       <p id="uploadInfo" class="upload-info">Todavía no cargaste ningún texto.</p>
       <div class="progress-wrap" aria-hidden="true"><div id="importProgress" class="progress-bar"></div></div>
       <button id="prepareBtn" class="compact-btn" type="button">Preparar documento</button>
@@ -946,22 +971,29 @@ INDEX_HTML = r"""<!doctype html>
     </section>
     <aside class="right-sidebar" aria-label="Panel lateral derecho">
       <div class="reference-panel">
-        <h2>Consulta</h2>
-        <p class="sub">El lector sigue leyendo el principal. Estos textos solo apoyan el laboratorio.</p>
-        <details id="mainDocInfo" class="reference-card reference-card-main">
-          <summary>
-            <span class="reference-title" id="mainDocTitle">Ningún documento principal</span>
-            <span class="reference-caret" aria-hidden="true">▾</span>
-          </summary>
-          <div class="reference-content">
-            <strong>Documento principal</strong>
-            <span id="mainDocMeta" class="reference-meta">Sin lectura activa.</span>
+        <div class="reference-section">
+          <div class="reference-label">Lectura activa</div>
+          <details id="mainDocInfo" class="reference-card reference-card-main">
+            <summary>
+              <span class="reference-title" id="mainDocTitle">Ningún documento principal</span>
+              <span class="reference-caret" aria-hidden="true">▾</span>
+            </summary>
+            <div class="reference-content">
+              <strong>Documento principal</strong>
+              <span id="mainDocMeta" class="reference-meta">Sin lectura activa.</span>
+            </div>
+          </details>
+        </div>
+        <div class="reference-section">
+          <div>
+            <h2>Consulta</h2>
+            <p class="sub">El lector sigue leyendo el principal. Estos textos sólo apoyan el laboratorio.</p>
           </div>
-        </details>
-        <div>
-          <strong>Documentos de consulta</strong>
-          <div id="referenceList" class="reference-list">
-            <div class="reference-empty">Todavía no cargaste documentos de consulta.</div>
+          <div>
+            <strong>Documentos de consulta</strong>
+            <div id="referenceList" class="reference-list">
+              <div class="reference-empty">Todavía no cargaste documentos de consulta.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1100,12 +1132,47 @@ INDEX_HTML = r"""<!doctype html>
       const res = await fetch(path, options);
       const data = await res.json();
       if (!res.ok || data.ok === false) {
-        const err = new Error(data.error || 'request_failed');
+        const err = new Error(data.error || data.detail || data.message || 'request_failed');
         err.data = data;
         err.status = res.status;
         throw err;
       }
       return data;
+    }
+
+    function setReferenceMode(enabled) {
+      if (els.referenceModeToggle) {
+        els.referenceModeToggle.checked = Boolean(enabled);
+      }
+    }
+
+    function friendlyTtsMessage(detail) {
+      const clean = String(detail || '').trim();
+      if (!clean) {
+        return 'El servicio de voz no está disponible. Iniciá TTS o seleccioná otro motor.';
+      }
+      if (clean.startsWith('tts_owner_')) {
+        return 'El TTS de Fusion está vivo pero no quedó validado como propio. Reiniciá el TTS de Fusion o seleccioná otro motor.';
+      }
+      if (clean.startsWith('tts_foreign_doctora_lucy_port')) {
+        return 'Fusion detectó una voz de otro proyecto y no la va a usar como si fuera propia.';
+      }
+      if (clean.startsWith('tts_historic_unassigned_port')) {
+        return 'El puerto histórico 7852 no es válido para la voz de Fusion.';
+      }
+      if (clean.includes('timed out') || clean.includes('timeout')) {
+        return 'La voz tardó demasiado en responder. Probemos otra vez en unos segundos.';
+      }
+      if (clean.startsWith('http_') || clean.includes('Connection refused') || clean.includes('refused')) {
+        return 'El servicio de voz no respondió desde Fusion. Iniciá TTS o seleccioná otro motor.';
+      }
+      return clean;
+    }
+
+    function ttsActionAvailable(data) {
+      const services = data && data.services && typeof data.services === 'object' ? data.services : {};
+      const tts = services.tts && typeof services.tts === 'object' ? services.tts : data && data.tts || {};
+      return Boolean(tts && (tts.ready || tts.ok));
     }
 
     function renderGracefulResearchFailure(data, traceText='') {
@@ -1274,14 +1341,15 @@ INDEX_HTML = r"""<!doctype html>
       setPrepareProgress(prepare.percent || 0);
       const total = prepare.total || 0;
       const done = (prepare.cached || 0) + (prepare.generated || 0) + (prepare.failed || 0);
+      const label = total ? `bloque ${Math.min(done, total)} de ${total} — ${prepare.percent || 0} %` : 'sin bloques preparados';
       if (prepare.status === 'running' || prepare.status === 'canceling') {
-        els.prepareInfo.textContent = `Preparando audio ${done}/${total}. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}.`;
+        els.prepareInfo.textContent = `Preparando documento: ${label}. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}${prepare.failed ? `, fallidos ${prepare.failed}` : ''}.`;
       } else if (prepare.status === 'done') {
-        els.prepareInfo.textContent = `Documento preparado. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}.`;
+        els.prepareInfo.textContent = `Documento listo: ${label}. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}${prepare.failed ? `, fallidos ${prepare.failed}` : ''}.`;
       } else if (prepare.status === 'canceled') {
-        els.prepareInfo.textContent = 'Preparación cancelada.';
+        els.prepareInfo.textContent = `Preparación cancelada: ${label}.`;
       } else if (prepare.status === 'error') {
-        els.prepareInfo.textContent = prepare.message || 'No pude preparar el documento.';
+        els.prepareInfo.textContent = prepare.message ? `${prepare.message} ${total ? `(${label})` : ''}`.trim() : 'No pude preparar el documento.';
       } else {
         els.prepareInfo.textContent = total ? 'Audio pendiente de preparar.' : 'Audio sin preparar.';
       }
@@ -1514,6 +1582,16 @@ INDEX_HTML = r"""<!doctype html>
       els.ttsDot.classList.toggle('warn', ttsState.state === 'fallback');
       els.ttsStatus.textContent = ttsState.label;
       if (els.ttsChip) els.ttsChip.title = ttsState.tooltip || ttsState.label;
+      const ttsMessage = ttsState.tooltip || 'TTS no disponible';
+      const canRead = ttsActionAvailable(data);
+      if (els.readBtn) {
+        els.readBtn.disabled = !canRead;
+        els.readBtn.title = canRead ? 'Leer bloque actual' : ttsMessage;
+      }
+      if (els.repeatBtn) {
+        els.repeatBtn.disabled = !canRead;
+        els.repeatBtn.title = canRead ? 'Repetir bloque actual' : ttsMessage;
+      }
       const sttState = describeSttStatus(data);
       const sttOk = sttState.state !== 'down';
       els.sttDot.classList.toggle('ok', sttOk);
@@ -1532,7 +1610,9 @@ INDEX_HTML = r"""<!doctype html>
       const tts = services.tts && typeof services.tts === 'object' ? services.tts : data && data.tts || {};
       const ok = Boolean(tts && (tts.ready || tts.ok));
       if (!ok) {
-        return { state: 'down', label: 'TTS off', tooltip: 'TTS no disponible' };
+        const detail = friendlyTtsMessage(tts && tts.detail);
+        const isBlocked = String(tts && tts.detail || '').startsWith('tts_owner_');
+        return { state: 'down', label: isBlocked ? 'TTS bloqueado' : 'TTS off', tooltip: detail };
       }
       const url = String(tts.url || '');
       if (url.includes(':7853')) {
@@ -2243,7 +2323,8 @@ INDEX_HTML = r"""<!doctype html>
         const data = await pollImportJob(started.job_id);
         renderStatus(data);
         const convertedKb = data.converted_bytes ? ` Texto convertido: ${Math.max(1, Math.round(data.converted_bytes / 1024))} KB.` : '';
-        els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
+        els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
+        setReferenceMode(false);
         els.player.removeAttribute('src');
         if (data.role !== 'reference' && els.autoReadToggle.checked) {
           log('Texto cargado. Generando voz del primer bloque...');
@@ -2362,6 +2443,10 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function readCurrent() {
+      if (!ttsActionAvailable(status)) {
+        log(friendlyTtsMessage(status && status.services && status.services.tts && status.services.tts.detail));
+        return;
+      }
       setBusy(true);
       try {
         log('Generando voz neural...');
@@ -2369,7 +2454,8 @@ INDEX_HTML = r"""<!doctype html>
         playAudio(data);
         log(`${data.cached ? 'Audio listo desde cache.' : 'Audio neural generado.'} Listo en ${data.ready_ms} ms; sintesis ${data.synthesis_ms || 0} ms.`);
       } catch (err) {
-        log(`Falló la voz: ${err.message}`);
+        const friendly = err && err.data && (err.data.error || err.data.detail) ? friendlyTtsMessage(err.data.error || err.data.detail) : friendlyTtsMessage(err.message);
+        log(`Falló la voz: ${friendly}`);
       } finally {
         setBusy(false);
       }
@@ -3280,6 +3366,10 @@ def load_imported_document(imported, role: str = "main") -> dict:
     CONVERTED_ROOT.mkdir(parents=True, exist_ok=True)
     target = CONVERTED_ROOT / f"{imported.doc_id}.txt"
     target.write_text(imported.text, encoding="utf-8")
+    raw_target = None
+    if getattr(imported, "raw_text", ""):
+        raw_target = CONVERTED_ROOT / f"{imported.doc_id}.raw.txt"
+        raw_target.write_text(imported.raw_text, encoding="utf-8")
     if str(role or "main") == "reference":
         out = APP.add_reference_text(imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type)
     else:
@@ -3288,6 +3378,7 @@ def load_imported_document(imported, role: str = "main") -> dict:
     out["source_type"] = imported.source_type
     out["import_detail"] = imported.detail
     out["converted_text"] = str(target)
+    out["raw_text"] = str(raw_target) if raw_target else ""
     out["converted_bytes"] = target.stat().st_size
     return out
 

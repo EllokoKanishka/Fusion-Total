@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import csv
+import functools
 import os
 import re
 import shutil
@@ -95,6 +96,7 @@ class ImportedDocument:
     text: str
     source_type: str
     detail: str = ""
+    raw_text: str = ""
 
 
 def report_progress(progress: ProgressCallback | None, stage: str, current: int = 0, total: int = 0, message: str = "") -> None:
@@ -154,8 +156,8 @@ def import_document_path(filename: str, path: Path | str, mime: str = "", progre
         return imported(safe_name, odt_to_text(read_data()), "odt", "odt extraido")
 
     if suffix in PDF_SUFFIXES:
-        text, detail = pdf_to_text(safe_name, source, progress=progress)
-        return imported(safe_name, text, "pdf", detail)
+        text, detail, raw_text = pdf_to_text(safe_name, source, progress=progress)
+        return imported(safe_name, text, "pdf", detail, raw_text=raw_text)
 
     if suffix in OFFICE_SUFFIXES:
         report_progress(progress, "converting", 0, 0, "Convirtiendo documento de oficina con LibreOffice...")
@@ -172,11 +174,18 @@ def import_document_path(filename: str, path: Path | str, mime: str = "", progre
         raise ValueError(f"unsupported_document_type:{suffix or 'sin_extension'}:{exc}") from exc
 
 
-def imported(filename: str, text: str, source_type: str, detail: str) -> ImportedDocument:
+def imported(filename: str, text: str, source_type: str, detail: str, raw_text: str = "") -> ImportedDocument:
     clean = normalize_text(text)
     if not clean:
         raise ValueError(f"empty_extracted_text:{source_type}")
-    return ImportedDocument(doc_id=doc_id_for_filename(filename), title=filename, text=clean, source_type=source_type, detail=detail)
+    return ImportedDocument(
+        doc_id=doc_id_for_filename(filename),
+        title=filename,
+        text=clean,
+        source_type=source_type,
+        detail=detail,
+        raw_text=normalize_raw_text(raw_text),
+    )
 
 
 def safe_filename(filename: str) -> str:
@@ -234,6 +243,12 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def normalize_raw_text(text: str) -> str:
+    text = html.unescape(str(text or ""))
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.strip()
+
+
 def html_to_text(text: str) -> str:
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
@@ -283,7 +298,7 @@ def odt_to_text(data: bytes) -> str:
     return "\n\n".join(lines)
 
 
-def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = None) -> tuple[str, str]:
+def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = None) -> tuple[str, str, str]:
     tool = shutil.which("pdftotext")
     if not tool:
         raise ValueError("pdftotext_not_found")
@@ -295,24 +310,190 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
             detail = (result.stderr or result.stdout or "pdftotext_failed").strip()
             raise ValueError(detail)
         extracted = out.read_text(encoding="utf-8", errors="replace")
-    marked = mark_pdf_pages(extracted)
-    if meaningful_chars(marked) >= 120:
+    raw_marked = mark_pdf_pages(extracted, clean=False)
+    marked = clean_pdf_text(raw_marked)
+    if meaningful_chars(marked) >= 40:
         report_progress(progress, "converted", 1, 1, "PDF con texto interno listo.")
-        return marked, "pdf convertido con pdftotext y marcas de pagina"
+        return marked, "pdf convertido con pdftotext y marcas de pagina", raw_marked
     report_progress(progress, "ocr_start", 0, 0, "PDF escaneado detectado. Iniciando OCR...")
     ocr_text = ocr_pdf_to_text(path, progress=progress)
     report_progress(progress, "converted", 1, 1, "OCR terminado.")
-    return ocr_text, "pdf escaneado: OCR con Tesseract y marcas de pagina"
+    return ocr_text, "pdf escaneado: OCR con Tesseract y marcas de pagina", ocr_text
 
 
-def mark_pdf_pages(text: str) -> str:
+def mark_pdf_pages(text: str, *, clean: bool = True) -> str:
     pages = str(text or "").split("\f")
     marked: list[str] = []
     for idx, page in enumerate(pages, start=1):
-        clean = normalize_text(page)
-        if clean:
-            marked.append(f"[Pagina {idx}]\n{clean}")
+        page_text = normalize_text(page) if clean else normalize_raw_text(page)
+        if page_text:
+            marked.append(f"[Pagina {idx}]\n{page_text}")
     return "\n\n".join(marked)
+
+
+PDF_WORD_RE = r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+"
+PDF_PAGE_MARKER_RE = re.compile(r"^\[Pagina\s+\d+\]$", re.IGNORECASE)
+PDF_JOINABLE_RE = re.compile(PDF_WORD_RE)
+
+
+@functools.lru_cache(maxsize=1)
+def _spanish_wordlist() -> set[str]:
+    candidates = (
+        Path("/usr/share/dict/spanish"),
+        Path("/usr/share/hunspell/es_AR.dic"),
+        Path("/usr/share/hunspell/es_ES.dic"),
+    )
+    words: set[str] = set()
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for idx, raw_line in enumerate(handle):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if idx == 0 and path.suffix == ".dic" and line.isdigit():
+                        continue
+                    word = line.split("/", 1)[0].strip().lower()
+                    if len(word) < 4 or not re.fullmatch(PDF_WORD_RE, word):
+                        continue
+                    words.add(word)
+        except Exception:
+            continue
+        if words:
+            break
+    return words
+
+
+def _looks_like_sparse_upper_header(line: str) -> bool:
+    compact = re.sub(r"[^A-ZÁÉÍÓÚÜÑ0-9]", "", line)
+    if len(compact) < 6:
+        return False
+    tokens = re.findall(r"[A-ZÁÉÍÓÚÜÑ]+|[0-9IVXLCDM]+", line)
+    if len(tokens) < 4:
+        return False
+    short_tokens = sum(1 for token in tokens if len(token) <= 3)
+    return short_tokens >= max(3, len(tokens) - 1)
+
+
+def _is_mechanical_pdf_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if PDF_PAGE_MARKER_RE.fullmatch(stripped):
+        return False
+    if re.fullmatch(r"[0-9]{1,4}(?:[.·•-]{1,3})?", stripped):
+        return True
+    if _looks_like_sparse_upper_header(stripped):
+        return True
+    return False
+
+
+def _normalize_pdf_line(line: str) -> str:
+    line = str(line or "").replace("\t", " ")
+    line = re.sub(r"[ ]{2,}", " ", line)
+    return line.strip()
+
+
+def _should_join_pdf_lines(previous: str, current: str) -> bool:
+    prev = previous.rstrip()
+    curr = current.lstrip()
+    if not prev or not curr:
+        return False
+    if PDF_PAGE_MARKER_RE.fullmatch(prev) or PDF_PAGE_MARKER_RE.fullmatch(curr):
+        return False
+    if prev.endswith("-"):
+        return True
+    if prev.endswith((".", "!", "?")):
+        return False
+    return curr[:1].islower() or curr.startswith((",", ";", ":", ")", "]", "»", "—", "-", "y ", "o "))
+
+
+def _join_fragments_if_known(parts: tuple[str, ...]) -> str | None:
+    candidate = "".join(parts)
+    dictionary = _spanish_wordlist()
+    if candidate.lower() not in dictionary:
+        return None
+    return candidate
+
+
+def _repair_split_words(text: str) -> str:
+    triple_pattern = re.compile(rf"\b({PDF_WORD_RE}) ({PDF_WORD_RE}) ({PDF_WORD_RE})\b")
+    pair_pattern = re.compile(rf"\b({PDF_WORD_RE}) ({PDF_WORD_RE})\b")
+    patterns = (triple_pattern, pair_pattern)
+    suspicious_pair_count = len(pair_pattern.findall(str(text or "")))
+    allow_fallback_pairs = suspicious_pair_count >= 2
+
+    def likely_split_pair(parts: tuple[str, ...]) -> bool:
+        if len(parts) != 2:
+            return False
+        left, right = parts
+        left_lower = left.lower()
+        right_lower = right.lower()
+        total = len(left_lower) + len(right_lower)
+        if total < 7:
+            return False
+        if left_lower in OCR_STOPWORDS or right_lower in OCR_STOPWORDS:
+            return False
+        return (len(left_lower) <= 3 and len(right_lower) >= 4) or (len(left_lower) >= 4 and len(right_lower) <= 3)
+
+    def replace(match: re.Match[str]) -> str:
+        parts = tuple(match.groups())
+        if sum(len(part) for part in parts) < 6:
+            return match.group(0)
+        merged = _join_fragments_if_known(parts)
+        if merged:
+            return merged
+        if not any(len(part) <= 3 for part in parts):
+            return match.group(0)
+        if allow_fallback_pairs and likely_split_pair(parts):
+            return "".join(parts)
+        return match.group(0)
+
+    repaired = str(text or "")
+    for pattern in patterns:
+        previous = None
+        while repaired != previous:
+            previous = repaired
+            repaired = pattern.sub(replace, repaired)
+    return repaired
+
+
+def clean_pdf_text(text: str) -> str:
+    body = normalize_raw_text(text)
+    if not body:
+        return ""
+    body = re.sub(rf"(?<=\w)-\n(?=\w)", "", body)
+    lines = body.split("\n")
+    paragraphs: list[str] = []
+    current = ""
+    for raw_line in lines:
+        stripped = _normalize_pdf_line(raw_line)
+        if not stripped:
+            if current:
+                paragraphs.append(current.strip())
+                current = ""
+            continue
+        if _is_mechanical_pdf_line(stripped):
+            continue
+        if PDF_PAGE_MARKER_RE.fullmatch(stripped):
+            if current:
+                paragraphs.append(current.strip())
+                current = ""
+            paragraphs.append(stripped)
+            continue
+        if current and _should_join_pdf_lines(current, stripped):
+            current = f"{current.rstrip('-').rstrip()} {stripped}".strip()
+        else:
+            if current:
+                paragraphs.append(current.strip())
+            current = stripped
+    if current:
+        paragraphs.append(current.strip())
+    cleaned = "\n\n".join(_repair_split_words(paragraph) if not PDF_PAGE_MARKER_RE.fullmatch(paragraph) else paragraph for paragraph in paragraphs)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return normalize_text(cleaned)
 
 
 def meaningful_chars(text: str) -> int:

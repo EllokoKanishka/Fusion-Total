@@ -56,6 +56,26 @@ owner_file_matches_fusion() {
   [[ -f "$OWNER_FILE" ]] || return 1
   grep -q '"owner"[[:space:]]*:[[:space:]]*"fusion_reader_v2"' "$OWNER_FILE" || return 1
   grep -q "\"port\"[[:space:]]*:[[:space:]]*$GPU_TTS_PORT" "$OWNER_FILE" || return 1
+  local owner_pid
+  owner_pid="$(sed -n 's/.*"owner_pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$OWNER_FILE" | head -1)"
+  if [[ -n "$owner_pid" ]] && [[ -r "/proc/$owner_pid/cmdline" ]]; then
+    if tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "tts_server:app" \
+      && tr '\0' ' ' <"/proc/$owner_pid/cmdline" | grep -q -- "--port $GPU_TTS_PORT"; then
+      return 0
+    fi
+  fi
+  local listener_pid=""
+  if command -v lsof >/dev/null 2>&1; then
+    listener_pid="$(lsof -tiTCP:"$GPU_TTS_PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
+  fi
+  if [[ -z "$listener_pid" ]] && command -v ss >/dev/null 2>&1; then
+    listener_pid="$(ss -ltnp 2>/dev/null | grep -F ":$GPU_TTS_PORT" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
+  fi
+  [[ -n "$listener_pid" ]] || return 1
+  [[ -r "/proc/$listener_pid/cmdline" ]] || return 1
+  tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "tts_server:app" || return 1
+  tr '\0' ' ' <"/proc/$listener_pid/cmdline" | grep -q -- "--port $GPU_TTS_PORT" || return 1
+  return 0
 }
 
 final_status() {
