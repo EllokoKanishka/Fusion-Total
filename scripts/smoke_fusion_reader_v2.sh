@@ -181,14 +181,24 @@ echo "VERIFY INTEGRATION"
 verify_output="$("$ROOT/scripts/verify_voice_port_isolation.sh" 2>&1)"
 verify_exit=$?
 printf '%s\n' "$verify_output"
+verify_result="$(sed -n 's/^FINAL RESULT: //p' <<<"$verify_output" | tail -n 1)"
 if (( verify_exit != 0 )); then
   strict_fail "verify_voice_port_isolation.sh returned exit code ${verify_exit}"
-elif grep -Fq "FINAL RESULT: FAIL" <<<"$verify_output"; then
-  strict_fail "verify_voice_port_isolation.sh reported FINAL RESULT: FAIL"
-elif grep -Fq "FINAL RESULT: OK_WITH_WARNINGS" <<<"$verify_output"; then
-  warn "verify_voice_port_isolation.sh reported FINAL RESULT: OK_WITH_WARNINGS"
 else
-  ok "verify_voice_port_isolation.sh completed without strict failure"
+  case "$verify_result" in
+    FAIL)
+      strict_fail "verify_voice_port_isolation.sh reported FINAL RESULT: FAIL"
+      ;;
+    OK_WITH_WARNINGS|OK_WITH_STRICT_WARNINGS|OK_WITH_EXTERNAL_WARNINGS)
+      warn "verify_voice_port_isolation.sh reported FINAL RESULT: ${verify_result}"
+      ;;
+    OK)
+      ok "verify_voice_port_isolation.sh reported FINAL RESULT: OK"
+      ;;
+    *)
+      warn "verify_voice_port_isolation.sh reported unknown or missing FINAL RESULT: ${verify_result:-<missing>}"
+      ;;
+  esac
 fi
 
 echo

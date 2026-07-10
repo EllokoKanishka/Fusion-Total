@@ -40,6 +40,9 @@ class SttPathV2Tests(unittest.TestCase):
         self.assertIn("intentando iniciar para provider", launcher)
         server = Path("scripts/start_fusion_reader_v2_stt.sh").read_text(encoding="utf-8")
         self.assertIn("FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-", server)
+        self.assertIn("Set FUSION_READER_STT_ENV to a valid STT environment", server)
+        self.assertIn("FUSION_READER_GPU_ENV remains a compatible fallback", server)
+        self.assertIn("For the historical default only", server)
 
     def test_smoke_classifies_cli_without_server_as_info(self):
         smoke = Path("scripts/smoke_fusion_reader_v2.sh").read_text(encoding="utf-8")

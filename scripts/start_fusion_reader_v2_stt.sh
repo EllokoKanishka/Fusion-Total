@@ -12,8 +12,9 @@ if [[ "${FUSION_READER_STT_DEVICE:-cuda}" == "cuda" ]]; then
 fi
 
 if [[ ! -x "$STT_ENV/bin/python" ]]; then
-  echo "STT env not found: $STT_ENV" >&2
-  echo "Run ./scripts/bootstrap_alltalk_gpu_5090.sh first." >&2
+  echo "STT Python environment not found at resolved path: $STT_ENV" >&2
+  echo "Set FUSION_READER_STT_ENV to a valid STT environment; FUSION_READER_GPU_ENV remains a compatible fallback." >&2
+  echo "For the historical default only, ./scripts/bootstrap_alltalk_gpu_5090.sh is one setup option." >&2
   exit 1
 fi
 
