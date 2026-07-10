@@ -70,7 +70,7 @@ Reglas:
 ```text
 tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
-test discovery completa: 335 tests OK
+test discovery completa: 339 tests OK
 verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
   - checks estrictos de Fusion y warnings externos de Doctora quedan separados
   - `7852` seguía libre
@@ -84,6 +84,14 @@ verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
 - `docs/DEPENDENCIES_V2.md` consolida dependencias Python, binarios,
   servicios locales, puertos, variables de entorno, scripts de arranque y
   fronteras externas del runtime v2.
+- `scripts/smoke_fusion_reader_v2.sh` agrega un smoke de solo lectura para ver
+  estado operativo sin levantar ni matar servicios.
+- la diferencia histórica `335` vs `337` vs `339` en test discovery quedó
+  explicada:
+  `335` era el estado previo al manifiesto, `337` sumó
+  `tests/test_dependencies_manifest.py` y `339` agrega
+  `tests/test_smoke_script.py`; las suites modulares además siguen injertando
+  algunos casos legacy vía `attach_legacy_tests(...)`.
 
 ## Consolidación funcional reciente
 

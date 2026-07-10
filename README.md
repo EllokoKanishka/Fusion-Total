@@ -68,6 +68,7 @@ canónica de estado operativo:
 ```bash
 python3 -m unittest tests.test_fusion_reader_v2 -v
 ./scripts/verify_voice_port_isolation.sh
+./scripts/smoke_fusion_reader_v2.sh
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
 ```
 
@@ -80,7 +81,7 @@ Validación vigente:
 ```text
 tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
-test discovery completa: 335 tests OK
+test discovery completa: 339 tests OK
 ```
 
 Nota operativa:
@@ -88,3 +89,8 @@ Nota operativa:
 - `./scripts/verify_voice_port_isolation.sh` separa ahora los checks estrictos de Fusion de los warnings informativos de frontera con Doctora.
 - Si `7853` no está levantado con owner válido, puede devolver `OK_WITH_WARNINGS` sin confundir eso con un uso indebido de `7852` o `7854`.
 - Faltantes documentales o de memoria en Doctora aparecen como warnings externos y ya no derriban por sí solos la validación estricta del repo Fusion.
+- `./scripts/smoke_fusion_reader_v2.sh` es diagnóstico no invasivo: no levanta ni mata servicios, no reemplaza tests unitarios y puede terminar en `OK_WITH_WARNINGS` si parte del stack no está arriba.
+- La secuencia reciente de discovery quedó así:
+  - `335`: antes del merge del manifiesto de dependencias;
+  - `337`: después de sumar `tests/test_dependencies_manifest.py`;
+  - `339`: después de sumar `tests/test_smoke_script.py`.

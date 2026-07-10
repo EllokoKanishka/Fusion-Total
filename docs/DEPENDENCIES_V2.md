@@ -358,7 +358,16 @@ Validación mínima actual:
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ./scripts/verify_voice_port_isolation.sh
+./scripts/smoke_fusion_reader_v2.sh
 ```
+
+El smoke nuevo es diagnóstico no invasivo:
+
+- no mata procesos;
+- no inicia servicios pesados;
+- no escribe owner files;
+- no reemplaza tests unitarios;
+- reporta `OK_WITH_WARNINGS` cuando parte del stack local no está levantado.
 
 Validación histórica aún útil:
 
@@ -403,3 +412,11 @@ curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
   diseño informativo;
 - el runtime GPU de AllTalk y el runtime GPU de Docling siguen siendo entornos
   dedicados y no vendorizados por el repo.
+- el discovery actual de este branch cuenta `339` tests;
+- `335` correspondía al estado previo al merge de
+  `tests/test_dependencies_manifest.py`;
+- `337` apareció después de sumar esos `2` tests del manifiesto;
+- `339` es el total actual después de agregar además
+  `tests/test_smoke_script.py`;
+- la diferencia fue de estado de rama/documentación, no de un bug nuevo del
+  loader.
