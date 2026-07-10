@@ -16,7 +16,8 @@ http://127.0.0.1:8010/
 
 Manifiesto único de dependencias:
 
-- [docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
+- [docs/DEPENDENCIES_V2.md](DEPENDENCIES_V2.md)
+- [docs/LOCAL_DEFAULTS_V2.md](LOCAL_DEFAULTS_V2.md)
 - `requirements/fusion-reader-v2.txt`
 - `requirements/fusion-reader-v2-optional.txt` (solo rutas opcionales)
 
@@ -66,14 +67,15 @@ Estado auditado el 2026-07-09:
 
 - `tests.test_fusion_reader_v2`: `240 OK`
 - `tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress`: `35 OK`
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `339 OK`
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `345 OK`
 - `./scripts/verify_voice_port_isolation.sh`: ahora separa `FUSION STRICT CHECKS` de `EXTERNAL BOUNDARY / DOCTORA INFO`
 - resultado local actual: `FINAL RESULT: OK_WITH_WARNINGS`
 - si faltan bitácoras, memoria o referencias externas de Doctora, eso sale como `WARN` externo y ya no se mezcla con un fallo estricto de aislamiento de Fusion
 - el manifiesto Python nuevo cubre solo paquetes `pip` del repo; binarios de sistema y entornos GPU dedicados siguen documentados aparte
 - para revisar puertos, servicios, binarios y env vars sin repartir la info entre varios archivos, usar `docs/DEPENDENCIES_V2.md`
+- para revisar defaults absolutos locales, overrides y alcance externo, usar `docs/LOCAL_DEFAULTS_V2.md`
 - `./scripts/smoke_fusion_reader_v2.sh` sirve como smoke de solo lectura: no levanta servicios, no mata procesos y usa `OK_WITH_WARNINGS` cuando hay componentes opcionales apagados
-- la diferencia histórica `335` vs `337` quedó explicada por la suma de `tests/test_dependencies_manifest.py`; el total actual `339` agrega además `tests/test_smoke_script.py`
+- el total operativo actual del branch es `345` y ahora incluye además `tests/test_local_defaults_v2.py` para vigilar defaults locales y overrides
 
 ## Si 7853 no engancha
 

@@ -260,6 +260,7 @@ def _default_whisper_command() -> str:
     resolved = shutil.which("whisper")
     if resolved:
         return resolved
+    # Machine-local fallbacks stay overrideable via FUSION_READER_STT_COMMAND.
     for candidate in (
         "/home/linuxbrew/.linuxbrew/bin/whisper",
         "/usr/local/bin/whisper",

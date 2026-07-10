@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Machine-local legacy defaults remain overrideable via env vars.
 ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
 ALLTALK_PYTHON="${DIRECT_CHAT_ALLTALK_PYTHON:-/home/lucy-ubuntu/ebook2audiobook/python_env/bin/python}"
 ALLTALK_HOST="${DIRECT_CHAT_ALLTALK_HOST:-127.0.0.1}"
