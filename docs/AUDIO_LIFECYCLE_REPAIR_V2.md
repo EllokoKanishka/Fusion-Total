@@ -1,5 +1,14 @@
 # Fusion Reader v2 — Reparación del ciclo de vida de audio
 
+## Garantías completadas en la revisión del PR #11
+
+- `next`, `previous` y `jump` conservan el snapshot público enriquecido, incluida la generación documental y el estado de audio.
+- Cada ejecución de preparación usa un `Event` de cancelación nuevo; cancelar y reiniciar en el mismo documento funciona sin workers superpuestos.
+- Documento, bloque, texto, voz e idioma forman una única identidad de lectura. Un resultado de una voz anterior queda `stale` y el prefetch solo se comparte por clave exacta.
+- Un `Condition` registra lecturas interactivas pendientes y coordina la adquisición del lock del proveedor. Prepare, prefetch y export no pueden iniciar una unidad TTS nueva mientras espera una lectura.
+- La prioridad es cooperativa entre unidades: una inferencia que ya entró al proveedor no se puede interrumpir.
+- Cambiar de voz invalida requests, detiene lectura continua y vacía el reproductor antes de publicar el status nuevo.
+
 ## Síntomas y causas verificadas
 
 - La lectura inicial podía quedar sin feedback y el frontend la bloqueaba usando

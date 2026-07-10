@@ -1505,6 +1505,7 @@ INDEX_HTML = r"""<!doctype html>
     async function changeVoice() {
       const voice = els.voiceSelect.value;
       if (!voice) return;
+      resetAudioLifecycle('Cambiando voz; audio anterior detenido.');
       setBusy(true);
       try {
         const data = await api('/api/voice', { voice });
@@ -2272,7 +2273,9 @@ INDEX_HTML = r"""<!doctype html>
       const currentGeneration = Number(status && status.document_generation || 0);
       const currentDocId = String(status && status.doc_id || '');
       const currentIndex = Math.max(0, Number(status && status.current || 1) - 1);
-      if (data.stale || data.cancelled || expectedSequence !== audioLifecycleSequence || expectedRequest !== activeReadRequest || Number(data.document_generation || 0) !== currentGeneration || String(data.requested_doc_id || '') !== currentDocId || Number(data.requested_chunk_index) !== currentIndex) {
+      const currentVoice = String(status && status.voice || '');
+      const currentLanguage = String(status && status.language || '');
+      if (data.stale || data.cancelled || expectedSequence !== audioLifecycleSequence || expectedRequest !== activeReadRequest || Number(data.document_generation || 0) !== currentGeneration || String(data.requested_doc_id || '') !== currentDocId || Number(data.requested_chunk_index) !== currentIndex || String(data.voice || '') !== currentVoice || String(data.language || '') !== currentLanguage) {
         log('Audio descartado porque cambió el documento o el bloque.');
         return false;
       }
@@ -2498,8 +2501,10 @@ INDEX_HTML = r"""<!doctype html>
         const friendly = err && err.data && (err.data.error || err.data.detail) ? friendlyTtsMessage(err.data.error || err.data.detail) : friendlyTtsMessage(err.message);
         log(`Falló la voz: ${friendly}`);
       } finally {
-        if (activeReadController === controller) activeReadController = null;
-        setBusy(false);
+        if (activeReadController === controller) {
+          activeReadController = null;
+          setBusy(false);
+        }
       }
     }
 

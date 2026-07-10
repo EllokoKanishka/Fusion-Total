@@ -1,6 +1,7 @@
 import os
 import tempfile
 import threading
+import time
 import unittest
 import wave
 from pathlib import Path
@@ -35,7 +36,63 @@ class ControlledTTS(NullTTSProvider):
         return AudioArtifact(True, path=Path(name), provider=self.name)
 
 
+class OrderedTTS(ControlledTTS):
+    def synthesize(self, text, voice="", language="es"):
+        self.calls.append((text, voice, language))
+        if len(self.calls) == 1:
+            self.started.set()
+            self.release.wait(2)
+        fd, name = tempfile.mkstemp(prefix="ordered_", suffix=".wav")
+        os.close(fd)
+        with wave.open(name, "wb") as wav:
+            wav.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+            wav.writeframes(b"\0\0" * 80)
+        return AudioArtifact(True, path=Path(name), provider=self.name)
+
+
 class AudioLifecycleV2Tests(unittest.TestCase):
+    def test_navigation_returns_enriched_identity_without_advancing_generation(self):
+        app = test_app()
+        app.load_text("nav", "Navigation", "Alpha.", prefetch=False)
+        app.session.document.chunks = ["Alpha.", "Beta.", "Gamma."]
+        generation = app.status()["document_generation"]
+        for snapshot in (app.next(), app.previous(), app.jump(3)):
+            self.assertEqual(snapshot["document_generation"], generation)
+            self.assertTrue(snapshot["document"]["loaded"])
+            self.assertIn(snapshot["audio_state"], {"cached", "needs_generation"})
+        self.assertTrue(app.read_current(play=False)["ok"])
+
+    def test_prepare_can_restart_with_a_fresh_cancel_event(self):
+        tts = ControlledTTS()
+        app = test_app(tts=tts)
+        app.load_text("a", "A", "ALFA ALFA.", prefetch=False)
+        app.prepare_document()
+        first_event = app._prepare_cancel
+        self.assertTrue(tts.started.wait(1))
+        app.cancel_prepare()
+        tts.release.set()
+        app._prepare_thread.join(2)
+        restarted = app.prepare_document()
+        self.assertIsNot(app._prepare_cancel, first_event)
+        self.assertFalse(app._prepare_cancel.is_set())
+        self.assertEqual(restarted["status"], "running")
+        app._prepare_thread.join(2)
+        self.assertEqual(app.prepare_status()["status"], "done")
+
+    def test_voice_change_makes_inflight_read_stale(self):
+        tts = ControlledTTS()
+        app = test_app(tts=tts)
+        app.load_text("a", "A", "ALFA ALFA.", prefetch=False)
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(app.read_current(play=False)))
+        thread.start()
+        self.assertTrue(tts.started.wait(1))
+        app.voice.voice = "voice-b.wav"
+        tts.release.set()
+        thread.join(2)
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["detail"], "audio_identity_changed")
+
     def test_late_read_from_replaced_document_is_stale(self):
         tts = ControlledTTS()
         app = test_app(tts=tts)
@@ -142,11 +199,32 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         result = {}
         reader = threading.Thread(target=lambda: result.update(app.read_current(play=False)))
         reader.start()
+        time.sleep(0.01)
         tts.release.set()
         reader.join(2)
         self.assertFalse(reader.is_alive())
         self.assertTrue(result["ok"])
         self.assertLessEqual(len(tts.calls), 1)
+
+    def test_interactive_read_is_next_after_current_prepare_unit(self):
+        tts = OrderedTTS()
+        app = test_app(tts=tts)
+        app.load_text("a", "A", "One.", prefetch=False)
+        app.session.document.chunks = ["One.", "Two.", "Three.", "Four.", "Five."]
+        app.prepare_document(start="beginning")
+        self.assertTrue(tts.started.wait(1))
+        app.jump(5)
+        result = {}
+        reader = threading.Thread(target=lambda: result.update(app.read_current(play=False)))
+        reader.start()
+        time.sleep(0.01)
+        tts.release.set()
+        reader.join(2)
+        self.assertFalse(reader.is_alive())
+        self.assertTrue(result["ok"])
+        self.assertEqual(tts.calls[1][0], "Five.")
+        app._prepare_thread.join(2)
+        self.assertEqual(app.prepare_status()["status"], "done")
 
     def test_tts_runtime_state_distinguishes_starting_and_down(self):
         tts = ControlledTTS()
@@ -183,6 +261,10 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
         self.assertIn("Number(data.document_generation || 0) !== currentGeneration", text)
         self.assertIn("String(data.requested_doc_id || '') !== currentDocId", text)
+        self.assertIn("String(data.voice || '') !== currentVoice", text)
+        self.assertIn("String(data.language || '') !== currentLanguage", text)
+        change_voice = text[text.index("async function changeVoice()"):text.index("async function ensureVoiceCatalog()")]
+        self.assertIn("resetAudioLifecycle", change_voice)
         read = text[text.index("async function readCurrent()"):text.index("async function pollPrepare()")]
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)

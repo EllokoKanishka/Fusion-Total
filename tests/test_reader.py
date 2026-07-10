@@ -201,7 +201,11 @@ class ReaderTests(unittest.TestCase):
         app.prefetch_wait_seconds = 0.001
         app.load_text("doc", "Doc", "Uno.", prefetch=False)
         stale = Future()
+        key = app._prefetch_key(
+            app._document_generation, 0, "Uno.", app.voice.voice, app.voice.language
+        )
         with app._prefetch_lock:
+            app._prefetch_futures[key] = stale
             app._prefetch_index = 0
             app._prefetch_future = stale
         out = app.read_current(play=False)
