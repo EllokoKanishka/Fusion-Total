@@ -8,6 +8,9 @@ Este documento describe las dependencias y precondiciones operativas de
 Para defaults absolutos locales, overrides y deuda de portabilidad asociada,
 ver también `docs/LOCAL_DEFAULTS_V2.md`.
 
+El snapshot técnico que cierra la consolidación y prioriza la deuda vive en
+`docs/CLOSURE_AND_BACKLOG_V2.md`.
+
 No describe ni administra:
 
 - Doctora Lucy

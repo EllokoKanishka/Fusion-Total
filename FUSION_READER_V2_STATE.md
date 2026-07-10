@@ -1,6 +1,6 @@
 # Fusion Reader v2 — Estado de Continuidad
 
-Fecha: 2026-07-09
+Fecha: 2026-07-10
 
 Esta es la hoja corta para retomar el proyecto sin perderse. La historia larga
 vive en `docs/HISTORY.md` y en los documentos históricos de diseño.
@@ -72,10 +72,8 @@ Reglas:
 ## Validación vigente
 
 ```text
-tests.test_fusion_reader_v2: 240 OK
-legacy reader safety: 35 tests OK
-test discovery completa: 345 tests OK
-verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
+test discovery completa del PR documental de cierre: 365 tests OK
+verify_voice_port_isolation.sh: OK_WITH_EXTERNAL_WARNINGS en el cierre local
   - checks estrictos de Fusion y warnings externos de Doctora quedan separados
   - `7852` seguía libre
   - no hubo evidencia de que Fusion apuntara a `7854`
@@ -96,9 +94,8 @@ verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
   sin mezclar binarios de sistema ni entornos GPU dedicados.
 - `scripts/smoke_fusion_reader_v2.sh` agrega un smoke de solo lectura para ver
   estado operativo sin levantar ni matar servicios.
-- la historia corta del contador de test discovery quedó documentada en los
-  docs operativos, y el branch actual valida `345` casos en
-  `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
+- `docs/CLOSURE_AND_BACKLOG_V2.md` registra el cierre formal de consolidación,
+  el estado verificado y el backlog P0/P1/P2.
 
 ## Consolidación funcional reciente
 
@@ -245,3 +242,4 @@ Notas:
 - Convivencia OpenClaw/SearXNG: `docs/OPENCLAW_SEARXNG_COEXISTENCE.md`
 - Personalidad: `docs/PERSONALITY.md`
 - Historia: `docs/HISTORY.md`
+- Cierre y backlog: `docs/CLOSURE_AND_BACKLOG_V2.md`
