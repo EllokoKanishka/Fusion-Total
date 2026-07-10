@@ -49,6 +49,7 @@ http://127.0.0.1:8010/
 - Continuidad corta: [FUSION_READER_V2_STATE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/FUSION_READER_V2_STATE.md:1)
 - Arquitectura vigente: [docs/ARCHITECTURE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/ARCHITECTURE.md:1)
 - Operación diaria: [docs/OPERATIONS.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/OPERATIONS.md:1)
+- Dependencias v2: [docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
 - Convivencia Fusion/OpenClaw/SearXNG: [docs/OPENCLAW_SEARXNG_COEXISTENCE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/OPENCLAW_SEARXNG_COEXISTENCE.md:1)
 - Historia: [docs/HISTORY.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/HISTORY.md:1)
 - Personalidad vigente: [docs/PERSONALITY.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/PERSONALITY.md:1)
@@ -69,6 +70,10 @@ python3 -m unittest tests.test_fusion_reader_v2 -v
 ./scripts/verify_voice_port_isolation.sh
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
 ```
+
+Para dependencias, servicios locales, puertos y variables de entorno, usar
+[docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
+como manifiesto único.
 
 Validación vigente:
 

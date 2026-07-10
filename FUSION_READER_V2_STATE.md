@@ -79,6 +79,12 @@ verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
   - faltan archivos esperados bajo Doctora (`bitacora_mantenimiento.md` y `memoria/bitacora_mantenimiento.md`)
 ```
 
+## Manifiesto operativo
+
+- `docs/DEPENDENCIES_V2.md` consolida dependencias Python, binarios,
+  servicios locales, puertos, variables de entorno, scripts de arranque y
+  fronteras externas del runtime v2.
+
 ## Consolidación funcional reciente
 
 Parches recientes confirmados:

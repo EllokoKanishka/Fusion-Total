@@ -14,6 +14,10 @@ UI:
 http://127.0.0.1:8010/
 ```
 
+Manifiesto único de dependencias:
+
+- [docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
+
 ## Healthchecks
 
 ```bash
@@ -63,6 +67,7 @@ Estado auditado el 2026-07-09:
 - `./scripts/verify_voice_port_isolation.sh`: ahora separa `FUSION STRICT CHECKS` de `EXTERNAL BOUNDARY / DOCTORA INFO`
 - resultado local actual: `FINAL RESULT: OK_WITH_WARNINGS`
 - si faltan bitácoras, memoria o referencias externas de Doctora, eso sale como `WARN` externo y ya no se mezcla con un fallo estricto de aislamiento de Fusion
+- para revisar puertos, servicios, binarios y env vars sin repartir la info entre varios archivos, usar `docs/DEPENDENCIES_V2.md`
 
 ## Si 7853 no engancha
 
