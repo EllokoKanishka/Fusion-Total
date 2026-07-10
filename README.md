@@ -66,6 +66,7 @@ canónica de estado operativo:
 ## Verify
 
 ```bash
+python3 -m pip install -r requirements/fusion-reader-v2.txt
 python3 -m unittest tests.test_fusion_reader_v2 -v
 ./scripts/verify_voice_port_isolation.sh
 ./scripts/smoke_fusion_reader_v2.sh
@@ -75,6 +76,14 @@ python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_
 Para dependencias, servicios locales, puertos y variables de entorno, usar
 [docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
 como manifiesto único.
+
+Base Python instalable del repo:
+
+- `requirements/fusion-reader-v2.txt`: camino core v2
+- `requirements/fusion-reader-v2-optional.txt`: STT/fallbacks opcionales
+
+No cubre binarios de sistema ni entornos GPU dedicados, y no cambia el runtime
+actual por sí mismo.
 
 Validación vigente:
 

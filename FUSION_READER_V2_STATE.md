@@ -84,6 +84,10 @@ verify_voice_port_isolation.sh: OK_WITH_WARNINGS en esta auditoría local
 - `docs/DEPENDENCIES_V2.md` consolida dependencias Python, binarios,
   servicios locales, puertos, variables de entorno, scripts de arranque y
   fronteras externas del runtime v2.
+- `requirements/fusion-reader-v2.txt` agrega una base instalable mínima de
+  paquetes Python para el camino v2 del repo.
+- `requirements/fusion-reader-v2-optional.txt` separa STT/fallbacks opcionales
+  sin mezclar binarios de sistema ni entornos GPU dedicados.
 - `scripts/smoke_fusion_reader_v2.sh` agrega un smoke de solo lectura para ver
   estado operativo sin levantar ni matar servicios.
 - la diferencia histórica `335` vs `337` vs `339` en test discovery quedó

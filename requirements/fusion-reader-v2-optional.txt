@@ -1,0 +1,11 @@
+# Optional Python dependencies for auxiliary Fusion Reader v2 paths.
+# Keep dedicated GPU environments outside these generic requirements files.
+
+# Dedicated STT HTTP server on port 8021.
+faster-whisper
+
+# Optional package-managed CLI fallback for `whisper`.
+openai-whisper
+
+# Docling GPU stays out of this file on purpose.
+# Use FUSION_READER_DOCLING_GPU_ENV for the dedicated environment instead.
