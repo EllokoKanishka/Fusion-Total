@@ -7,6 +7,7 @@ class LocalDefaultsV2Tests(unittest.TestCase):
         text = Path("docs/LOCAL_DEFAULTS_V2.md").read_text(encoding="utf-8")
         for token in (
             "FUSION_READER_GPU_ENV",
+            "FUSION_READER_STT_ENV",
             "DIRECT_CHAT_ALLTALK_DIR",
             "DIRECT_CHAT_ALLTALK_PYTHON",
             "FUSION_READER_DOCLING_GPU_ENV",
@@ -37,7 +38,7 @@ class LocalDefaultsV2Tests(unittest.TestCase):
                 'FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311',
             ),
             "scripts/start_fusion_reader_v2_stt.sh": (
-                'FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311',
+                'FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}',
             ),
             "scripts/verify_voice_port_isolation.sh": (
                 'DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy',

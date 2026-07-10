@@ -28,6 +28,9 @@ http://127.0.0.1:8010/
 - TTS fallback CPU: `http://127.0.0.1:7851`
 - TTS Doctora/Antigravity: `http://127.0.0.1:7854` (reservado, no usar)
 - STT principal: `http://127.0.0.1:8021`
+- STT provider default: `auto` (server sano primero, Whisper CLI fallback).
+  `server` exige `8021`; `cli` usa `FUSION_READER_STT_COMMAND` y el launcher no
+  intenta iniciar el server.
 - LLM local: Ollama `qwen3:14b-q8_0`
 - Investigación externa:
   - default `auto`

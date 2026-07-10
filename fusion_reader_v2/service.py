@@ -640,6 +640,7 @@ class FusionReaderV2:
     def _dialogue_services_status(self) -> dict:
         tts = dict(self.tts.health() or {})
         stt = dict(self.stt.health() or {})
+        stt.setdefault("requested_provider", getattr(self.stt, "requested_provider", self.stt.name))
         chat = self._chat_health()
         external = self._external_research_health()
         reasoning = self._effective_reasoning_mode(dialogue=True)

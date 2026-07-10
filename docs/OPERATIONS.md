@@ -110,6 +110,21 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 
 ## Si STT 8021 está caído
 
+Contrato: `auto` (default) usa el server sano y cae a Whisper CLI ante una
+indisponibilidad o fallo normal; no repite por CLI un resultado
+`hallucinated_transcript`. `server` (incluidos `faster_whisper` y
+`faster-whisper`) usa exclusivamente `8021`. `cli` usa exclusivamente
+`FUSION_READER_STT_COMMAND`; el launcher no inicia `8021` y su ausencia es
+informativa.
+
+`FUSION_READER_STT_URL` controla el cliente HTTP y `FUSION_READER_STT_PORT` el
+launcher/server (default `8021`); al personalizarlos deben señalar el mismo
+servicio. El Python del server sigue la cadena `FUSION_READER_STT_ENV` →
+`FUSION_READER_GPU_ENV` → default histórico.
+
+`./scripts/smoke_fusion_reader_v2.sh` y `/api/status` permiten verificar el
+provider sin iniciar ni cargar modelos pesados.
+
 1. revisar `curl -s http://127.0.0.1:8021/health`
 2. revisar `GET /api/dialogue/status` y confirmar `services.stt.ready=false`
 3. relanzar `./scripts/start_fusion_reader_v2_stt.sh`

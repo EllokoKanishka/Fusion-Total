@@ -25,6 +25,7 @@ Reglas:
 | Uso | Variable / selector | Default actual | Alcance | Override |
 | --- | --- | --- | --- | --- |
 | AllTalk GPU env | `FUSION_READER_GPU_ENV` | `/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311` | externo a este repo | sí |
+| Faster Whisper server env | `FUSION_READER_STT_ENV` → `FUSION_READER_GPU_ENV` | `/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311` | externo; fallback histórico compatible | sí |
 | AllTalk legacy checkout | `DIRECT_CHAT_ALLTALK_DIR` | `/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts` | externo a este repo | sí |
 | AllTalk legacy Python | `DIRECT_CHAT_ALLTALK_PYTHON` | `/home/lucy-ubuntu/ebook2audiobook/python_env/bin/python` | externo a este repo | sí |
 | Doctora boundary root | `DOCTORA_LUCY_ROOT` | `/home/lucy-ubuntu/Escritorio/doctora-lucy` | externo; solo frontera informativa de `verify_voice_port_isolation.sh` | sí |
@@ -68,6 +69,9 @@ overrideable y repo-relativo cuando no hace falta salir a `/home`.
 - `FUSION_READER_STT_COMMAND`
   - `fusion_reader_v2/dialogue.py`
   - `scripts/start_fusion_reader_v2.sh` lo refleja en logging operativo
+- `FUSION_READER_STT_ENV`
+  - `scripts/start_fusion_reader_v2_stt.sh`; tiene prioridad sobre
+    `FUSION_READER_GPU_ENV`, que se conserva como fallback compatible
 
 ## Operational interpretation
 
@@ -80,6 +84,8 @@ overrideable y repo-relativo cuando no hace falta salir a `/home`.
 - Si `FUSION_READER_STT_COMMAND` no está seteada, Fusion intenta primero el
   binario `whisper` resoluble en `PATH` y recién después candidatos locales
   conocidos.
+- El default histórico del entorno STT comparte ubicación con AllTalk, pero no
+  forma parte portable del repo ni implica acoplamiento funcional entre ambos.
 - `scripts/smoke_fusion_reader_v2.sh` es diagnóstico no invasivo: no crea
   rutas externas, no levanta esos sistemas externos y no debe fallar solo por
   su ausencia.
