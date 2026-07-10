@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Machine-local external defaults remain overrideable via env vars.
 ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
 PYTHON_BIN="${FUSION_READER_GPU_PYTHON:-python3.11}"
 PYTHON_VERSION="${FUSION_READER_GPU_PYTHON_VERSION:-3.11}"

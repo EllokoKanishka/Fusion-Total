@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Machine-local GPU env default remains overrideable via FUSION_READER_GPU_ENV.
 GPU_ENV="${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}"
 STT_DEVICE_WAS_SET="${FUSION_READER_STT_DEVICE+x}"
 

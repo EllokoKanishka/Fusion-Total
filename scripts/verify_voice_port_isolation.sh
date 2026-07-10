@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# External boundary defaults stay explicit here and remain overrideable via env vars.
 DOCTORA_ROOT="${DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy}"
 ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
 FUSION_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"

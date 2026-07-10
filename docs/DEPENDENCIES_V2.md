@@ -5,6 +5,9 @@
 Este documento describe las dependencias y precondiciones operativas de
 `fusion_reader_v2/`.
 
+Para defaults absolutos locales, overrides y deuda de portabilidad asociada,
+ver también `docs/LOCAL_DEFAULTS_V2.md`.
+
 No describe ni administra:
 
 - Doctora Lucy
@@ -60,6 +63,7 @@ Estas quedan agrupadas en `requirements/fusion-reader-v2-optional.txt`.
 - AllTalk/XTTS GPU
   - `scripts/start_reader_neural_tts_gpu_5090.sh`
   - entorno separado vía `FUSION_READER_GPU_ENV`
+  - default absoluto local auditado en `docs/LOCAL_DEFAULTS_V2.md`
   - el blueprint referencia `alltalk_gpu_5090_py311`
 - Docling GPU
   - `fusion_reader_v2/pdf_to_docx.py`
@@ -69,6 +73,7 @@ Estas quedan agrupadas en `requirements/fusion-reader-v2-optional.txt`.
 - AllTalk CPU legacy
   - `scripts/start_reader_neural_tts.sh`
   - entorno externo legado vía `DIRECT_CHAT_ALLTALK_PYTHON`
+  - defaults absolutos locales auditados en `docs/LOCAL_DEFAULTS_V2.md`
 
 ### Standard-library-heavy core
 
@@ -312,6 +317,17 @@ usa principalmente biblioteca estándar:
 - `DOCTORA_LUCY_ROOT`
   - root externo que el verificador consulta solo como frontera informativa
 
+Defaults absolutos locales y repo-relativos relevantes:
+
+- `FUSION_READER_GPU_ENV`
+- `DIRECT_CHAT_ALLTALK_DIR`
+- `DIRECT_CHAT_ALLTALK_PYTHON`
+- `DOCTORA_LUCY_ROOT`
+- `FUSION_READER_STT_COMMAND`
+- `FUSION_READER_DOCLING_GPU_ENV`
+
+Su auditoría consolidada vive en `docs/LOCAL_DEFAULTS_V2.md`.
+
 ## Startup scripts
 
 ### `scripts/open_fusion_reader.sh`
@@ -362,6 +378,8 @@ usa principalmente biblioteca estándar:
   investigación externa ya documentada.
 - El checkout de AllTalk legacy (`DIRECT_CHAT_ALLTALK_DIR`) es externo a este
   repo.
+- Los defaults absolutos locales no son parte portable del repo y deben leerse
+  como compatibilidad del laboratorio actual, no como contrato universal.
 - Warnings documentales o de memoria de Doctora no implican que Fusion esté
   roto.
 
@@ -443,11 +461,10 @@ curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
   diseño informativo;
 - el runtime GPU de AllTalk y el runtime GPU de Docling siguen siendo entornos
   dedicados y no vendorizados por el repo.
-- el discovery actual de este branch cuenta `339` tests;
-- `335` correspondía al estado previo al merge de
-  `tests/test_dependencies_manifest.py`;
-- `337` apareció después de sumar esos `2` tests del manifiesto;
-- `339` es el total actual después de agregar además
-  `tests/test_smoke_script.py`;
-- la diferencia fue de estado de rama/documentación, no de un bug nuevo del
-  loader.
+- el discovery actual de este branch cuenta `345` tests;
+- el conteo histórico previo del tramo de consolidación había quedado en
+  `339`, pero ya no es la referencia operativa actual;
+- `tests/test_local_defaults_v2.py` agrega una guardia estructural para
+  defaults locales, overrides y fronteras documentales;
+- la diferencia de conteo responde al estado del branch y a nuevas guardias de
+  documentación, no a un bug nuevo del loader.

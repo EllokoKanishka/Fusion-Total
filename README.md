@@ -45,15 +45,16 @@ http://127.0.0.1:8010/
 
 ## Documentación principal
 
-- Reglas raíz: [AGENTS.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/AGENTS.md:1)
-- Continuidad corta: [FUSION_READER_V2_STATE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/FUSION_READER_V2_STATE.md:1)
-- Arquitectura vigente: [docs/ARCHITECTURE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/ARCHITECTURE.md:1)
-- Operación diaria: [docs/OPERATIONS.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/OPERATIONS.md:1)
-- Dependencias v2: [docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
-- Convivencia Fusion/OpenClaw/SearXNG: [docs/OPENCLAW_SEARXNG_COEXISTENCE.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/OPENCLAW_SEARXNG_COEXISTENCE.md:1)
-- Historia: [docs/HISTORY.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/HISTORY.md:1)
-- Personalidad vigente: [docs/PERSONALITY.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/PERSONALITY.md:1)
-- Auditoría de biblioteca: [docs/LIBRARY_AUDIT.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/LIBRARY_AUDIT.md:1)
+- Reglas raíz: [AGENTS.md](AGENTS.md)
+- Continuidad corta: [FUSION_READER_V2_STATE.md](FUSION_READER_V2_STATE.md)
+- Arquitectura vigente: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Operación diaria: [docs/OPERATIONS.md](docs/OPERATIONS.md)
+- Dependencias v2: [docs/DEPENDENCIES_V2.md](docs/DEPENDENCIES_V2.md)
+- Defaults locales: [docs/LOCAL_DEFAULTS_V2.md](docs/LOCAL_DEFAULTS_V2.md)
+- Convivencia Fusion/OpenClaw/SearXNG: [docs/OPENCLAW_SEARXNG_COEXISTENCE.md](docs/OPENCLAW_SEARXNG_COEXISTENCE.md)
+- Historia: [docs/HISTORY.md](docs/HISTORY.md)
+- Personalidad vigente: [docs/PERSONALITY.md](docs/PERSONALITY.md)
+- Auditoría de biblioteca: [docs/LIBRARY_AUDIT.md](docs/LIBRARY_AUDIT.md)
 
 Documentos históricos de diseño siguen disponibles, pero ya no son la fuente
 canónica de estado operativo:
@@ -74,8 +75,10 @@ python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_
 ```
 
 Para dependencias, servicios locales, puertos y variables de entorno, usar
-[docs/DEPENDENCIES_V2.md](/home/lucy-ubuntu/Escritorio/Fusion%20Total/docs/DEPENDENCIES_V2.md:1)
-como manifiesto único.
+[docs/DEPENDENCIES_V2.md](docs/DEPENDENCIES_V2.md) como manifiesto único.
+
+Para defaults absolutos locales, overrides y deuda operativa asociada, usar
+[docs/LOCAL_DEFAULTS_V2.md](docs/LOCAL_DEFAULTS_V2.md).
 
 Base Python instalable del repo:
 
@@ -90,7 +93,7 @@ Validación vigente:
 ```text
 tests.test_fusion_reader_v2: 240 OK
 legacy reader safety: 35 tests OK
-test discovery completa: 339 tests OK
+test discovery completa: 345 tests OK
 ```
 
 Nota operativa:
@@ -99,7 +102,6 @@ Nota operativa:
 - Si `7853` no está levantado con owner válido, puede devolver `OK_WITH_WARNINGS` sin confundir eso con un uso indebido de `7852` o `7854`.
 - Faltantes documentales o de memoria en Doctora aparecen como warnings externos y ya no derriban por sí solos la validación estricta del repo Fusion.
 - `./scripts/smoke_fusion_reader_v2.sh` es diagnóstico no invasivo: no levanta ni mata servicios, no reemplaza tests unitarios y puede terminar en `OK_WITH_WARNINGS` si parte del stack no está arriba.
-- La secuencia reciente de discovery quedó así:
-  - `335`: antes del merge del manifiesto de dependencias;
-  - `337`: después de sumar `tests/test_dependencies_manifest.py`;
-  - `339`: después de sumar `tests/test_smoke_script.py`.
+- La referencia operativa actual del branch es:
+  - `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `345 OK`
+  - `tests/test_local_defaults_v2.py` mantiene auditados los defaults locales y sus overrides
