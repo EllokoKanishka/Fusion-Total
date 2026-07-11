@@ -56,6 +56,7 @@ class FusionReaderV2:
         prefetch_ahead: int | None = None,
         prefetch_workers: int | None = None,
         session_state_path: Path | str | None = "runtime/fusion_reader_v2/session_state.json",
+        audio_export_root: Path | str | None = None,
     ) -> None:
         self.session = ReaderSession()
         self.tts = tts or AllTalkProvider()
@@ -113,6 +114,7 @@ class FusionReaderV2:
         self.veil = "lucy"
         self.session_state_path = Path(session_state_path) if session_state_path else None
         self.dialogue_trace_path = (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
+        self.audio_export_root = (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
         self._restore_session_state()
         if self.session.document:
             self._document_generation = max(1, self._document_generation)
@@ -1432,7 +1434,7 @@ class FusionReaderV2:
                 return {"ok": False, "error": "audio_export_not_ready"}
             path = Path(job.output_path).resolve()
             filename = job.filename
-        downloads_dir = find_downloads_dir().resolve()
+        downloads_dir = self.audio_export_root.resolve()
         try:
             path.relative_to(downloads_dir)
         except ValueError:
@@ -1516,7 +1518,7 @@ class FusionReaderV2:
             if not inputs:
                 self._finish_audio_export_job(job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs")
                 return
-            target = unique_audio_download_target(job.filename)
+            target = unique_audio_download_target(job.filename, self.audio_export_root)
             if len(inputs) == 1:
                 target.write_bytes(inputs[0].read_bytes())
                 concat_method = "copy"

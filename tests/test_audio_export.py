@@ -1,13 +1,12 @@
 import unittest
 import tempfile
-import time
 import wave
 from pathlib import Path
 from unittest import mock
 from fusion_reader_v2.audio_export import concat_wav_files, sanitize_audio_title
 from tests.helpers import (
     test_app,
-    NullTTSProvider,
+    wait_for_audio_export,
     SyntheticWavTTSProvider,
     LengthLimitedSyntheticWavTTSProvider,
     manual_document,
@@ -15,17 +14,17 @@ from tests.helpers import (
 )
 
 class AudioExportTests(unittest.TestCase):
+    def test_audio_export_test_app_uses_temporary_export_root(self):
+        app = test_app(tts=SyntheticWavTTSProvider())
+        self.assertEqual(app.audio_export_root.name, "Descargas")
+        self.assertTrue(app.audio_export_root.parent.name.startswith("fusion_reader_v2_test_"))
+
     def test_audio_export_generates_files_and_reports_progress(self):
         app = test_app(tts=SyntheticWavTTSProvider())
         app.load_text("doc", "Doc", make_reading_document("Doc", 5), prefetch=False)
         out = app.start_audio_export("full")
         self.assertTrue(out["ok"])
-        job_id = out["job_id"]
-        for _ in range(100):
-            status = app.audio_export_status(job_id)
-            if status["state"] == "done": break
-            time.sleep(0.01)
-        final = app.audio_export_status(job_id)
+        final = wait_for_audio_export(app, out["job_id"])
         self.assertEqual(final["state"], "done")
         self.assertTrue(Path(final["output_path"]).exists())
 
@@ -34,9 +33,8 @@ class AudioExportTests(unittest.TestCase):
         app.load_text("doc", "Doc", make_reading_document("Doc", 10), prefetch=False)
         out = app.start_audio_export("full")
         app.cancel_audio_export(out["job_id"])
-        time.sleep(0.1)
-        status = app.audio_export_status(out["job_id"])
-        self.assertIn(status["state"], ["cancelled", "canceling"])
+        status = wait_for_audio_export(app, out["job_id"])
+        self.assertEqual(status["state"], "cancelled")
 
     def test_audio_export_limits_concurrent_jobs(self):
         app = test_app()
@@ -51,31 +49,31 @@ class AudioExportTests(unittest.TestCase):
         app.session.load(manual_document("doc", "Doc", ["u", "d", "t"]))
         app.jump(2)
         job = app.start_audio_export("current")
-        time.sleep(0.1)
+        wait_for_audio_export(app, job["job_id"])
         self.assertEqual(provider.calls[0][0], "d")
 
     def test_audio_export_specific_block(self):
         provider = SyntheticWavTTSProvider()
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["u", "d", "t"]))
-        app.start_audio_export("block", block=3)
-        time.sleep(0.1)
+        job = app.start_audio_export("block", block=3)
+        wait_for_audio_export(app, job["job_id"])
         self.assertEqual(provider.calls[0][0], "t")
 
     def test_audio_export_range(self):
         provider = SyntheticWavTTSProvider()
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["u", "d", "t", "c"]))
-        app.start_audio_export("range", start=2, end=4)
-        time.sleep(0.1)
+        job = app.start_audio_export("range", start=2, end=4)
+        wait_for_audio_export(app, job["job_id"])
         self.assertEqual([c[0] for c in provider.calls], ["d", "t", "c"])
 
     def test_audio_export_full_document(self):
         provider = SyntheticWavTTSProvider()
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["u", "d"]))
-        app.start_audio_export("full")
-        time.sleep(0.1)
+        job = app.start_audio_export("full")
+        wait_for_audio_export(app, job["job_id"])
         self.assertEqual([c[0] for c in provider.calls], ["u", "d"])
 
     def test_audio_export_rejects_invalid_ranges_and_missing_document(self):
@@ -90,18 +88,18 @@ class AudioExportTests(unittest.TestCase):
         app.session.load(manual_document("doc", "Orig", ["u", "d"]))
         job = app.start_audio_export("full")
         app.session.load(manual_document("new", "New", ["x"]))
-        time.sleep(0.2)
+        wait_for_audio_export(app, job["job_id"])
         self.assertEqual([c[0] for c in provider.calls], ["u", "d"])
 
     def test_audio_export_reuses_cache_without_calling_tts_again(self):
         provider = SyntheticWavTTSProvider()
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["u"]))
-        app.start_audio_export("full")
-        time.sleep(0.1)
+        first = app.start_audio_export("full")
+        wait_for_audio_export(app, first["job_id"])
         before = len(provider.calls)
-        app.start_audio_export("full")
-        time.sleep(0.1)
+        second = app.start_audio_export("full")
+        wait_for_audio_export(app, second["job_id"])
         self.assertEqual(len(provider.calls), before)
 
     def test_audio_export_cancel_sets_cancelled_state(self):
@@ -109,26 +107,40 @@ class AudioExportTests(unittest.TestCase):
         app.session.load(manual_document("doc", "Doc", ["u", "d"]))
         job = app.start_audio_export("full")
         app.cancel_audio_export(job["job_id"])
-        time.sleep(0.2)
-        self.assertEqual(app.audio_export_status(job["job_id"])["state"], "cancelled")
+        status = wait_for_audio_export(app, job["job_id"])
+        self.assertEqual(status["state"], "cancelled")
 
     def test_audio_export_download_stays_in_descargas(self):
         with tempfile.TemporaryDirectory() as tmp:
-            downloads = Path(tmp) / "Descargas"
-            downloads.mkdir()
-            app = test_app(tts=SyntheticWavTTSProvider())
+            base = Path(tmp)
+            external_downloads = base / "Descargas reales simuladas"
+            external_downloads.mkdir()
+            sentinel = external_downloads / "sentinel.keep"
+            sentinel.write_text("keep", encoding="utf-8")
+            sandbox = base / "sandbox"
+            app = test_app(tts=SyntheticWavTTSProvider(), root=sandbox)
             app.session.load(manual_document("doc", "Doc", ["u"]))
-            with mock.patch("fusion_reader_v2.audio_export.find_downloads_dir", return_value=downloads), \
-                 mock.patch("fusion_reader_v2.service.find_downloads_dir", return_value=downloads):
-                job = app.start_audio_export("full")
-                time.sleep(0.1)
-                self.assertTrue(Path(app.audio_export_status(job["job_id"])["output_path"]).parent == downloads)
+            job = app.start_audio_export("full")
+            final = wait_for_audio_export(app, job["job_id"])
+            target = Path(final["output_path"]).resolve()
+            self.assertEqual(target.parent, (sandbox / "Descargas").resolve())
+            self.assertEqual(list(external_downloads.iterdir()), [sentinel])
+            self.assertEqual(sorted(p.name for p in (sandbox / "Descargas").glob("*.wav")), [target.name])
+
+    def test_audio_export_runtime_default_uses_descargas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            downloads = home / "Descargas"
+            downloads.mkdir()
+            with mock.patch("fusion_reader_v2.pdf_to_docx.Path.home", return_value=home):
+                app = test_app(tts=SyntheticWavTTSProvider(), root=home / "state", audio_export_root=None)
+            self.assertEqual(app.audio_export_root, downloads.resolve())
 
     def test_audio_export_does_not_break_read_current(self):
         app = test_app(tts=SyntheticWavTTSProvider())
         app.session.load(manual_document("doc", "Doc", ["u"]))
-        app.start_audio_export("full")
-        time.sleep(0.1)
+        job = app.start_audio_export("full")
+        wait_for_audio_export(app, job["job_id"])
         self.assertTrue(app.read_current(play=False)["ok"])
 
     def test_audio_export_and_read_current_split_long_tts_requests_when_provider_rejects_big_input(self):
@@ -138,8 +150,8 @@ class AudioExportTests(unittest.TestCase):
         # Text must be > 90 and > 80 (the internal max(80, limit) floor)
         text = "Esta es una frase suficientemente larga para superar el limite de noventa caracteres y forzar la segmentacion automatica del motor de tts."
         app.session.load(manual_document("doc", "Doc", [text]))
-        app.start_audio_export("full")
-        time.sleep(0.1)
+        job = app.start_audio_export("full")
+        wait_for_audio_export(app, job["job_id"])
         # Should call synthesize multiple times (one for the 100+ char text which fails, then for segments)
         # Actually _synthesize_cached_with_settings calls it once, gets 400, then calls _synthesize_segmented_with_settings
         self.assertGreater(len(provider.calls), 1)

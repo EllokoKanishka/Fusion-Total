@@ -70,6 +70,10 @@ python3 -m unittest tests.test_fusion_reader_v2 -v
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
 ```
 
+Los tests de exportación de audio deben construirse con un root temporal
+inyectado. No deben depender de `~/Descargas` real ni dejar WAVs persistentes
+en la carpeta personal del usuario.
+
 Estado histórico auditado el 2026-07-09 (no es el conteo vigente):
 
 - `tests.test_fusion_reader_v2`: `240 OK`

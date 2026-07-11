@@ -96,8 +96,9 @@ def build_audio_export_filename(title: str, start_block: int, end_block: int, to
     return f"{safe}_bloques_{start_block:03d}-{end_block:03d}.wav"
 
 
-def unique_audio_download_target(filename: str) -> Path:
-    downloads_dir = find_downloads_dir()
+def unique_audio_download_target(filename: str, root: Path | str | None = None) -> Path:
+    downloads_dir = Path(root) if root is not None else find_downloads_dir()
+    downloads_dir = downloads_dir.expanduser()
     downloads_dir.mkdir(parents=True, exist_ok=True)
     candidate = downloads_dir / Path(filename).name
     if not candidate.exists():

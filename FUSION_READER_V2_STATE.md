@@ -131,6 +131,7 @@ Estado consolidado:
 - Layout visual del lector ensanchado: el texto usa casi todo el panel central con márgenes laterales moderados.
 - Exportación de audio v1 activa: bloque actual, bloque N, rango y documento completo con job en background, progreso, cancelación y salida WAV en `~/Descargas`.
 - La exportación reutiliza cache/TTS actual y, si AllTalk rechaza un bloque largo por tamaño, lo sintetiza por segmentos y recompone un WAV único sin tocar el chunking.
+- La suite de tests de exportación quedó aislada con `audio_export_root` inyectable y helpers de espera; no debe escribir en la Descargas real del usuario.
 
 Último commit relevante:
 
@@ -218,6 +219,7 @@ Notas:
 - ofrece descarga HTTP efímera desde `/api/audio-export/download/<job_id>`;
 - selección irregular de bloques queda postergada para una versión futura;
 - smoke real validado en `8010` con `Platon El Banquete`: bloque actual, bloque 2 y rango 1-2.
+- la ruta de runtime sigue saliendo de Descargas, pero los tests inyectan su propio root temporal y no contaminan la carpeta personal.
 
 ## Memory MCP read-only v1
 

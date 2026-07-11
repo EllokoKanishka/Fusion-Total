@@ -40,12 +40,26 @@ from fusion_reader_v2.audio_export import concat_wav_files, sanitize_audio_title
 from fusion_reader_v2.dialogue import is_hallucinated_transcript
 from fusion_reader_v2.documents import clean_heading, repair_ocr_spacing, structured_plain_ocr_text
 from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx, find_downloads_dir, safe_output_name
+from tests.helpers import wait_for_audio_export
 
 
-def test_app(tts=None, stt=None, root: Path | None = None, external_research=None) -> FusionReaderV2:
-    root = root or Path(tempfile.mkdtemp())
-    return FusionReaderV2(
-        tts=tts or NullTTSProvider(),
+_DEFAULT_AUDIO_EXPORT_ROOT = object()
+
+
+def test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT) -> FusionReaderV2:
+    if root is None:
+        root = Path(tempfile.mkdtemp(prefix="fusion_reader_v2_test_"))
+    else:
+        root = Path(root)
+    tts_provider = tts or NullTTSProvider()
+    if hasattr(tts_provider, "set_output_root"):
+        try:
+            tts_provider.set_output_root(root / "tts_outputs")
+        except Exception:
+            pass
+    effective_audio_export_root = root / "Descargas" if audio_export_root is _DEFAULT_AUDIO_EXPORT_ROOT else audio_export_root
+    app = FusionReaderV2(
+        tts=tts_provider,
         stt=stt or NullSTTProvider(),
         cache=AudioCache(root / "audio_cache"),
         metrics=VoiceMetricsStore(root / "voice_metrics.jsonl"),
@@ -53,7 +67,9 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
         conversation=ConversationCore(NullChatProvider("Entendido.")),
         external_research=external_research or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
         session_state_path=root / "session_state.json",
+        audio_export_root=effective_audio_export_root,
     )
+    return app
 
 
 class FailingTTSProvider(NullTTSProvider):
@@ -67,15 +83,23 @@ class FailingTTSProvider(NullTTSProvider):
 class SyntheticWavTTSProvider(NullTTSProvider):
     name = "synthetic_wav_tts"
 
-    def __init__(self, delay_seconds: float = 0.0) -> None:
+    def __init__(self, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
         super().__init__()
         self.delay_seconds = delay_seconds
+        self.output_root = Path(output_root) if output_root is not None else None
+
+    def set_output_root(self, output_root: Path | str) -> None:
+        self.output_root = Path(output_root)
 
     def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
         self.calls.append((text, voice, language))
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
-        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
+        if self.output_root is not None:
+            self.output_root.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav", dir=str(self.output_root))
+        else:
+            fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
         os.close(fd)
         path = Path(name)
         sample_rate = 16000
@@ -89,8 +113,8 @@ class SyntheticWavTTSProvider(NullTTSProvider):
 
 
 class LengthLimitedSyntheticWavTTSProvider(SyntheticWavTTSProvider):
-    def __init__(self, max_chars: int, delay_seconds: float = 0.0) -> None:
-        super().__init__(delay_seconds=delay_seconds)
+    def __init__(self, max_chars: int, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
+        super().__init__(delay_seconds=delay_seconds, output_root=output_root)
         self.max_chars = max_chars
 
     def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
@@ -827,6 +851,22 @@ class FusionReaderV2Tests:
         self.assertIn("/api/audio-export", server)
         self.assertIn("Descargar WAV", server)
         self.assertIn("function renderAudioExportStatus", server)
+        self.assertEqual(server.count("els.audioExportBtn.addEventListener('click', startAudioExport);"), 1)
+        render_start = server.index("    function renderAudioExportStatus(item) {")
+        render_end = server.index("    function voiceLabel(filename) {", render_start)
+        render_body = server[render_start:render_end]
+        self.assertIn("pollAudioExport(data.job_id).catch(() => {});", render_body)
+        self.assertNotIn("startAudioExport(", render_body)
+        poll_start = server.index("    async function pollAudioExport(jobId) {")
+        poll_end = server.index("    async function startAudioExport() {", poll_start)
+        poll_body = server[poll_start:poll_end]
+        self.assertIn("renderAudioExportStatus(data);", poll_body)
+        self.assertNotIn("startAudioExport(", poll_body)
+        start_start = server.index("    async function startAudioExport() {")
+        start_end = server.index("    async function cancelAudioExport() {", start_start)
+        start_body = server[start_start:start_end]
+        self.assertIn("await api('/api/audio-export', payload);", start_body)
+        self.assertNotIn("pollAudioExport(", start_body)
         self.assertNotIn("translateY(-8%);", server)
 
     def legacy_dialogue_microphone_capture_diagnostics_are_exposed(self):
@@ -957,12 +997,7 @@ class FusionReaderV2Tests:
         app.jump(2)
         started = app.start_audio_export("current")
         self.assertEqual(started["state"], "queued")
-        for _ in range(100):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["start_block"], 2)
         self.assertEqual(status["end_block"], 2)
@@ -973,12 +1008,7 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos", "tres"]))
         started = app.start_audio_export("block", block=3)
-        for _ in range(100):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["start_block"], 3)
         self.assertEqual(status["end_block"], 3)
@@ -989,12 +1019,7 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos", "tres", "cuatro"]))
         started = app.start_audio_export("range", start=2, end=4)
-        for _ in range(100):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["start_block"], 2)
         self.assertEqual(status["end_block"], 4)
@@ -1005,12 +1030,7 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos", "tres"]))
         started = app.start_audio_export("full")
-        for _ in range(100):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["start_block"], 1)
         self.assertEqual(status["end_block"], 3)
@@ -1029,12 +1049,7 @@ class FusionReaderV2Tests:
         app.session.load(manual_document("doc", "Original", ["uno", "dos", "tres"]))
         started = app.start_audio_export("full")
         app.session.load(manual_document("other", "Nuevo", ["cambio"]))
-        for _ in range(200):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"], timeout=10.0)
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["title"], "Original")
         self.assertEqual([call[0] for call in provider.calls], ["uno", "dos", "tres"])
@@ -1044,19 +1059,10 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos"]))
         first = app.start_audio_export("range", start=1, end=2)
-        for _ in range(100):
-            status = app.audio_export_status(first["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
+        wait_for_audio_export(app, first["job_id"])
         before = len(provider.calls)
         second = app.start_audio_export("range", start=1, end=2)
-        for _ in range(100):
-            status = app.audio_export_status(second["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(second["job_id"])
+        status = wait_for_audio_export(app, second["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertEqual(status["cached_blocks"], 2)
         self.assertEqual(len(provider.calls), before)
@@ -1066,36 +1072,28 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos", "tres"]))
         started = app.start_audio_export("full")
-        time.sleep(0.02)
         app.cancel_audio_export(started["job_id"])
-        for _ in range(200):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] in {"cancelled", "done", "error"}:
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(started["job_id"])
+        status = wait_for_audio_export(app, started["job_id"])
         self.assertEqual(status["state"], "cancelled")
 
     def legacy_audio_export_download_stays_in_descargas(self):
         provider = SyntheticWavTTSProvider()
         with tempfile.TemporaryDirectory() as tmp:
-            downloads = Path(tmp) / "Descargas"
-            downloads.mkdir(parents=True, exist_ok=True)
-            app = test_app(tts=provider, root=Path(tmp) / "state")
+            base = Path(tmp)
+            external_downloads = base / "Descargas reales simuladas"
+            external_downloads.mkdir(parents=True, exist_ok=True)
+            sentinel = external_downloads / "sentinel.keep"
+            sentinel.write_text("keep", encoding="utf-8")
+            sandbox = base / "sandbox"
+            app = test_app(tts=provider, root=sandbox)
             app.session.load(manual_document("doc", "../Doc peligroso", ["uno"]))
-            with mock.patch("fusion_reader_v2.audio_export.find_downloads_dir", return_value=downloads), \
-                 mock.patch("fusion_reader_v2.service.find_downloads_dir", return_value=downloads):
-                started = app.start_audio_export("full")
-                for _ in range(100):
-                    status = app.audio_export_status(started["job_id"])
-                    if status["state"] == "done":
-                        break
-                    time.sleep(0.01)
-                status = app.audio_export_status(started["job_id"])
+            started = app.start_audio_export("full")
+            status = wait_for_audio_export(app, started["job_id"])
             self.assertEqual(status["state"], "done")
             target = Path(status["output_path"]).resolve()
             self.assertTrue(target.is_file())
-            self.assertEqual(target.parent, downloads.resolve())
+            self.assertEqual(target.parent, (sandbox / "Descargas").resolve())
+            self.assertEqual(list(external_downloads.iterdir()), [sentinel])
             self.assertNotIn("..", target.name)
 
     def legacy_audio_export_does_not_break_read_current(self):
@@ -1103,11 +1101,7 @@ class FusionReaderV2Tests:
         app = test_app(tts=provider)
         app.session.load(manual_document("doc", "Doc", ["uno", "dos"]))
         started = app.start_audio_export("current")
-        for _ in range(100):
-            status = app.audio_export_status(started["job_id"])
-            if status["state"] == "done":
-                break
-            time.sleep(0.01)
+        wait_for_audio_export(app, started["job_id"])
         out = app.read_current(play=False)
         self.assertTrue(out["ok"])
         self.assertTrue(out["cached"])
@@ -1119,12 +1113,7 @@ class FusionReaderV2Tests:
         long_text = " ".join(["Frase bastante larga para sintetizar."] * 12)
         app.session.load(manual_document("doc", "Doc", [long_text]))
         export_job = app.start_audio_export("current")
-        for _ in range(100):
-            status = app.audio_export_status(export_job["job_id"])
-            if status["state"] in {"done", "error"}:
-                break
-            time.sleep(0.01)
-        status = app.audio_export_status(export_job["job_id"])
+        status = wait_for_audio_export(app, export_job["job_id"])
         self.assertEqual(status["state"], "done")
         self.assertGreater(len(provider.calls), 2)
         self.assertTrue(any(len(call[0]) <= 120 for call in provider.calls[1:]))
