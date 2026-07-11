@@ -56,6 +56,32 @@ Además, `test_app()` usa un `TemporaryDirectory` por defecto y `close_test_app(
 elimina ese sandbox al cerrar el test. Los proveedores sintéticos de TTS ahora
 escriben dentro de ese root temporal, no en la carpeta personal.
 
+## Cierre de trabajo en background
+
+El cleanup de `FusionReaderV2` pasó a usar un ciclo de vida explícito:
+
+- `open`
+- `closing`
+- `closed`
+
+Ese estado se coordina con un lock/condition compartido para que la transición
+`open → closing` sea atómica.
+
+Consecuencias prácticas:
+
+- `start_audio_export()` y `prepare_document()` revalidan el estado dentro de
+  su sección crítica antes de registrar jobs o threads;
+- `_synthesize_cached_with_settings()` registra cada síntesis TTS activa antes
+  de llamar al proveedor, y el shutdown espera a que ese contador llegue a
+  cero;
+- `shutdown_background_work()` captura una vez los threads, futures y
+  executors aceptados, y si vence el timeout deja la instancia en `closing`
+  para poder reintentar el cierre más tarde;
+- una segunda llamada a shutdown reutiliza el cierre en curso en vez de
+  arrancar otro;
+- `closed` es terminal y `close_test_app()` solo borra el tempdir después de que
+  el cierre haya terminado de verdad.
+
 ## Pruebas de hermeticidad
 
 La cobertura reforzada valida que:
@@ -74,6 +100,17 @@ La cobertura reforzada valida que:
 - dos exportaciones legítimas reutilizan caché sin multiplicar jobs;
 - el root runtime por defecto sigue siendo Descargas;
 - la protección contra path traversal se mantiene.
+
+Además, ahora se cubren explícitamente estas carreras y garantías:
+
+- una exportación de audio no puede colarse después de que el shutdown empezó;
+- `prepare_document()` tampoco puede registrar su thread tarde;
+- una lectura TTS interactiva no puede sintetizar después del cierre;
+- un timeout de shutdown se puede reintentar hasta completar el cleanup;
+- dos shutdowns concurrentes reutilizan el mismo cierre;
+- cerrar una instancia no cancela el trabajo en background de otra instancia;
+- una excepción dentro de `managed_test_app()` sigue dejando correr el cleanup
+  sin ocultar la excepción original.
 
 También se añadió una verificación estructural del frontend para asegurar que:
 

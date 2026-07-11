@@ -19,6 +19,14 @@ from tests.helpers import (
     make_reading_document,
 )
 
+def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return bool(predicate())
+
 class AudioExportTests(unittest.TestCase):
     def test_audio_export_test_app_uses_temporary_export_root(self):
         with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
@@ -366,6 +374,329 @@ class AudioExportTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful())
         self.assertTrue(observed["registered"])
         self.assertFalse(observed["root"].exists())
+
+    def test_shutdown_rejects_audio_export_after_closing_begins(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        export_hook_entered = threading.Event()
+        release_export_hook = threading.Event()
+        read_result: dict[str, object] = {}
+        export_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        def run_export(app) -> None:
+            try:
+                export_result["out"] = app.start_audio_export("full")
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                export_result["exc"] = exc
+
+        def run_shutdown(app) -> None:
+            try:
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+
+            def block_export_registration() -> None:
+                export_hook_entered.set()
+                release_export_hook.wait()
+
+            with mock.patch.object(app, "_before_audio_export_registration", side_effect=block_export_registration):
+                read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+                read_thread.start()
+                self.assertTrue(provider.started.wait(5))
+
+                export_thread = threading.Thread(target=run_export, args=(app,), name="export-thread")
+                export_thread.start()
+                self.assertTrue(export_hook_entered.wait(5))
+
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
+                shutdown_thread.start()
+
+                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+                release_export_hook.set()
+
+                export_thread.join(5)
+                self.assertFalse(export_thread.is_alive())
+                self.assertNotIn("exc", export_result, export_result.get("exc"))
+                self.assertEqual(export_result["out"]["error"], "service_shutting_down")
+                self.assertFalse(app._audio_export_jobs)
+                self.assertIsNone(app._audio_export_thread)
+
+                provider.release.set()
+                read_thread.join(5)
+                shutdown_thread.join(5)
+                self.assertFalse(read_thread.is_alive())
+                self.assertFalse(shutdown_thread.is_alive())
+                self.assertNotIn("exc", read_result, read_result.get("exc"))
+                self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+                self.assertEqual(shutdown_result["out"]["state"], "closed")
+                self.assertTrue(read_result["out"]["ok"])
+                close_test_app(app)
+                self.assertFalse(root.exists())
+
+    def test_shutdown_rejects_prepare_after_closing_begins(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        prepare_hook_entered = threading.Event()
+        release_prepare_hook = threading.Event()
+        read_result: dict[str, object] = {}
+        prepare_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        def run_prepare(app) -> None:
+            try:
+                prepare_result["out"] = app.prepare_document()
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                prepare_result["exc"] = exc
+
+        def run_shutdown(app) -> None:
+            try:
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+
+            def block_prepare_registration() -> None:
+                prepare_hook_entered.set()
+                release_prepare_hook.wait()
+
+            with mock.patch.object(app, "_before_prepare_registration", side_effect=block_prepare_registration):
+                read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+                read_thread.start()
+                self.assertTrue(provider.started.wait(5))
+
+                prepare_thread = threading.Thread(target=run_prepare, args=(app,), name="prepare-thread")
+                prepare_thread.start()
+                self.assertTrue(prepare_hook_entered.wait(5))
+
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
+                shutdown_thread.start()
+
+                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+                release_prepare_hook.set()
+
+                prepare_thread.join(5)
+                self.assertFalse(prepare_thread.is_alive())
+                self.assertNotIn("exc", prepare_result, prepare_result.get("exc"))
+                self.assertEqual(prepare_result["out"]["error"], "service_shutting_down")
+                self.assertEqual(app.prepare_status()["status"], "idle")
+                self.assertIsNone(app._prepare_thread)
+
+                provider.release.set()
+                read_thread.join(5)
+                shutdown_thread.join(5)
+                self.assertFalse(read_thread.is_alive())
+                self.assertFalse(shutdown_thread.is_alive())
+                self.assertNotIn("exc", read_result, read_result.get("exc"))
+                self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+                self.assertEqual(shutdown_result["out"]["state"], "closed")
+                self.assertTrue(read_result["out"]["ok"])
+                close_test_app(app)
+                self.assertFalse(root.exists())
+
+    def test_shutdown_rejects_interactive_tts_after_closing_begins(self):
+        provider = SyntheticWavTTSProvider()
+        read_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        def run_shutdown(app) -> None:
+            try:
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+            app._tts_lock.acquire()
+            try:
+                read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+                read_thread.start()
+                self.assertTrue(wait_until(lambda: app._background_work_active_tts > 0, timeout=5))
+
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
+                shutdown_thread.start()
+                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+            finally:
+                app._tts_lock.release()
+
+            read_thread.join(5)
+            shutdown_thread.join(5)
+            self.assertFalse(read_thread.is_alive())
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertNotIn("exc", read_result, read_result.get("exc"))
+            self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+            self.assertEqual(read_result["out"]["error"], "La lectura se detuvo porque el servicio se está cerrando.")
+            self.assertEqual(provider.calls, [])
+            self.assertEqual(shutdown_result["out"]["state"], "closed")
+            close_test_app(app)
+            self.assertFalse(root.exists())
+
+    def test_shutdown_timeout_can_be_retried_to_completion(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        read_result: dict[str, object] = {}
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+            read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+            read_thread.start()
+            self.assertTrue(provider.started.wait(5))
+
+            with self.assertRaises(AssertionError):
+                app.shutdown_background_work(timeout=0.05)
+
+            self.assertTrue(root.exists())
+            self.assertEqual(app._background_work_state, "closing")
+            self.assertFalse(app._background_work_closed)
+
+            provider.release.set()
+            read_thread.join(5)
+            self.assertFalse(read_thread.is_alive())
+            self.assertNotIn("exc", read_result, read_result.get("exc"))
+
+            retry = app.shutdown_background_work(timeout=5)
+            self.assertEqual(retry["state"], "closed")
+            self.assertTrue(app._background_work_closed)
+            self.assertEqual(app.shutdown_background_work(timeout=5)["detail"], "already_closed")
+            close_test_app(app)
+            self.assertFalse(root.exists())
+
+    def test_concurrent_shutdown_reuses_single_close_path(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        read_result: dict[str, object] = {}
+        shutdown_results: list[dict[str, object]] = []
+        shutdown_errors: list[Exception] = []
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        def run_shutdown(app, barrier: threading.Barrier) -> None:
+            try:
+                barrier.wait()
+                shutdown_results.append(app.shutdown_background_work(timeout=5))
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_errors.append(exc)
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+            read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+            read_thread.start()
+            self.assertTrue(provider.started.wait(5))
+
+            barrier = threading.Barrier(3)
+            shutdown_threads = [
+                threading.Thread(target=run_shutdown, args=(app, barrier), name="shutdown-thread-1"),
+                threading.Thread(target=run_shutdown, args=(app, barrier), name="shutdown-thread-2"),
+            ]
+            for thread in shutdown_threads:
+                thread.start()
+            barrier.wait()
+
+            self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+            provider.release.set()
+
+            for thread in shutdown_threads:
+                thread.join(5)
+                self.assertFalse(thread.is_alive())
+            read_thread.join(5)
+            self.assertFalse(read_thread.is_alive())
+            self.assertNotIn("exc", read_result, read_result.get("exc"))
+            self.assertFalse(shutdown_errors, shutdown_errors)
+            self.assertEqual(len(shutdown_results), 2)
+            self.assertTrue(all(result["state"] == "closed" for result in shutdown_results))
+            self.assertEqual(app._background_work_shutdown_context.started, True)
+            self.assertEqual(len(app._background_work_shutdown_context.shutdown_threads), len(app._background_work_shutdown_context.executors))
+            close_test_app(app)
+            self.assertFalse(root.exists())
+
+    def test_background_shutdown_on_one_app_does_not_cancel_another(self):
+        provider_a = BlockingSyntheticWavTTSProvider()
+        app_a = test_app(tts=provider_a)
+        app_b = test_app(tts=SyntheticWavTTSProvider())
+        root_a = Path(app_a._test_root)
+        root_b = Path(app_b._test_root)
+
+        try:
+            app_a.load_text("doc-a", "Doc A", make_reading_document("Doc A", 4), prefetch=True)
+            self.assertTrue(provider_a.started.wait(5))
+            self.assertTrue(app_a._prefetch_futures)
+
+            app_b.load_text("doc-b", "Doc B", make_reading_document("Doc B", 2), prefetch=False)
+            close_test_app(app_b)
+            self.assertFalse(root_b.exists())
+            self.assertTrue(root_a.exists())
+            self.assertTrue(app_a._prefetch_futures)
+
+            provider_a.release.set()
+            close_test_app(app_a)
+            self.assertFalse(root_a.exists())
+        finally:
+            provider_a.release.set()
+            close_test_app(app_b)
+            close_test_app(app_a)
+            self.assertFalse(root_b.exists())
+            self.assertFalse(root_a.exists())
+
+    def test_managed_test_app_cleanup_runs_after_exception(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        read_result: dict[str, object] = {}
+        root_holder: dict[str, Path] = {}
+
+        def run_read(app) -> None:
+            try:
+                read_result["out"] = app.read_current(play=False)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                read_result["exc"] = exc
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            with managed_test_app(tts=provider) as app:
+                root_holder["root"] = Path(app._test_root)
+                app.load_text("doc", "Doc", make_reading_document("Doc", 4), prefetch=False)
+                read_thread = threading.Thread(target=run_read, args=(app,), name="read-thread")
+                read_thread.start()
+                self.assertTrue(provider.started.wait(5))
+                try:
+                    raise RuntimeError("boom")
+                finally:
+                    provider.release.set()
+                    read_thread.join(5)
+        self.assertTrue(root_holder["root"])
+        self.assertFalse(root_holder["root"].exists())
+        self.assertNotIn("exc", read_result, read_result.get("exc"))
 
     def test_audio_export_does_not_break_read_current(self):
         app = test_app(tts=SyntheticWavTTSProvider())
