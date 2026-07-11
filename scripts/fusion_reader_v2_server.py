@@ -33,6 +33,7 @@ IMPORT_JOBS_LOCK = threading.Lock()
 PDF_TO_DOCX_DOWNLOADS: dict[str, dict] = {}
 PDF_TO_WORD_JOBS: dict[str, JobStatus] = {}
 PDF_TO_DOCX_LOCK = threading.Lock()
+BUSY_CONTROL_HELPERS = (ROOT / "scripts" / "fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
 APP = FusionReaderV2(
     cache=AudioCache(ROOT / "runtime" / "fusion_reader_v2" / "audio_cache"),
     metrics=VoiceMetricsStore(ROOT / "runtime" / "fusion_reader_v2" / "voice_metrics.jsonl"),
@@ -1001,6 +1002,7 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <script>
+__BUSY_CONTROL_HELPERS__
     const els = {
       dropzone: document.getElementById('dropzone'),
       chooseFileBtn: document.getElementById('chooseFileBtn'),
@@ -1083,7 +1085,11 @@ INDEX_HTML = r"""<!doctype html>
     let activeReadRequest = 0;
     let audioExportPollingJobId = '';
     let voiceCatalogRefreshInFlight = false;
-    let busyLeaseCount = 0;
+    const busyControls = createBusyControlState(
+      (availability, busyLeaseCount) => applyControlState(els, availability, busyLeaseCount),
+      null,
+      els.noteInput ? els.noteInput.value : ''
+    );
     const dialogue = {
       active: false,
       stream: null,
@@ -1126,6 +1132,10 @@ INDEX_HTML = r"""<!doctype html>
       micDeviceLabel: '',
       sampleRate: 48000
     };
+
+    function beginBusyLease() {
+      return busyControls.beginBusyLease();
+    }
 
     async function api(path, body, requestOptions = {}) {
       const options = body === undefined ? {} : {
@@ -1192,32 +1202,6 @@ INDEX_HTML = r"""<!doctype html>
       setDialogueInfo(`${laboratoryModeSummary()} ${info}${traceText ? ` | ${traceText}` : ''}`);
       log(`Investigación externa incompleta: ${data.detail || data.error || 'external_research_failed'}. ${traceText}`.trim());
       return true;
-    }
-
-    function syncBusyControls() {
-      const isBusy = busyLeaseCount > 0;
-      [els.prevBtn, els.readBtn, els.repeatBtn, els.nextBtn, els.jumpBtn, els.sendChatBtn, els.saveNoteBtn].forEach(btn => {
-        btn.disabled = isBusy;
-      });
-    }
-
-    function beginBusyLease() {
-      busyLeaseCount += 1;
-      syncBusyControls();
-      let released = false;
-      return () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        busyLeaseCount = Math.max(0, busyLeaseCount - 1);
-        syncBusyControls();
-      };
-    }
-
-    function setBusy(isBusy) {
-      busyLeaseCount = Math.max(0, busyLeaseCount + (isBusy ? 1 : -1));
-      syncBusyControls();
     }
 
     function log(text) {
@@ -1575,6 +1559,7 @@ INDEX_HTML = r"""<!doctype html>
       const nextDocId = String(data.doc_id || data.document && data.document.doc_id || '');
       const nextBlockIndex = Number(data.current || data.document && data.document.current || 0);
       status = data;
+      busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '');
       renderReasoningStatus(data.reasoning || {});
       renderProfileStatus(data.profile || {});
       renderVeilStatus(data.veil || {});
@@ -1611,11 +1596,9 @@ INDEX_HTML = r"""<!doctype html>
       const ttsMessage = ttsState.tooltip || 'TTS no disponible';
       const canRead = Boolean(data && data.document && data.document.loaded && data.text);
       if (els.readBtn) {
-        els.readBtn.disabled = !canRead;
         els.readBtn.title = canRead ? (ttsActionAvailable(data) ? 'Leer bloque actual' : 'Intentar leer; el backend comprobará cache y TTS actual') : ttsMessage;
       }
       if (els.repeatBtn) {
-        els.repeatBtn.disabled = !canRead;
         els.repeatBtn.title = canRead ? 'Repetir bloque actual' : ttsMessage;
       }
       const sttState = describeSttStatus(data);
@@ -1926,7 +1909,7 @@ INDEX_HTML = r"""<!doctype html>
       if (!targetMode || currentReasoningMode() === targetMode) {
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/reasoning/mode', { mode: targetMode });
         if (!status) {
@@ -1947,7 +1930,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude cambiar el modo mental: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2195,16 +2178,17 @@ INDEX_HTML = r"""<!doctype html>
         log('Cargá un documento antes de guardar notas.');
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/notes/create', { text });
         els.noteInput.value = '';
+        busyControls.setNoteText(els.noteInput.value);
         renderNotes(data.items || [], data.note && data.note.doc_id || status.doc_id);
         log(`Nota guardada como ${noteReference(data.note || {})}.`);
       } catch (err) {
         log(`No pude guardar la nota: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2547,17 +2531,20 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function prepareDocument() {
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
+      let started = false;
       try {
         const data = await api('/api/prepare/start', { start: 'cursor' });
         renderPrepareStatus(data);
         log('Preparando audio del documento en segundo plano...');
-        setBusy(false);
-        await pollPrepare();
+        started = true;
       } catch (err) {
         log(`No pude preparar el documento: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
+      }
+      if (started) {
+        await pollPrepare();
       }
     }
 
@@ -2592,7 +2579,7 @@ INDEX_HTML = r"""<!doctype html>
         payload.start = Number(els.audioExportStartInput.value || 0);
         payload.end = Number(els.audioExportEndInput.value || 0);
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/audio-export', payload);
         renderAudioExportStatus(data);
@@ -2600,7 +2587,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude exportar audio: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2623,17 +2610,17 @@ INDEX_HTML = r"""<!doctype html>
       if (!els.continuousToggle.checked || !status || !status.total || status.current >= status.total) {
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         log('Avanzando al siguiente bloque...');
         const nextData = await api('/api/next', {});
         renderStatus(nextData);
       } catch (err) {
         log(`No pude avanzar: ${err.message}`);
-        setBusy(false);
         return;
+      } finally {
+        releaseBusy();
       }
-      setBusy(false);
       await readCurrent();
     }
 
@@ -2644,16 +2631,15 @@ INDEX_HTML = r"""<!doctype html>
       }
       els.chatInput.value = '';
       addChatMessage('user', message);
+      const releaseBusy = beginBusyLease();
       if (dialogue.active) {
-        setBusy(true);
         try {
           await sendTypedDialogue(message);
         } finally {
-          setBusy(false);
+          releaseBusy();
         }
         return;
       }
-      setBusy(true);
       try {
         addChatMessage('system', pendingThoughtLabel());
         const data = await api('/api/chat', { message, chunk_index: visibleChunkIndex() });
@@ -2675,7 +2661,7 @@ INDEX_HTML = r"""<!doctype html>
         addChatMessage('system', `Falló el chat: ${err.message}`);
         log(`Falló el chat: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2764,7 +2750,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function clearLaboratoryHistory() {
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/laboratory/reset', {});
         els.chatLog.innerHTML = '';
@@ -2774,7 +2760,7 @@ INDEX_HTML = r"""<!doctype html>
         addChatMessage('system', `No pude borrar el historial: ${err.message}`);
         log(`No pude borrar el historial: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -3281,6 +3267,7 @@ INDEX_HTML = r"""<!doctype html>
     els.audioExportBtn.addEventListener('click', startAudioExport);
     els.audioExportCancelBtn.addEventListener('click', cancelAudioExport);
     els.saveNoteBtn.addEventListener('click', saveCurrentNote);
+    els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));
     els.sendChatBtn.addEventListener('click', sendChat);
     els.clearLabHistoryBtn.addEventListener('click', clearLaboratoryHistory);
     els.reasoningNormalBtn.addEventListener('click', () => setReasoningMode('normal'));
@@ -3377,6 +3364,8 @@ INDEX_HTML = r"""<!doctype html>
 </body>
 </html>
 """
+
+INDEX_HTML = INDEX_HTML.replace("__BUSY_CONTROL_HELPERS__", BUSY_CONTROL_HELPERS)
 
 
 def library_items() -> list[dict]:

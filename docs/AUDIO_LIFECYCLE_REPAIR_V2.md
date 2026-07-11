@@ -88,12 +88,37 @@ Prueba manual inicial del primer commit del PR, con Playwright y TTS Fusion
 - El texto visible y el único audio asignado después del reemplazo fueron B;
   nunca se reasignó audio de A.
 
-Validación final:
+Validación determinista posterior:
 
 - la carrera de prioridad exacta se validó con TTS controlado por Events;
-- el ownership del busy se validó con pruebas estructurales del frontend;
-- no se repitió audio real final porque `8010` y `7853` estaban apagados;
-- no inventé un resultado manual que no se haya ejecutado.
+- el ownership del busy se validó con pruebas estructurales del frontend y con
+  el harness de busy leases;
+- la suite completa quedó en verde después de la corrección de las aserciones
+  viejas de UI.
+
+Incidente `8010` investigado:
+
+- durante el primer pase manual apareció un `connection refused` temporal en
+  `8010`;
+- revisé el log del servidor, `ps` y `dmesg`, sin evidencia de crash local,
+  OOM, segfault ni traceback;
+- la lectura siguió siendo reproducible una vez que el servidor quedó estable.
+
+Validación manual final:
+
+- al limpiar durante una lectura en curso, la UI dejó `Anterior`, `Leer`,
+  `Repetir`, `Siguiente` e `Ir` deshabilitados y mostró la cancelación de la
+  lectura en vez de quedarse trabada;
+- al recargar `ARCHITECTURE.md` con `Leer al cargar` apagado, los controles se
+  reactivaron de forma correcta;
+- al cambiar la voz a `Perséfone`, la UI siguió estable y el estado reflejó la
+  voz nueva;
+- al cargar `FUSION_READER_V2_CORE_REGRESSION_FIX_1.md` como consulta y
+  promoverla, el documento activo pasó a `consulta_manual.txt` sin romper el
+  estado del lector;
+- al preparar, cancelar y volver a preparar `ARCHITECTURE.md`, la interfaz
+  permaneció usable y el estado de preparación siguió avanzando/cancelando sin
+  bloquear los controles.
 
 ## Riesgos restantes
 
