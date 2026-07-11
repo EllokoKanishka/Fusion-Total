@@ -33,6 +33,7 @@ IMPORT_JOBS_LOCK = threading.Lock()
 PDF_TO_DOCX_DOWNLOADS: dict[str, dict] = {}
 PDF_TO_WORD_JOBS: dict[str, JobStatus] = {}
 PDF_TO_DOCX_LOCK = threading.Lock()
+BUSY_CONTROL_HELPERS = (ROOT / "scripts" / "fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
 APP = FusionReaderV2(
     cache=AudioCache(ROOT / "runtime" / "fusion_reader_v2" / "audio_cache"),
     metrics=VoiceMetricsStore(ROOT / "runtime" / "fusion_reader_v2" / "voice_metrics.jsonl"),
@@ -1001,6 +1002,7 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <script>
+__BUSY_CONTROL_HELPERS__
     const els = {
       dropzone: document.getElementById('dropzone'),
       chooseFileBtn: document.getElementById('chooseFileBtn'),
@@ -1078,8 +1080,16 @@ INDEX_HTML = r"""<!doctype html>
     let lastRenderedDocId = '';
     let lastRenderedBlockIndex = 0;
     let lastRenderedBlockText = '';
+    let audioLifecycleSequence = 0;
+    let activeReadController = null;
+    let activeReadRequest = 0;
     let audioExportPollingJobId = '';
     let voiceCatalogRefreshInFlight = false;
+    const busyControls = createBusyControlState(
+      (availability, busyLeaseCount) => applyControlState(els, availability, busyLeaseCount),
+      null,
+      els.noteInput ? els.noteInput.value : ''
+    );
     const dialogue = {
       active: false,
       stream: null,
@@ -1123,12 +1133,17 @@ INDEX_HTML = r"""<!doctype html>
       sampleRate: 48000
     };
 
-    async function api(path, body) {
+    function beginBusyLease() {
+      return busyControls.beginBusyLease();
+    }
+
+    async function api(path, body, requestOptions = {}) {
       const options = body === undefined ? {} : {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       };
+      Object.assign(options, requestOptions || {});
       const res = await fetch(path, options);
       const data = await res.json();
       if (!res.ok || data.ok === false) {
@@ -1187,12 +1202,6 @@ INDEX_HTML = r"""<!doctype html>
       setDialogueInfo(`${laboratoryModeSummary()} ${info}${traceText ? ` | ${traceText}` : ''}`);
       log(`Investigación externa incompleta: ${data.detail || data.error || 'external_research_failed'}. ${traceText}`.trim());
       return true;
-    }
-
-    function setBusy(isBusy) {
-      [els.prevBtn, els.readBtn, els.repeatBtn, els.nextBtn, els.jumpBtn, els.sendChatBtn, els.saveNoteBtn].forEach(btn => {
-        btn.disabled = isBusy;
-      });
     }
 
     function log(text) {
@@ -1501,8 +1510,9 @@ INDEX_HTML = r"""<!doctype html>
     async function changeVoice() {
       const voice = els.voiceSelect.value;
       if (!voice) return;
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Cambiando voz; audio anterior detenido.');
         const data = await api('/api/voice', { voice });
         renderStatus(data);
         log(`Voz cambiada a ${voice}.`);
@@ -1510,7 +1520,7 @@ INDEX_HTML = r"""<!doctype html>
         log(`No pude cambiar la voz: ${err.message}`);
         await refreshVoices();
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -1549,6 +1559,7 @@ INDEX_HTML = r"""<!doctype html>
       const nextDocId = String(data.doc_id || data.document && data.document.doc_id || '');
       const nextBlockIndex = Number(data.current || data.document && data.document.current || 0);
       status = data;
+      busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '');
       renderReasoningStatus(data.reasoning || {});
       renderProfileStatus(data.profile || {});
       renderVeilStatus(data.veil || {});
@@ -1583,13 +1594,11 @@ INDEX_HTML = r"""<!doctype html>
       els.ttsStatus.textContent = ttsState.label;
       if (els.ttsChip) els.ttsChip.title = ttsState.tooltip || ttsState.label;
       const ttsMessage = ttsState.tooltip || 'TTS no disponible';
-      const canRead = ttsActionAvailable(data);
+      const canRead = Boolean(data && data.document && data.document.loaded && data.text);
       if (els.readBtn) {
-        els.readBtn.disabled = !canRead;
-        els.readBtn.title = canRead ? 'Leer bloque actual' : ttsMessage;
+        els.readBtn.title = canRead ? (ttsActionAvailable(data) ? 'Leer bloque actual' : 'Intentar leer; el backend comprobará cache y TTS actual') : ttsMessage;
       }
       if (els.repeatBtn) {
-        els.repeatBtn.disabled = !canRead;
         els.repeatBtn.title = canRead ? 'Repetir bloque actual' : ttsMessage;
       }
       const sttState = describeSttStatus(data);
@@ -1795,13 +1804,17 @@ INDEX_HTML = r"""<!doctype html>
 
     async function clearDocument() {
       if (!confirm('¿Limpiar el documento activo?')) return;
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Documento y audio anteriores descartados.');
         const res = await fetch('/api/document/clear', { method: 'POST' });
         const data = await res.json();
         renderStatus(data);
         addChatMessage('system', 'Documento activo eliminado.');
       } catch (err) {
         alert('Error al limpiar documento: ' + err.message);
+      } finally {
+        releaseBusy();
       }
     }
 
@@ -1896,7 +1909,7 @@ INDEX_HTML = r"""<!doctype html>
       if (!targetMode || currentReasoningMode() === targetMode) {
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/reasoning/mode', { mode: targetMode });
         if (!status) {
@@ -1917,7 +1930,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude cambiar el modo mental: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -1936,12 +1949,16 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function promoteReference(docId) {
+      const releaseBusy = beginBusyLease();
       try {
+        resetAudioLifecycle('Cambiando documento principal; audio anterior detenido.');
         const data = await api('/api/reference/promote', { doc_id: docId });
         renderStatus(data);
         log(data.message || 'Documento de consulta promovido a principal.');
       } catch (err) {
         log(`No pude promover la consulta: ${err.message}`);
+      } finally {
+        releaseBusy();
       }
     }
 
@@ -2161,16 +2178,17 @@ INDEX_HTML = r"""<!doctype html>
         log('Cargá un documento antes de guardar notas.');
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/notes/create', { text });
         els.noteInput.value = '';
+        busyControls.setNoteText(els.noteInput.value);
         renderNotes(data.items || [], data.note && data.note.doc_id || status.doc_id);
         log(`Nota guardada como ${noteReference(data.note || {})}.`);
       } catch (err) {
         log(`No pude guardar la nota: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2240,14 +2258,43 @@ INDEX_HTML = r"""<!doctype html>
       }
     }
 
-    function playAudio(data) {
+    function invalidatePendingRead() {
+      audioLifecycleSequence += 1;
+      activeReadRequest += 1;
+      if (activeReadController) {
+        activeReadController.abort();
+        activeReadController = null;
+      }
+    }
+
+    function resetAudioLifecycle(message = '') {
+      invalidatePendingRead();
+      els.continuousToggle.checked = false;
+      try { els.player.pause(); } catch (_) {}
+      try { els.player.currentTime = 0; } catch (_) {}
+      els.player.removeAttribute('src');
+      els.player.load();
+      if (message) log(message);
+    }
+
+    function playAudio(data, expectedSequence, expectedRequest) {
       if (!data.audio_url) {
-        return;
+        return false;
+      }
+      const currentGeneration = Number(status && status.document_generation || 0);
+      const currentDocId = String(status && status.doc_id || '');
+      const currentIndex = Math.max(0, Number(status && status.current || 1) - 1);
+      const currentVoice = String(status && status.voice || '');
+      const currentLanguage = String(status && status.language || '');
+      if (data.stale || data.cancelled || expectedSequence !== audioLifecycleSequence || expectedRequest !== activeReadRequest || Number(data.document_generation || 0) !== currentGeneration || String(data.requested_doc_id || '') !== currentDocId || Number(data.requested_chunk_index) !== currentIndex || String(data.voice || '') !== currentVoice || String(data.language || '') !== currentLanguage) {
+        log('Audio descartado porque cambió el documento o el bloque.');
+        return false;
       }
       els.player.src = data.audio_url;
       els.player.play().catch(() => {
         log('Audio generado. Tocá play si el navegador bloqueó la reproducción automática.');
       });
+      return true;
     }
 
     function addChatMessage(kind, text) {
@@ -2302,9 +2349,12 @@ INDEX_HTML = r"""<!doctype html>
         els.uploadInfo.textContent = `${file.name}: formato no soportado todavía.`;
         return;
       }
-      setBusy(true);
+      const role = els.referenceModeToggle.checked ? 'reference' : 'main';
+      const releaseBusy = beginBusyLease();
       try {
-        const role = els.referenceModeToggle.checked ? 'reference' : 'main';
+        if (role === 'main') {
+          resetAudioLifecycle('Cargando documento nuevo; audio anterior detenido.');
+        }
         log(role === 'reference' ? 'Agregando documento de consulta...' : 'Preparando documento...');
         setImportProgress(0);
         els.uploadInfo.textContent = `${file.name}: convirtiendo para ${role === 'reference' ? 'consulta' : 'lectura'}...`;
@@ -2325,7 +2375,6 @@ INDEX_HTML = r"""<!doctype html>
         const convertedKb = data.converted_bytes ? ` Texto convertido: ${Math.max(1, Math.round(data.converted_bytes / 1024))} KB.` : '';
         els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
         setReferenceMode(false);
-        els.player.removeAttribute('src');
         if (data.role !== 'reference' && els.autoReadToggle.checked) {
           log('Texto cargado. Generando voz del primer bloque...');
           await readCurrent();
@@ -2337,7 +2386,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude cargar el archivo: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2430,34 +2479,43 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function navigate(path, body = {}) {
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
+        invalidatePendingRead();
         const data = await api(path, body);
         renderStatus(data);
         log('Ubicación actualizada.');
       } catch (err) {
         log(`No pude navegar: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
     async function readCurrent() {
-      if (!ttsActionAvailable(status)) {
-        log(friendlyTtsMessage(status && status.services && status.services.tts && status.services.tts.detail));
-        return;
-      }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
+      const controller = new AbortController();
       try {
-        log('Generando voz neural...');
-        const data = await api('/api/read', { play: false });
-        playAudio(data);
-        log(`${data.cached ? 'Audio listo desde cache.' : 'Audio neural generado.'} Listo en ${data.ready_ms} ms; sintesis ${data.synthesis_ms || 0} ms.`);
+        invalidatePendingRead();
+        const sequence = audioLifecycleSequence;
+        const request = activeReadRequest;
+        activeReadController = controller;
+        log('Solicitud aceptada: comprobando cache y generando el bloque si hace falta...');
+        const data = await api('/api/read', { play: false }, { signal: controller.signal });
+        if (!playAudio(data, sequence, request)) return;
+        log(`${data.cached ? 'Audio listo desde cache.' : 'Audio neural generado.'} Listo en ${data.ready_ms} ms; síntesis ${data.synthesis_ms || 0} ms.`);
       } catch (err) {
+        if (err && err.name === 'AbortError') {
+          log('Lectura cancelada por cambio de documento o bloque.');
+          return;
+        }
         const friendly = err && err.data && (err.data.error || err.data.detail) ? friendlyTtsMessage(err.data.error || err.data.detail) : friendlyTtsMessage(err.message);
         log(`Falló la voz: ${friendly}`);
       } finally {
-        setBusy(false);
+        if (activeReadController === controller) {
+          activeReadController = null;
+        }
+        releaseBusy();
       }
     }
 
@@ -2473,17 +2531,20 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function prepareDocument() {
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
+      let started = false;
       try {
         const data = await api('/api/prepare/start', { start: 'cursor' });
         renderPrepareStatus(data);
         log('Preparando audio del documento en segundo plano...');
-        setBusy(false);
-        await pollPrepare();
+        started = true;
       } catch (err) {
         log(`No pude preparar el documento: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
+      }
+      if (started) {
+        await pollPrepare();
       }
     }
 
@@ -2518,7 +2579,7 @@ INDEX_HTML = r"""<!doctype html>
         payload.start = Number(els.audioExportStartInput.value || 0);
         payload.end = Number(els.audioExportEndInput.value || 0);
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/audio-export', payload);
         renderAudioExportStatus(data);
@@ -2526,7 +2587,7 @@ INDEX_HTML = r"""<!doctype html>
       } catch (err) {
         log(`No pude exportar audio: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2549,17 +2610,17 @@ INDEX_HTML = r"""<!doctype html>
       if (!els.continuousToggle.checked || !status || !status.total || status.current >= status.total) {
         return;
       }
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         log('Avanzando al siguiente bloque...');
         const nextData = await api('/api/next', {});
         renderStatus(nextData);
       } catch (err) {
         log(`No pude avanzar: ${err.message}`);
-        setBusy(false);
         return;
+      } finally {
+        releaseBusy();
       }
-      setBusy(false);
       await readCurrent();
     }
 
@@ -2570,16 +2631,15 @@ INDEX_HTML = r"""<!doctype html>
       }
       els.chatInput.value = '';
       addChatMessage('user', message);
+      const releaseBusy = beginBusyLease();
       if (dialogue.active) {
-        setBusy(true);
         try {
           await sendTypedDialogue(message);
         } finally {
-          setBusy(false);
+          releaseBusy();
         }
         return;
       }
-      setBusy(true);
       try {
         addChatMessage('system', pendingThoughtLabel());
         const data = await api('/api/chat', { message, chunk_index: visibleChunkIndex() });
@@ -2601,7 +2661,7 @@ INDEX_HTML = r"""<!doctype html>
         addChatMessage('system', `Falló el chat: ${err.message}`);
         log(`Falló el chat: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -2690,7 +2750,7 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     async function clearLaboratoryHistory() {
-      setBusy(true);
+      const releaseBusy = beginBusyLease();
       try {
         const data = await api('/api/laboratory/reset', {});
         els.chatLog.innerHTML = '';
@@ -2700,7 +2760,7 @@ INDEX_HTML = r"""<!doctype html>
         addChatMessage('system', `No pude borrar el historial: ${err.message}`);
         log(`No pude borrar el historial: ${err.message}`);
       } finally {
-        setBusy(false);
+        releaseBusy();
       }
     }
 
@@ -3207,6 +3267,7 @@ INDEX_HTML = r"""<!doctype html>
     els.audioExportBtn.addEventListener('click', startAudioExport);
     els.audioExportCancelBtn.addEventListener('click', cancelAudioExport);
     els.saveNoteBtn.addEventListener('click', saveCurrentNote);
+    els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));
     els.sendChatBtn.addEventListener('click', sendChat);
     els.clearLabHistoryBtn.addEventListener('click', clearLaboratoryHistory);
     els.reasoningNormalBtn.addEventListener('click', () => setReasoningMode('normal'));
@@ -3303,6 +3364,8 @@ INDEX_HTML = r"""<!doctype html>
 </body>
 </html>
 """
+
+INDEX_HTML = INDEX_HTML.replace("__BUSY_CONTROL_HELPERS__", BUSY_CONTROL_HELPERS)
 
 
 def library_items() -> list[dict]:
@@ -3948,7 +4011,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, APP.clear_document())
                 return
             if path == "/api/read":
-                self._result(200, APP.read_current(play=bool(payload.get("play", False))))
+                result = APP.read_current(play=bool(payload.get("play", False)))
+                self._result(409 if result.get("stale") else 200, result)
                 return
             if path == "/api/next":
                 self._json(200, APP.next())

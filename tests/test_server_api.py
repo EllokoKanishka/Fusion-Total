@@ -131,10 +131,14 @@ class ServerAPITests(unittest.TestCase):
 
     def test_server_ui_surfaces_friendly_tts_blocking_message_and_disables_read(self):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        helper = Path("scripts/fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
         self.assertIn("friendlyTtsMessage", server)
         self.assertIn("TTS bloqueado", server)
-        self.assertIn("els.readBtn.disabled = !canRead;", server)
+        self.assertIn("busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '')", server)
         self.assertIn("El TTS de Fusion está vivo pero no quedó validado como propio.", server)
+        self.assertIn("computeControlAvailability", helper)
+        self.assertIn("readBtn: documentLoaded && documentHasText", helper)
+        self.assertIn("applyControlState", helper)
 
     def test_server_ui_restores_prepare_progress_detail(self):
         server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")

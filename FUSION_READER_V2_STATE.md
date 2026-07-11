@@ -99,6 +99,10 @@ verify_voice_port_isolation.sh: OK_WITH_EXTERNAL_WARNINGS en el cierre local
 
 ## Consolidación funcional reciente
 
+Primer desarrollo funcional posterior al cierre: el ciclo de vida de audio usa
+generación documental, invalida tareas/respuestas viejas y vacía el reproductor
+al limpiar o reemplazar. Ver `docs/AUDIO_LIFECYCLE_REPAIR_V2.md`.
+
 Parches recientes confirmados:
 
 ```text
