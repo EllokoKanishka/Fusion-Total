@@ -52,8 +52,9 @@ Ese helper:
 - no deja que el test termine mientras el thread sigue vivo;
 - permite los estados `done`, `cancelled` y `error` según el caso.
 
-Además, los proveedores sintéticos de TTS ahora escriben dentro del sandbox de
-test, no en la carpeta personal.
+Además, `test_app()` usa un `TemporaryDirectory` por defecto y `close_test_app()`
+elimina ese sandbox al cerrar el test. Los proveedores sintéticos de TTS ahora
+escriben dentro de ese root temporal, no en la carpeta personal.
 
 ## Pruebas de hermeticidad
 
@@ -62,8 +63,14 @@ La cobertura reforzada valida que:
 - las exportaciones de tests quedan dentro del sandbox temporal;
 - una carpeta externa simulada de “Descargas reales” conserva su sentinel;
 - los modos `current`, `block`, `range` y `full` generan un solo archivo final;
+- cada exportación legítima deja exactamente un WAV nuevo, o un único `_2.wav`
+  cuando corresponde una segunda exportación real con el mismo nombre;
 - la cancelación no deja artefactos parciales;
 - el error de TTS no deja archivos parciales;
+- los archivos temporales `.audio_export_*.txt` se limpian incluso cuando se
+  usa ffmpeg para concatenar;
+- las descargas se rechazan si intentan salir del root efectivo o resolver por
+  symlink fuera de él;
 - dos exportaciones legítimas reutilizan caché sin multiplicar jobs;
 - el root runtime por defecto sigue siendo Descargas;
 - la protección contra path traversal se mantiene.

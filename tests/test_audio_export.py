@@ -6,18 +6,42 @@ from unittest import mock
 from fusion_reader_v2.audio_export import concat_wav_files, sanitize_audio_title
 from tests.helpers import (
     test_app,
+    managed_test_app,
     wait_for_audio_export,
     SyntheticWavTTSProvider,
     LengthLimitedSyntheticWavTTSProvider,
+    FailingTTSProvider,
     manual_document,
     make_reading_document,
 )
 
 class AudioExportTests(unittest.TestCase):
     def test_audio_export_test_app_uses_temporary_export_root(self):
-        app = test_app(tts=SyntheticWavTTSProvider())
-        self.assertEqual(app.audio_export_root.name, "Descargas")
-        self.assertTrue(app.audio_export_root.parent.name.startswith("fusion_reader_v2_test_"))
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            root = Path(app._test_root)
+            self.assertEqual(app.audio_export_root.name, "Descargas")
+            self.assertTrue(root.name.startswith("fusion_reader_v2_test_"))
+            self.assertTrue(root.exists())
+        self.assertFalse(root.exists())
+
+    def _assert_single_final_export(self, mode: str, *, title: str, chunks: list[str], export_kwargs: dict | None = None, setup=None) -> None:
+        export_kwargs = dict(export_kwargs or {})
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            root = Path(app._test_root)
+            export_dir = Path(app.audio_export_root)
+            app.session.load(manual_document("doc", title, chunks))
+            if setup is not None:
+                setup(app)
+            before = {p.name for p in export_dir.glob("*.wav")}
+            job = app.start_audio_export(mode, **export_kwargs)
+            final = wait_for_audio_export(app, job["job_id"])
+            after = {p.name for p in export_dir.glob("*.wav")}
+            new_files = sorted(after - before)
+            self.assertEqual(len(new_files), 1)
+            self.assertEqual(Path(final["output_path"]).resolve(), (export_dir / new_files[0]).resolve())
+            self.assertTrue((export_dir / new_files[0]).exists())
+            self.assertFalse(list(export_dir.glob(".audio_export_*.txt")))
+        self.assertFalse(root.exists())
 
     def test_audio_export_generates_files_and_reports_progress(self):
         app = test_app(tts=SyntheticWavTTSProvider())
@@ -37,11 +61,18 @@ class AudioExportTests(unittest.TestCase):
         self.assertEqual(status["state"], "cancelled")
 
     def test_audio_export_limits_concurrent_jobs(self):
-        app = test_app()
-        app.load_text("doc", "Doc", "U.", prefetch=False)
-        app.start_audio_export("full")
-        second = app.start_audio_export("full")
-        self.assertFalse(second["ok"])
+        with managed_test_app(tts=SyntheticWavTTSProvider(delay_seconds=0.1)) as app:
+            root = Path(app._test_root)
+            app.load_text("doc", "Doc", make_reading_document("Doc", 10), prefetch=False)
+            first = app.start_audio_export("full")
+            second = app.start_audio_export("full")
+            self.assertFalse(second["ok"])
+            self.assertEqual(second["error"], "audio_export_busy")
+            app.cancel_audio_export(first["job_id"])
+            status = wait_for_audio_export(app, first["job_id"])
+            self.assertEqual(status["state"], "cancelled")
+            self.assertFalse(getattr(app, "_audio_export_thread").is_alive())
+        self.assertFalse(root.exists())
 
     def test_audio_export_current_block_uses_current_cursor(self):
         provider = SyntheticWavTTSProvider()
@@ -75,6 +106,17 @@ class AudioExportTests(unittest.TestCase):
         job = app.start_audio_export("full")
         wait_for_audio_export(app, job["job_id"])
         self.assertEqual([c[0] for c in provider.calls], ["u", "d"])
+
+    def test_audio_export_modes_create_exactly_one_final_wav(self):
+        cases = (
+            ("current", dict(title="Doc", chunks=["u", "d", "t"], setup=lambda app: app.jump(2))),
+            ("block", dict(title="Doc", chunks=["u", "d", "t"], export_kwargs={"block": 3})),
+            ("range", dict(title="Doc", chunks=["u", "d", "t", "c"], export_kwargs={"start": 2, "end": 4})),
+            ("full", dict(title="Doc", chunks=["u", "d"], export_kwargs={})),
+        )
+        for mode, kwargs in cases:
+            with self.subTest(mode=mode):
+                self._assert_single_final_export(mode, **kwargs)
 
     def test_audio_export_rejects_invalid_ranges_and_missing_document(self):
         app = test_app()
@@ -127,6 +169,62 @@ class AudioExportTests(unittest.TestCase):
             self.assertEqual(list(external_downloads.iterdir()), [sentinel])
             self.assertEqual(sorted(p.name for p in (sandbox / "Descargas").glob("*.wav")), [target.name])
 
+    def test_audio_export_download_root_boundaries(self):
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            root = Path(app._test_root)
+            export_dir = Path(app.audio_export_root)
+            app.session.load(manual_document("doc", "Doc", ["u"]))
+            job = app.start_audio_export("full")
+            status = wait_for_audio_export(app, job["job_id"])
+            self.assertEqual(status["state"], "done")
+            valid = app.get_audio_export_download(job["job_id"])
+            self.assertTrue(valid["ok"])
+            self.assertEqual(Path(valid["path"]).resolve(), Path(status["output_path"]).resolve())
+
+            job_state = app._audio_export_jobs[job["job_id"]]
+            outside = root.parent / "outside_audio_export.wav"
+            symlink = export_dir / "outside_link.wav"
+            missing = export_dir / "missing_inside_root.wav"
+            outside.write_text("outside", encoding="utf-8")
+            symlink.symlink_to(outside)
+            try:
+                job_state.output_path = str(outside)
+                self.assertEqual(app.get_audio_export_download(job["job_id"])["error"], "audio_export_path_invalid")
+                job_state.output_path = str(symlink)
+                self.assertEqual(app.get_audio_export_download(job["job_id"])["error"], "audio_export_path_invalid")
+                job_state.output_path = str(missing)
+                self.assertEqual(app.get_audio_export_download(job["job_id"])["error"], "audio_export_file_missing")
+            finally:
+                symlink.unlink(missing_ok=True)
+                outside.unlink(missing_ok=True)
+        self.assertFalse(root.exists())
+
+    def test_audio_export_sequential_exports_create_one_suffixed_sibling_only(self):
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            root = Path(app._test_root)
+            export_dir = Path(app.audio_export_root)
+            app.session.load(manual_document("doc", "Doc", ["uno"]))
+            first = app.start_audio_export("full")
+            first_status = wait_for_audio_export(app, first["job_id"])
+            second = app.start_audio_export("full")
+            second_status = wait_for_audio_export(app, second["job_id"])
+            self.assertEqual(first_status["state"], "done")
+            self.assertEqual(second_status["state"], "done")
+            files = sorted(p.name for p in export_dir.glob("*.wav"))
+            self.assertEqual(len(files), 2)
+            self.assertIn(Path(first_status["output_path"]).name, files)
+            self.assertIn(Path(second_status["output_path"]).name, files)
+            self.assertTrue(any(name.endswith("_2.wav") for name in files))
+            job_ids = {first["job_id"], second["job_id"]}
+            self.assertEqual(set(app._audio_export_jobs), job_ids)
+            for _ in range(3):
+                app.audio_export_overview()
+                app.audio_export_status(first["job_id"])
+                app.audio_export_status(second["job_id"])
+            self.assertEqual(set(app._audio_export_jobs), job_ids)
+            self.assertFalse(getattr(app, "_audio_export_thread").is_alive())
+        self.assertFalse(root.exists())
+
     def test_audio_export_runtime_default_uses_descargas(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -135,6 +233,33 @@ class AudioExportTests(unittest.TestCase):
             with mock.patch("fusion_reader_v2.pdf_to_docx.Path.home", return_value=home):
                 app = test_app(tts=SyntheticWavTTSProvider(), root=home / "state", audio_export_root=None)
             self.assertEqual(app.audio_export_root, downloads.resolve())
+
+    def test_audio_export_cancel_cleanup_removes_partial_files_and_thread_stops(self):
+        with managed_test_app(tts=SyntheticWavTTSProvider(delay_seconds=0.1)) as app:
+            root = Path(app._test_root)
+            export_dir = Path(app.audio_export_root)
+            app.session.load(manual_document("doc", "Doc", ["u", "d", "t", "c"]))
+            job = app.start_audio_export("full")
+            app.cancel_audio_export(job["job_id"])
+            status = wait_for_audio_export(app, job["job_id"])
+            self.assertEqual(status["state"], "cancelled")
+            self.assertFalse(list(export_dir.glob("*.wav")))
+            self.assertFalse(list(export_dir.glob(".audio_export_*.txt")))
+            self.assertFalse(getattr(app, "_audio_export_thread").is_alive())
+        self.assertFalse(root.exists())
+
+    def test_audio_export_error_cleanup_removes_partial_files_and_thread_stops(self):
+        with managed_test_app(tts=FailingTTSProvider()) as app:
+            root = Path(app._test_root)
+            export_dir = Path(app.audio_export_root)
+            app.session.load(manual_document("doc", "Doc", ["u", "d", "t"]))
+            job = app.start_audio_export("full")
+            status = wait_for_audio_export(app, job["job_id"])
+            self.assertEqual(status["state"], "error")
+            self.assertFalse(list(export_dir.glob("*.wav")))
+            self.assertFalse(list(export_dir.glob(".audio_export_*.txt")))
+            self.assertFalse(getattr(app, "_audio_export_thread").is_alive())
+        self.assertFalse(root.exists())
 
     def test_audio_export_does_not_break_read_current(self):
         app = test_app(tts=SyntheticWavTTSProvider())
@@ -168,6 +293,37 @@ class AudioExportTests(unittest.TestCase):
             out = root / "out.wav"
             concat_wav_files(inputs, out)
             self.assertTrue(out.exists())
+
+    def test_concat_wav_files_removes_temporary_concat_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.wav"
+            second = root / "second.wav"
+            with wave.open(str(first), "wb") as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(16000)
+                f.writeframes(b"\0\0" * 1600)
+            with wave.open(str(second), "wb") as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(22050)
+                f.writeframes(b"\0\0" * 1600)
+            out = root / "ffmpeg_out.wav"
+            created_list_files: list[Path] = []
+
+            def fake_run(cmd, check, stdout, stderr, text):
+                list_path = Path(cmd[cmd.index("-i") + 1])
+                created_list_files.append(list_path)
+                out.touch()
+                return mock.Mock()
+
+            with mock.patch("fusion_reader_v2.audio_export.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                 mock.patch("fusion_reader_v2.audio_export.subprocess.run", side_effect=fake_run):
+                method = concat_wav_files([first, second], out)
+            self.assertEqual(method, "ffmpeg")
+            self.assertTrue(out.exists())
+            self.assertFalse(any(path.exists() for path in created_list_files))
 
     def test_audio_export_filename_sanitizer_blocks_path_traversal(self):
         self.assertEqual(sanitize_audio_title("../danger"), "danger")

@@ -1,9 +1,12 @@
+from contextlib import contextmanager
+import inspect
 import json
 import os
 import tempfile
 import time
 import wave
 import threading
+import unittest
 from pathlib import Path
 from fusion_reader_v2 import (
     AudioArtifact,
@@ -24,9 +27,108 @@ from fusion_reader_v2 import (
 _DEFAULT_AUDIO_EXPORT_ROOT = object()
 
 
-def test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT) -> FusionReaderV2:
+def _register_test_cleanup(app) -> None:
+    frame = inspect.currentframe()
+    try:
+        frame = frame.f_back
+        while frame:
+            owner = frame.f_locals.get("self")
+            if isinstance(owner, unittest.TestCase):
+                owner.addCleanup(close_test_app, app)
+                return
+            frame = frame.f_back
+    finally:
+        del frame
+
+
+def _wait_for_named_threads(prefixes: tuple[str, ...], timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + float(timeout)
+    prefixes = tuple(prefixes)
+    while time.monotonic() < deadline:
+        alive = [
+            thread
+            for thread in threading.enumerate()
+            if thread is not threading.current_thread()
+            and thread.is_alive()
+            and any(thread.name.startswith(prefix) for prefix in prefixes)
+        ]
+        if not alive:
+            return
+        for thread in alive:
+            thread.join(timeout=0.05)
+    alive = [
+        thread.name
+        for thread in threading.enumerate()
+        if thread is not threading.current_thread()
+        and thread.is_alive()
+        and any(thread.name.startswith(prefix) for prefix in prefixes)
+    ]
+    raise AssertionError(f"timed out waiting for test background threads to stop: {alive}")
+
+
+def close_test_app(app, timeout: float = 10.0) -> None:
+    if getattr(app, "_test_cleanup_done", False):
+        return
+    app._test_cleanup_done = True
+    tempdir = getattr(app, "_test_tempdir", None)
+    try:
+        job_id = ""
+        try:
+            overview = app.audio_export_overview()
+            job_id = str(overview.get("job_id") or "")
+        except Exception:
+            job_id = str(getattr(app, "_audio_export_active_job_id", "") or getattr(app, "_audio_export_latest_job_id", "") or "")
+        if job_id:
+            try:
+                app.cancel_audio_export(job_id)
+            except Exception:
+                pass
+        elif getattr(app, "_audio_export_thread", None):
+            try:
+                app._audio_export_cancel.set()
+            except Exception:
+                pass
+        if hasattr(app, "prepare_status"):
+            try:
+                if str(app.prepare_status().get("status") or "") == "running":
+                    app.cancel_prepare()
+            except Exception:
+                pass
+        if hasattr(app, "_clear_prefetch_queue"):
+            try:
+                app._clear_prefetch_queue()
+            except Exception:
+                pass
+        try:
+            executor = getattr(app, "_executor", None)
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _wait_for_named_threads(
+            ("fusion-reader-v2-audio-export", "fusion-reader-v2-prepare"),
+            timeout=timeout,
+        )
+    finally:
+        if tempdir is not None:
+            tempdir.cleanup()
+            app._test_tempdir = None
+
+
+@contextmanager
+def managed_test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT):
+    app = test_app(tts=tts, stt=stt, root=root, external_research=external_research, audio_export_root=audio_export_root, register_cleanup=False)
+    try:
+        yield app
+    finally:
+        close_test_app(app)
+
+
+def test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT, register_cleanup: bool = True) -> FusionReaderV2:
+    tempdir = None
     if root is None:
-        root = Path(tempfile.mkdtemp(prefix="fusion_reader_v2_test_"))
+        tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_v2_test_")
+        root = Path(tempdir.name)
     else:
         root = Path(root)
     tts_provider = tts or NullTTSProvider()
@@ -47,6 +149,11 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
         session_state_path=root / "session_state.json",
         audio_export_root=effective_audio_export_root,
     )
+    app._test_root = root
+    app._test_tempdir = tempdir
+    app._test_cleanup_done = False
+    if register_cleanup:
+        _register_test_cleanup(app)
     return app
 
 
