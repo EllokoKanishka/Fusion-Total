@@ -1,14 +1,18 @@
 import unittest
 import tempfile
 import wave
+import threading
+import time
 from pathlib import Path
 from unittest import mock
 from fusion_reader_v2.audio_export import concat_wav_files, sanitize_audio_title
 from tests.helpers import (
     test_app,
     managed_test_app,
+    close_test_app,
     wait_for_audio_export,
     SyntheticWavTTSProvider,
+    BlockingSyntheticWavTTSProvider,
     LengthLimitedSyntheticWavTTSProvider,
     FailingTTSProvider,
     manual_document,
@@ -260,6 +264,108 @@ class AudioExportTests(unittest.TestCase):
             self.assertFalse(list(export_dir.glob(".audio_export_*.txt")))
             self.assertFalse(getattr(app, "_audio_export_thread").is_alive())
         self.assertFalse(root.exists())
+
+    def test_close_test_app_waits_for_running_prefetch_before_tempdir_cleanup(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        cleanup_started = threading.Event()
+        cleanup_finished = threading.Event()
+        cleanup_errors: list[Exception] = []
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.prefetch_ahead = 1
+            app.load_text("doc", "Doc", make_reading_document("Doc", 24), prefetch=True)
+            self.assertTrue(provider.started.wait(5))
+            self.assertTrue(len(app._prefetch_futures) >= 2)
+
+            def run_cleanup() -> None:
+                cleanup_started.set()
+                try:
+                    close_test_app(app)
+                except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                    cleanup_errors.append(exc)
+                finally:
+                    cleanup_finished.set()
+
+            cleanup_thread = threading.Thread(target=run_cleanup, name="cleanup-thread")
+            cleanup_thread.start()
+            try:
+                self.assertTrue(cleanup_started.wait(5))
+                self.assertTrue(root.exists())
+                self.assertFalse(cleanup_finished.wait(0.1))
+                provider.release.set()
+                cleanup_thread.join(5)
+                self.assertFalse(cleanup_thread.is_alive())
+                self.assertTrue(cleanup_finished.is_set())
+                self.assertFalse(cleanup_errors, cleanup_errors)
+                time.sleep(0.05)
+                self.assertFalse(root.exists())
+                self.assertFalse(any(thread.is_alive() for thread in getattr(app._executor, "_threads", ())))
+                self.assertFalse(app._prefetch_futures)
+            finally:
+                provider.release.set()
+                cleanup_thread.join(5)
+
+    def test_close_test_app_cancels_queued_prefetch_future_before_it_starts(self):
+        provider = BlockingSyntheticWavTTSProvider()
+        cleanup_started = threading.Event()
+        cleanup_finished = threading.Event()
+        cleanup_errors: list[Exception] = []
+
+        with managed_test_app(tts=provider) as app:
+            root = Path(app._test_root)
+            app.prefetch_ahead = 1
+            app.load_text("doc", "Doc", make_reading_document("Doc", 24), prefetch=True)
+            self.assertTrue(provider.started.wait(5))
+            futures = list(app._prefetch_futures.values())
+            self.assertEqual(len(futures), 2)
+            queued_future = futures[1]
+
+            def run_cleanup() -> None:
+                cleanup_started.set()
+                try:
+                    close_test_app(app)
+                except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                    cleanup_errors.append(exc)
+                finally:
+                    cleanup_finished.set()
+
+            cleanup_thread = threading.Thread(target=run_cleanup, name="cleanup-thread")
+            cleanup_thread.start()
+            try:
+                self.assertTrue(cleanup_started.wait(5))
+                self.assertTrue(root.exists())
+                self.assertFalse(cleanup_finished.wait(0.1))
+                provider.release.set()
+                cleanup_thread.join(5)
+                self.assertFalse(cleanup_thread.is_alive())
+                self.assertTrue(cleanup_finished.is_set())
+                self.assertFalse(cleanup_errors, cleanup_errors)
+                time.sleep(0.05)
+                self.assertFalse(root.exists())
+                self.assertTrue(queued_future.cancelled())
+                self.assertEqual(len(provider.calls), 1)
+                self.assertFalse(app._prefetch_futures)
+            finally:
+                provider.release.set()
+                cleanup_thread.join(5)
+
+    def test_test_app_registers_cleanup_via_unittest_case(self):
+        observed: dict[str, object] = {}
+
+        class CleanupProbe(unittest.TestCase):
+            def runTest(inner_self):
+                app = test_app(tts=SyntheticWavTTSProvider())
+                observed["root"] = Path(app._test_root)
+                observed["registered"] = bool(getattr(app, "_test_cleanup_registered", False))
+                inner_self.assertTrue(observed["registered"])
+                inner_self.assertTrue(observed["root"].exists())
+
+        result = unittest.TestResult()
+        CleanupProbe().run(result)
+        self.assertTrue(result.wasSuccessful())
+        self.assertTrue(observed["registered"])
+        self.assertFalse(observed["root"].exists())
 
     def test_audio_export_does_not_break_read_current(self):
         app = test_app(tts=SyntheticWavTTSProvider())

@@ -27,7 +27,10 @@ from fusion_reader_v2 import (
 _DEFAULT_AUDIO_EXPORT_ROOT = object()
 
 
-def _register_test_cleanup(app) -> None:
+def _register_test_cleanup(app) -> bool:
+    # `test_app()` can be called from a unittest method without passing the
+    # TestCase explicitly, so we walk upward just enough to register the
+    # cleanup on the nearest active case.
     frame = inspect.currentframe()
     try:
         frame = frame.f_back
@@ -35,84 +38,32 @@ def _register_test_cleanup(app) -> None:
             owner = frame.f_locals.get("self")
             if isinstance(owner, unittest.TestCase):
                 owner.addCleanup(close_test_app, app)
-                return
+                return True
             frame = frame.f_back
     finally:
         del frame
-
-
-def _wait_for_named_threads(prefixes: tuple[str, ...], timeout: float = 10.0) -> None:
-    deadline = time.monotonic() + float(timeout)
-    prefixes = tuple(prefixes)
-    while time.monotonic() < deadline:
-        alive = [
-            thread
-            for thread in threading.enumerate()
-            if thread is not threading.current_thread()
-            and thread.is_alive()
-            and any(thread.name.startswith(prefix) for prefix in prefixes)
-        ]
-        if not alive:
-            return
-        for thread in alive:
-            thread.join(timeout=0.05)
-    alive = [
-        thread.name
-        for thread in threading.enumerate()
-        if thread is not threading.current_thread()
-        and thread.is_alive()
-        and any(thread.name.startswith(prefix) for prefix in prefixes)
-    ]
-    raise AssertionError(f"timed out waiting for test background threads to stop: {alive}")
+    return False
 
 
 def close_test_app(app, timeout: float = 10.0) -> None:
     if getattr(app, "_test_cleanup_done", False):
         return
-    app._test_cleanup_done = True
-    tempdir = getattr(app, "_test_tempdir", None)
+    if getattr(app, "_test_cleanup_started", False):
+        return
+    app._test_cleanup_started = True
     try:
-        job_id = ""
-        try:
-            overview = app.audio_export_overview()
-            job_id = str(overview.get("job_id") or "")
-        except Exception:
-            job_id = str(getattr(app, "_audio_export_active_job_id", "") or getattr(app, "_audio_export_latest_job_id", "") or "")
-        if job_id:
-            try:
-                app.cancel_audio_export(job_id)
-            except Exception:
-                pass
-        elif getattr(app, "_audio_export_thread", None):
-            try:
-                app._audio_export_cancel.set()
-            except Exception:
-                pass
-        if hasattr(app, "prepare_status"):
-            try:
-                if str(app.prepare_status().get("status") or "") == "running":
-                    app.cancel_prepare()
-            except Exception:
-                pass
-        if hasattr(app, "_clear_prefetch_queue"):
-            try:
-                app._clear_prefetch_queue()
-            except Exception:
-                pass
-        try:
-            executor = getattr(app, "_executor", None)
-            if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
-        _wait_for_named_threads(
-            ("fusion-reader-v2-audio-export", "fusion-reader-v2-prepare"),
-            timeout=timeout,
-        )
-    finally:
+        shutdown = getattr(app, "shutdown_background_work", None)
+        if callable(shutdown):
+            shutdown(timeout=timeout)
+        else:
+            raise AssertionError("app does not expose shutdown_background_work()")
+        tempdir = getattr(app, "_test_tempdir", None)
         if tempdir is not None:
             tempdir.cleanup()
             app._test_tempdir = None
+        app._test_cleanup_done = True
+    finally:
+        app._test_cleanup_started = False
 
 
 @contextmanager
@@ -151,9 +102,11 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
     )
     app._test_root = root
     app._test_tempdir = tempdir
+    app._test_cleanup_started = False
     app._test_cleanup_done = False
+    app._test_cleanup_registered = False
     if register_cleanup:
-        _register_test_cleanup(app)
+        app._test_cleanup_registered = _register_test_cleanup(app)
     return app
 
 
@@ -183,6 +136,23 @@ class FailingTTSProvider(NullTTSProvider):
         self.calls.append((text, voice, language))
         return AudioArtifact(False, provider=self.name, detail="tts_down")
 
+def _write_synthetic_wav(text: str, output_root: Path | None) -> Path:
+    if output_root is not None:
+        output_root.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav", dir=str(output_root))
+    else:
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
+    os.close(fd)
+    path = Path(name)
+    sample_rate = 16000
+    frames = (max(1, len(text)) * 160)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\0\0" * frames)
+    return path
+
 class SyntheticWavTTSProvider(NullTTSProvider):
     name = "synthetic_wav_tts"
 
@@ -198,20 +168,24 @@ class SyntheticWavTTSProvider(NullTTSProvider):
         self.calls.append((text, voice, language))
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
-        if self.output_root is not None:
-            self.output_root.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav", dir=str(self.output_root))
-        else:
-            fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
-        os.close(fd)
-        path = Path(name)
-        sample_rate = 16000
-        frames = (max(1, len(text)) * 160)
-        with wave.open(str(path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(b"\0\0" * frames)
+        path = _write_synthetic_wav(text, self.output_root)
+        return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
+
+class BlockingSyntheticWavTTSProvider(SyntheticWavTTSProvider):
+    name = "blocking_synthetic_wav_tts"
+
+    def __init__(self, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
+        super().__init__(delay_seconds=delay_seconds, output_root=output_root)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
+        self.calls.append((text, voice, language))
+        self.started.set()
+        self.release.wait()
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
+        path = _write_synthetic_wav(text, self.output_root)
         return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
 
 class LengthLimitedSyntheticWavTTSProvider(SyntheticWavTTSProvider):
