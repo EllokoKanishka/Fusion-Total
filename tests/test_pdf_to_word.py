@@ -2,34 +2,36 @@ import unittest
 import os
 import tempfile
 import zipfile
-import time
 from pathlib import Path
 from unittest import mock
-from fusion_reader_v2.documents import import_document_bytes, structured_plain_ocr_text, repair_ocr_spacing, clean_pdf_text
+from fusion_reader_v2.documents import (
+    import_document_bytes,
+    structured_plain_ocr_text,
+    repair_ocr_spacing,
+    clean_pdf_text,
+)
 from fusion_reader_v2.pdf_to_docx import (
     _clean_ocr_line,
     _get_docling_gpu_env,
     _is_noise_line,
     _detect_heading,
     _should_merge_with_previous,
-    ParagraphBlock,
     JobStatus,
     convert_pdf_to_docx,
     safe_output_name,
     find_downloads_dir,
 )
 from tests.helpers import (
-    test_app,
     make_simple_pdf_bytes,
 )
 from tests.helpers import web_source
+
 
 class PDFToWordTests(unittest.TestCase):
     def test_pdf_to_word_ui_exists_and_uses_compact_tool_naming(self):
         server = web_source()
         self.assertIn("PDF → Word", server)
         self.assertIn("pdfToWordTool", server)
-
 
     def test_import_plain_text_document(self):
         doc = import_document_bytes("cuento.txt", "Uno.\n\nDos.".encode("utf-8"))
@@ -86,17 +88,17 @@ class PDFToWordTests(unittest.TestCase):
         # 1. Cleaning
         self.assertEqual(_clean_ocr_line("...  Texto sucio!!!"), "Texto sucio!!!")
         self.assertEqual(_clean_ocr_line("Palabra — con raya"), "Palabra - con raya")
-        
+
         # 2. Noise
         self.assertTrue(_is_noise_line("A E A E A E"))
         self.assertTrue(_is_noise_line("... --- ..."))
         self.assertFalse(_is_noise_line("Este es un párrafo válido."))
-        
+
         # 3. Headings
         self.assertEqual(_detect_heading("CAPÍTULO 1: EL COMIENZO"), "Heading1")
         self.assertEqual(_detect_heading("Introducción"), "Heading2")
         self.assertIsNone(_detect_heading("Esta es una línea normal que termina en punto."))
-        
+
         # 4. Merging
         self.assertTrue(_should_merge_with_previous("Esta línea no termina en punto", "esta continúa"))
         self.assertFalse(_should_merge_with_previous("Esta sí termina en punto.", "Esta es nueva"))
@@ -108,13 +110,15 @@ class PDFToWordTests(unittest.TestCase):
         self.assertIn("el año", text)
 
     def test_import_pdf_keeps_raw_text_when_pdf_uses_text_layer(self):
-        pdf = make_simple_pdf_bytes([
-            "REP UB UC A VII 339",
-            "ca ve rna y som bras",
-            "educa ción y prisión con tra",
-            "ca ve rna y som bras otra vez",
-            "educa ción y prisión con tra otra vez",
-        ])
+        pdf = make_simple_pdf_bytes(
+            [
+                "REP UB UC A VII 339",
+                "ca ve rna y som bras",
+                "educa ción y prisión con tra",
+                "ca ve rna y som bras otra vez",
+                "educa ción y prisión con tra otra vez",
+            ]
+        )
         doc = import_document_bytes("mito.pdf", pdf)
         self.assertEqual(doc.source_type, "pdf")
         self.assertTrue(doc.raw_text)
@@ -137,7 +141,14 @@ class PDFToWordTests(unittest.TestCase):
             os.environ["FUSION_READER_DOCLING_GPU_ENV"] = "/tmp/docling-env"
             self.assertEqual(_get_docling_gpu_env(), Path("/tmp/docling-env"))
             os.environ.pop("FUSION_READER_DOCLING_GPU_ENV", None)
-            expected = Path("fusion_reader_v2/pdf_to_docx.py").resolve().parents[1] / "runtime" / "fusion_reader_v2" / "pdf_engine_benchmark" / "venvs" / "docling_gpu_venv"
+            expected = (
+                Path("fusion_reader_v2/pdf_to_docx.py").resolve().parents[1]
+                / "runtime"
+                / "fusion_reader_v2"
+                / "pdf_engine_benchmark"
+                / "venvs"
+                / "docling_gpu_venv"
+            )
             self.assertEqual(_get_docling_gpu_env(), expected)
         finally:
             if previous is None:
@@ -166,8 +177,10 @@ class PDFToWordTests(unittest.TestCase):
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
     def test_pdf_to_word_ocr_fallback_logic(self, mock_gpu):
-        with mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=[" "]), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1):
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=[" "]),
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+        ):
             res = convert_pdf_to_docx("d.pdf", "o.docx")
             self.assertFalse(res.ok)
             self.assertIn("Motor Docling GPU no disponible", res.error)
@@ -176,9 +189,11 @@ class PDFToWordTests(unittest.TestCase):
     def test_pdf_to_word_job_progress(self, mock_gpu):
         job = JobStatus(job_id="t")
         progress = []
-        with mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["Texto largo digital."]), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._write_minimal_docx"), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1):
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["Texto largo digital."]),
+            mock.patch("fusion_reader_v2.pdf_to_docx._write_minimal_docx"),
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+        ):
             convert_pdf_to_docx("d.pdf", "o.docx", status_callback=lambda j: progress.append(j.stage), job=job)
             self.assertIn("done", [job.state])
             self.assertIn("preflight", progress)
@@ -198,6 +213,7 @@ class PDFToWordTests(unittest.TestCase):
 
     def test_md_to_docx_sanitization_v2(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
+
         md = "# T\n![I](data:image/png;base64,A)\n<!-- image -->\n福"
         san = sanitize_markdown(md)
         self.assertNotIn("data:image", san)
@@ -205,6 +221,7 @@ class PDFToWordTests(unittest.TestCase):
 
     def test_md_to_docx_glued_words(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
+
         md = "Diariode Antoninus. todoslos Magos."
         san = sanitize_markdown(md)
         self.assertIn("Diario de", san)
@@ -212,4 +229,5 @@ class PDFToWordTests(unittest.TestCase):
 
     def test_md_to_docx_glued_words_v4_real_ars_magica_examples(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
+
         self.assertIn("Diario de", sanitize_markdown("Diariode Antoninus"))

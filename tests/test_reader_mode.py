@@ -14,10 +14,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
 
-import openclaw_direct_chat as direct_chat
-from app.reader import ReaderSessionStore, _READER_STORE
-from app.voice import _STT_MANAGER, _load_voice_state, _save_voice_state, _default_voice_state, VOICE_STATE_PATH
-from app.chat import _CHAT_EVENTS
+# These compatibility modules require the historical scripts path above.
+import openclaw_direct_chat as direct_chat  # noqa: E402
+from app.reader import ReaderSessionStore  # noqa: E402
 
 
 class TestReaderSessionStore(unittest.TestCase):
@@ -428,7 +427,9 @@ class TestReaderHttpEndpoints(unittest.TestCase):
             text_len=len(str(chunk.get("text", ""))),
             start_offset_chars=0,
         )
-        direct_chat._reader_autocommit_finalize(stream_id, False, detail="playback_interrupted", force_timeout_commit=False)
+        direct_chat._reader_autocommit_finalize(
+            stream_id, False, detail="playback_interrupted", force_timeout_commit=False
+        )
         st = direct_chat._READER_STORE.get_session("interrupt_keep", include_chunks=False)
         self.assertEqual(int(st.get("cursor", -1)), 0)
         self.assertTrue(bool(st.get("has_pending", False)))
@@ -446,7 +447,9 @@ class TestReaderHttpEndpoints(unittest.TestCase):
             text_len=len(str(chunk.get("text", ""))),
             start_offset_chars=0,
         )
-        direct_chat._reader_autocommit_finalize(stream_id, False, detail="barge_in_triggered", force_timeout_commit=False)
+        direct_chat._reader_autocommit_finalize(
+            stream_id, False, detail="barge_in_triggered", force_timeout_commit=False
+        )
         st = direct_chat._READER_STORE.get_session("interrupt_keep_barge", include_chunks=False)
         self.assertEqual(int(st.get("cursor", -1)), 0)
         self.assertTrue(bool(st.get("has_pending", False)))
@@ -480,7 +483,11 @@ class TestReaderHttpEndpoints(unittest.TestCase):
         code, started = self._request(
             "POST",
             "/api/reader/session/start",
-            {"session_id": "alias_phrase_sess", "chunks": ["uno", "la herida no es escribe bien", "tres"], "reset": True},
+            {
+                "session_id": "alias_phrase_sess",
+                "chunks": ["uno", "la herida no es escribe bien", "tres"],
+                "reset": True,
+            },
         )
         self.assertEqual(code, 200)
         self.assertTrue(started.get("ok"))
@@ -864,7 +871,7 @@ class TestReaderHttpEndpoints(unittest.TestCase):
             prev_worker = mgr._worker
             mgr._enabled = True
             mgr._owner_session_id = "owner_session"
-            mgr._worker = _DummyWorker(running=True)
+            mgr._worker = direct_chat._DummyWorker(running=True)
         try:
             code, out = self._request("GET", "/api/stt/poll?session_id=other_session")
             self.assertEqual(code, 409)
@@ -884,7 +891,7 @@ class TestReaderHttpEndpoints(unittest.TestCase):
             prev_worker = mgr._worker
             mgr._enabled = True
             mgr._owner_session_id = "inject_session"
-            mgr._worker = _DummyWorker(running=True)
+            mgr._worker = direct_chat._DummyWorker(running=True)
             mgr._clear_queue_locked()
         try:
             code, out = self._request(
@@ -908,6 +915,7 @@ class TestReaderHttpEndpoints(unittest.TestCase):
                 mgr._owner_session_id = prev_owner
                 mgr._worker = prev_worker
                 mgr._clear_queue_locked()
+
 
 if __name__ == "__main__":
     unittest.main()

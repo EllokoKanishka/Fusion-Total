@@ -86,7 +86,9 @@ def split_paragraph_units(paragraph: str, max_chars: int) -> list[ReadingUnit]:
             if current:
                 units.append(ReadingUnit(current, boundary="sentence"))
                 current = ""
-            units.extend(ReadingUnit(text, boundary="sentence") for text in split_long_sentence(sentence, max_chars=max_chars))
+            units.extend(
+                ReadingUnit(text, boundary="sentence") for text in split_long_sentence(sentence, max_chars=max_chars)
+            )
             continue
         if current and len(current) + 1 + len(sentence) > max_chars:
             units.append(ReadingUnit(current, boundary="sentence"))
@@ -192,7 +194,6 @@ def pack_reading_units(units: list[ReadingUnit], min_chars: int, target_chars: i
 
     if len(chunks) >= 2:
         tail_text = join_units(chunks[-1])
-        prev_text = join_units(chunks[-2])
         if len(tail_text) < min_chars and len(join_units(chunks[-2] + chunks[-1])) <= max_chars:
             chunks[-2].extend(chunks[-1])
             chunks.pop()

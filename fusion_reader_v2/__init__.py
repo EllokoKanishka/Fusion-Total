@@ -2,10 +2,23 @@
 
 from .documents import ImportedDocument, import_document_bytes, import_document_path
 from .conversation import ChatResult, ConversationCore, NullChatProvider, OllamaChatProvider
-from .dialogue import AutoSTTProvider, FasterWhisperServerSTTProvider, NullSTTProvider, STTProvider, TranscriptResult, WhisperCliSTTProvider, default_stt_provider
+from .dialogue import (
+    AutoSTTProvider,
+    FasterWhisperServerSTTProvider,
+    NullSTTProvider,
+    STTProvider,
+    TranscriptResult,
+    WhisperCliSTTProvider,
+    default_stt_provider,
+)
 from .local_web_bridge import AutoExternalResearchBridge, SearxngResearchBridge, default_external_research_bridge
 from .notes import ReaderNote, ReaderNotesStore
-from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult, NullExternalResearchBridge, OpenClawResearchBridge
+from .openclaw_bridge import (
+    ExternalResearchBridge,
+    ExternalResearchResult,
+    NullExternalResearchBridge,
+    OpenClawResearchBridge,
+)
 from .reader import Document, ReaderSession, split_text
 from .config import ConfigurationError, Settings, create_settings
 from .facade import FusionReaderV2

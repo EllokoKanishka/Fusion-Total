@@ -206,7 +206,9 @@ class NotesService:
         if not owner._is_generic_note_pointer(note_text):
             return False
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if re.search(r"\b(?:documento|texto|pantalla|bloque|p[aá]rrafo|cap[ií]tulo|fragmento)\b", clean, flags=re.IGNORECASE):
+        if re.search(
+            r"\b(?:documento|texto|pantalla|bloque|p[aá]rrafo|cap[ií]tulo|fragmento)\b", clean, flags=re.IGNORECASE
+        ):
             return False
         with owner._dialogue_lock:
             if owner._dialogue_history:

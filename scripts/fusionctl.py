@@ -32,7 +32,9 @@ def _request_json(url: str, timeout: float = 3.0) -> dict:
 
 
 def _base_url(settings: Settings) -> str:
-    host = settings.security.bind_host if settings.security.bind_host in {"127.0.0.1", "localhost", "::1"} else "127.0.0.1"
+    host = (
+        settings.security.bind_host if settings.security.bind_host in {"127.0.0.1", "localhost", "::1"} else "127.0.0.1"
+    )
     return f"http://{host}:{settings.ports.api}"
 
 
@@ -141,14 +143,20 @@ def command_doctor(settings: Settings, _args: argparse.Namespace) -> int:
     try:
         raw_owner = json.loads(settings.providers.tts_owner_file.read_text(encoding="utf-8"))
         owner = {
-            "state": "valid" if raw_owner.get("owner") == "fusion_reader_v2" and int(raw_owner.get("port")) == 7853 else "mismatch",
+            "state": "valid"
+            if raw_owner.get("owner") == "fusion_reader_v2" and int(raw_owner.get("port")) == 7853
+            else "mismatch",
             "owner": str(raw_owner.get("owner") or ""),
             "port": raw_owner.get("port"),
         }
     except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
         pass
     roots = {
-        name: {"path": str(path), "exists": path.exists(), "readable": os.access(path, os.R_OK) if path.exists() else False}
+        name: {
+            "path": str(path),
+            "exists": path.exists(),
+            "readable": os.access(path, os.R_OK) if path.exists() else False,
+        }
         for name, path in {
             "runtime": settings.paths.runtime,
             "library": settings.paths.library,
@@ -160,7 +168,11 @@ def command_doctor(settings: Settings, _args: argparse.Namespace) -> int:
     session = {"state": "missing"}
     try:
         session_size = settings.paths.session.stat().st_size
-        session = {"state": "present", "bytes": session_size, "valid_json": isinstance(json.loads(settings.paths.session.read_text(encoding="utf-8")), dict)}
+        session = {
+            "state": "present",
+            "bytes": session_size,
+            "valid_json": isinstance(json.loads(settings.paths.session.read_text(encoding="utf-8")), dict),
+        }
     except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
         pass
     disk = shutil.disk_usage(settings.paths.repository)

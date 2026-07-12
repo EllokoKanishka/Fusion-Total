@@ -147,7 +147,19 @@ class WebServerIntegrationTests(unittest.TestCase):
             url = f"http://127.0.0.1:{server.server_address[1]}/api/status"
             with urllib.request.urlopen(url, timeout=3.0) as response:
                 payload = json.loads(response.read())
-            for key in ("version", "commit", "pid", "uptime_seconds", "state_schema", "cache", "jobs", "providers", "ports", "warnings", "degradations"):
+            for key in (
+                "version",
+                "commit",
+                "pid",
+                "uptime_seconds",
+                "state_schema",
+                "cache",
+                "jobs",
+                "providers",
+                "ports",
+                "warnings",
+                "degradations",
+            ):
                 self.assertIn(key, payload)
             self.assertEqual(payload["ports"]["tts_gpu"], 7853)
             self.assertEqual(payload["ports"]["tts_cpu"], 7851)

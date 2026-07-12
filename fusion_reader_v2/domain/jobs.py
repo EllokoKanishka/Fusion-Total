@@ -133,11 +133,7 @@ class JobRegistry(Generic[JobT]):
         return len(removed)
 
     def _evict_oldest_terminal_locked(self) -> None:
-        candidates = [
-            (self._updated_at(item), key)
-            for key, item in self._items.items()
-            if self._is_terminal(item)
-        ]
+        candidates = [(self._updated_at(item), key) for key, item in self._items.items() if self._is_terminal(item)]
         if not candidates:
             return
         _timestamp, key = min(candidates)

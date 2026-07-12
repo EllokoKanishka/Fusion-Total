@@ -173,7 +173,9 @@ class Handler(BaseHTTPRequestHandler):
                     f"bytes={length} convert_ms={convert_ms} detail={detail}",
                     flush=True,
                 )
-                send_json(self, 400, {"ok": False, "error": "convert_failed", "detail": detail, "convert_ms": convert_ms})
+                send_json(
+                    self, 400, {"ok": False, "error": "convert_failed", "detail": detail, "convert_ms": convert_ms}
+                )
                 return
             try:
                 text, decode_ms, decode_meta = transcribe_wav(wav, language)

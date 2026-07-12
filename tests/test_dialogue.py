@@ -21,6 +21,7 @@ from tests.helpers import (
 )
 from tests.helpers import web_source
 
+
 class DialogueTests(unittest.TestCase):
     def test_dialogue_degrades_supreme_to_thinking_by_default(self):
         chat_provider = NullChatProvider("Entendido.")
@@ -318,6 +319,7 @@ class DialogueTests(unittest.TestCase):
 
     def test_auto_stt_falls_back_when_primary_is_unavailable(self):
         from fusion_reader_v2.dialogue import AutoSTTProvider
+
         primary = BrokenSTTProvider()
         fallback = NullSTTProvider("Hecho.")
         auto = AutoSTTProvider(primary=primary, fallback=fallback)
@@ -325,6 +327,7 @@ class DialogueTests(unittest.TestCase):
 
     def test_auto_stt_falls_back_when_primary_returns_empty_transcript(self):
         from fusion_reader_v2.dialogue import AutoSTTProvider
+
         primary = EmptyTranscriptSTTProvider()
         fallback = NullSTTProvider("Hecho.")
         auto = AutoSTTProvider(primary=primary, fallback=fallback)
@@ -332,6 +335,7 @@ class DialogueTests(unittest.TestCase):
 
     def test_whisper_cli_fallback_uses_known_homebrew_path(self):
         from fusion_reader_v2.dialogue import WhisperCliSTTProvider
+
         command = Path("/home/linuxbrew/.linuxbrew/bin/whisper")
         if not command.exists():
             self.skipTest("Homebrew whisper command is not installed on this host")
@@ -349,6 +353,7 @@ class DialogueTests(unittest.TestCase):
 
     def test_auto_stt_does_not_fallback_for_hallucinated_primary(self):
         from fusion_reader_v2.dialogue import AutoSTTProvider
+
         primary = HallucinatedTranscriptSTTProvider()
         fallback = NullSTTProvider("No debe llegar acá.")
         auto = AutoSTTProvider(primary=primary, fallback=fallback)

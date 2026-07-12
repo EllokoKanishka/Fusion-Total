@@ -23,7 +23,9 @@ class SearxngResearchBridge(ExternalResearchBridge):
         enabled: bool | None = None,
     ) -> None:
         self.base_url = str(base_url or os.environ.get("FUSION_READER_SEARXNG_URL") or "http://127.0.0.1:8080").strip()
-        self.timeout_seconds = float(timeout_seconds if timeout_seconds is not None else os.environ.get("FUSION_READER_SEARXNG_TIMEOUT", "12"))
+        self.timeout_seconds = float(
+            timeout_seconds if timeout_seconds is not None else os.environ.get("FUSION_READER_SEARXNG_TIMEOUT", "12")
+        )
         self.max_results = max(1, int(max_results))
         if enabled is None:
             raw_enabled = os.environ.get("FUSION_READER_SEARXNG_ENABLED", "1").strip().lower()
@@ -70,7 +72,7 @@ class SearxngResearchBridge(ExternalResearchBridge):
         try:
             with urlopen(request_obj, timeout=self.timeout_seconds) as response:
                 raw_text = response.read().decode("utf-8", errors="replace")
-        except HTTPError as exc:
+        except HTTPError:
             return self._failure(
                 query,
                 started,
@@ -145,7 +147,9 @@ class SearxngResearchBridge(ExternalResearchBridge):
             raw_text=raw_text,
         )
 
-    def _failure(self, query: str, started: float, *, detail: str, answer: str, spoken: str, raw_text: str = "") -> ExternalResearchResult:
+    def _failure(
+        self, query: str, started: float, *, detail: str, answer: str, spoken: str, raw_text: str = ""
+    ) -> ExternalResearchResult:
         return ExternalResearchResult(
             False,
             answer=answer,
@@ -202,14 +206,14 @@ class SearxngResearchBridge(ExternalResearchBridge):
         lines = [f"Sali a buscar afuera sobre: {query}.", summary]
         if findings:
             lines.append("Hallazgos rápidos:")
-            for item in findings[:3]:
-                lines.append(f"- {item}")
+            for finding in findings[:3]:
+                lines.append(f"- {finding}")
         if sources:
             lines.append("Fuentes:")
-            for item in sources[:5]:
-                title = self._clean_text(item.get("title") or "Fuente")
-                note = self._clean_text(item.get("note") or "")
-                url = self._clean_text(item.get("url") or "")
+            for source in sources[:5]:
+                title = self._clean_text(source.get("title") or "Fuente")
+                note = self._clean_text(source.get("note") or "")
+                url = self._clean_text(source.get("url") or "")
                 chunk = title
                 if note:
                     chunk += f" | {note}"

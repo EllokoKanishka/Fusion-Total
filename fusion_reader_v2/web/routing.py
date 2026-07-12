@@ -11,7 +11,9 @@ class Route:
     prefix: bool = False
 
     def matches(self, method: str, path: str) -> bool:
-        return self.method == method.upper() and (path.startswith(self.pattern) if self.prefix else path == self.pattern)
+        return self.method == method.upper() and (
+            path.startswith(self.pattern) if self.prefix else path == self.pattern
+        )
 
 
 class Router:

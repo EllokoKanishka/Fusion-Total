@@ -148,19 +148,23 @@ class VoiceMetricsStore:
         out = []
         for item in groups.values():
             count = max(1, int(item["count"]))
-            out.append({
-                "event": item["event"],
-                "provider": item["provider"],
-                "voice": item["voice"],
-                "cached": item["cached"],
-                "count": item["count"],
-                "ok_count": item["ok_count"],
-                "ready_ms_avg": int(item["ready_ms_total"] / count),
-                "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
-                "ready_ms_max": item["ready_ms_max"],
-                "synthesis_ms_max": item["synthesis_ms_max"],
-            })
-        return sorted(out, key=lambda row: (str(row["event"]), str(row["provider"]), str(row["voice"]), bool(row["cached"])))
+            out.append(
+                {
+                    "event": item["event"],
+                    "provider": item["provider"],
+                    "voice": item["voice"],
+                    "cached": item["cached"],
+                    "count": item["count"],
+                    "ok_count": item["ok_count"],
+                    "ready_ms_avg": int(item["ready_ms_total"] / count),
+                    "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
+                    "ready_ms_max": item["ready_ms_max"],
+                    "synthesis_ms_max": item["synthesis_ms_max"],
+                }
+            )
+        return sorted(
+            out, key=lambda row: (str(row["event"]), str(row["provider"]), str(row["voice"]), bool(row["cached"]))
+        )
 
     def document_summary(self, limit: int = 1000) -> list[dict]:
         rows = [row for row in self.recent(limit=limit) if str(row.get("event") or "") == "read"]
@@ -205,22 +209,24 @@ class VoiceMetricsStore:
         out = []
         for item in groups.values():
             count = max(1, int(item["count"]))
-            out.append({
-                "doc_id": item["doc_id"],
-                "title": item["title"],
-                "count": item["count"],
-                "ok_count": item["ok_count"],
-                "cache_count": item["cache_count"],
-                "cache_ratio": round(item["cache_count"] / count, 3),
-                "ready_ms_avg": int(item["ready_ms_total"] / count),
-                "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
-                "ready_ms_max": item["ready_ms_max"],
-                "synthesis_ms_max": item["synthesis_ms_max"],
-                "text_chars_avg": int(item["text_chars_total"] / count),
-                "total_chunks": item["total_chunks"],
-                "last_current": item["last_current"],
-                "last_ts": item["last_ts"],
-            })
+            out.append(
+                {
+                    "doc_id": item["doc_id"],
+                    "title": item["title"],
+                    "count": item["count"],
+                    "ok_count": item["ok_count"],
+                    "cache_count": item["cache_count"],
+                    "cache_ratio": round(item["cache_count"] / count, 3),
+                    "ready_ms_avg": int(item["ready_ms_total"] / count),
+                    "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
+                    "ready_ms_max": item["ready_ms_max"],
+                    "synthesis_ms_max": item["synthesis_ms_max"],
+                    "text_chars_avg": int(item["text_chars_total"] / count),
+                    "total_chunks": item["total_chunks"],
+                    "last_current": item["last_current"],
+                    "last_ts": item["last_ts"],
+                }
+            )
         return sorted(out, key=lambda row: float(row["last_ts"]), reverse=True)
 
     def chunk_summary(self, doc_id: str = "", limit: int = 1000, top: int = 20) -> list[dict]:
@@ -268,19 +274,23 @@ class VoiceMetricsStore:
         out = []
         for item in groups.values():
             count = max(1, int(item["count"]))
-            out.append({
-                "doc_id": item["doc_id"],
-                "title": item["title"],
-                "current": item["current"],
-                "total": item["total"],
-                "count": item["count"],
-                "ok_count": item["ok_count"],
-                "cache_count": item["cache_count"],
-                "ready_ms_avg": int(item["ready_ms_total"] / count),
-                "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
-                "ready_ms_max": item["ready_ms_max"],
-                "synthesis_ms_max": item["synthesis_ms_max"],
-                "text_chars": item["text_chars"],
-                "last_ts": item["last_ts"],
-            })
-        return sorted(out, key=lambda row: (int(row["ready_ms_max"]), int(row["synthesis_ms_max"])), reverse=True)[: max(0, int(top))]
+            out.append(
+                {
+                    "doc_id": item["doc_id"],
+                    "title": item["title"],
+                    "current": item["current"],
+                    "total": item["total"],
+                    "count": item["count"],
+                    "ok_count": item["ok_count"],
+                    "cache_count": item["cache_count"],
+                    "ready_ms_avg": int(item["ready_ms_total"] / count),
+                    "synthesis_ms_avg": int(item["synthesis_ms_total"] / count),
+                    "ready_ms_max": item["ready_ms_max"],
+                    "synthesis_ms_max": item["synthesis_ms_max"],
+                    "text_chars": item["text_chars"],
+                    "last_ts": item["last_ts"],
+                }
+            )
+        return sorted(out, key=lambda row: (int(row["ready_ms_max"]), int(row["synthesis_ms_max"])), reverse=True)[
+            : max(0, int(top))
+        ]

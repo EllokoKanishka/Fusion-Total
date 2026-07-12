@@ -25,14 +25,15 @@ PDF_SUFFIXES = {".pdf"}
 DOCX_SUFFIXES = {".docx"}
 ODT_SUFFIXES = {".odt", ".ott"}
 OFFICE_SUFFIXES = {".doc", ".docm", ".dot", ".dotx", ".odt", ".ott", ".sxw", ".pages"}
-SUPPORTED_SUFFIXES = TEXT_SUFFIXES | HTML_SUFFIXES | RTF_SUFFIXES | PDF_SUFFIXES | DOCX_SUFFIXES | ODT_SUFFIXES | OFFICE_SUFFIXES
+SUPPORTED_SUFFIXES = (
+    TEXT_SUFFIXES | HTML_SUFFIXES | RTF_SUFFIXES | PDF_SUFFIXES | DOCX_SUFFIXES | ODT_SUFFIXES | OFFICE_SUFFIXES
+)
 OCR_MIN_CONF = 45.0
 OCR_WORD_MIN_CONF = 35.0
 OCR_DPI = int(os.environ.get("FUSION_READER_OCR_DPI", "170"))
 OCR_WORKERS = max(1, int(os.environ.get("FUSION_READER_OCR_WORKERS", "4")))
 OCR_STOPWORDS = set(
-    "de la el en que y a los las un una se con no por para del al es me mi su lo como le mas más o si pero esta está fue ha he este nuestro señor"
-    .split()
+    "de la el en que y a los las un una se con no por para del al es me mi su lo como le mas más o si pero esta está fue ha he este nuestro señor".split()
 )
 OCR_SPACING_FIXES = {
     "L a": "La",
@@ -99,7 +100,9 @@ class ImportedDocument:
     raw_text: str = ""
 
 
-def report_progress(progress: ProgressCallback | None, stage: str, current: int = 0, total: int = 0, message: str = "") -> None:
+def report_progress(
+    progress: ProgressCallback | None, stage: str, current: int = 0, total: int = 0, message: str = ""
+) -> None:
     if not progress:
         return
     try:
@@ -108,7 +111,9 @@ def report_progress(progress: ProgressCallback | None, stage: str, current: int 
         return
 
 
-def import_document_bytes(filename: str, data: bytes, mime: str = "", progress: ProgressCallback | None = None) -> ImportedDocument:
+def import_document_bytes(
+    filename: str, data: bytes, mime: str = "", progress: ProgressCallback | None = None
+) -> ImportedDocument:
     with tempfile.TemporaryDirectory(prefix="fusion_import_bytes_") as tmp:
         safe_name = safe_filename(filename)
         path = Path(tmp) / safe_name
@@ -116,7 +121,9 @@ def import_document_bytes(filename: str, data: bytes, mime: str = "", progress: 
         return import_document_path(safe_name, path, mime=mime, progress=progress)
 
 
-def import_document_path(filename: str, path: Path | str, mime: str = "", progress: ProgressCallback | None = None) -> ImportedDocument:
+def import_document_path(
+    filename: str, path: Path | str, mime: str = "", progress: ProgressCallback | None = None
+) -> ImportedDocument:
     safe_name = safe_filename(filename)
     source = Path(path)
     suffix = Path(safe_name).suffix.lower()
@@ -133,7 +140,7 @@ def import_document_path(filename: str, path: Path | str, mime: str = "", progre
             data = source.read_bytes()
         return data
 
-    if suffix in TEXT_SUFFIXES or (not suffix and looks_like_text(data)):
+    if suffix in TEXT_SUFFIXES or (not suffix and looks_like_text(read_data())):
         report_progress(progress, "converting", 0, 0, "Leyendo texto directo...")
         text = decode_text(read_data())
         report_progress(progress, "converted", 1, 1, "Texto directo listo.")
@@ -274,7 +281,10 @@ def docx_to_text(data: bytes) -> str:
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-        parts = [node.text or "" for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")]
+        parts = [
+            node.text or ""
+            for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
+        ]
         line = "".join(parts).strip()
         if line:
             lines.append(line)
@@ -305,7 +315,9 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
     report_progress(progress, "pdf_text", 0, 0, "Buscando texto interno del PDF...")
     with tempfile.TemporaryDirectory(prefix="fusion_pdf_text_") as tmp:
         out = Path(tmp) / "document.txt"
-        result = subprocess.run([tool, "-layout", "-enc", "UTF-8", str(path), str(out)], capture_output=True, text=True, timeout=180)
+        result = subprocess.run(
+            [tool, "-layout", "-enc", "UTF-8", str(path), str(out)], capture_output=True, text=True, timeout=180
+        )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "pdftotext_failed").strip()
             raise ValueError(detail)
@@ -464,7 +476,7 @@ def clean_pdf_text(text: str) -> str:
     body = normalize_raw_text(text)
     if not body:
         return ""
-    body = re.sub(rf"(?<=\w)-\n(?=\w)", "", body)
+    body = re.sub(r"(?<=\w)-\n(?=\w)", "", body)
     lines = body.split("\n")
     paragraphs: list[str] = []
     current = ""
@@ -491,7 +503,10 @@ def clean_pdf_text(text: str) -> str:
             current = stripped
     if current:
         paragraphs.append(current.strip())
-    cleaned = "\n\n".join(_repair_split_words(paragraph) if not PDF_PAGE_MARKER_RE.fullmatch(paragraph) else paragraph for paragraph in paragraphs)
+    cleaned = "\n\n".join(
+        _repair_split_words(paragraph) if not PDF_PAGE_MARKER_RE.fullmatch(paragraph) else paragraph
+        for paragraph in paragraphs
+    )
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return normalize_text(cleaned)
 
@@ -532,7 +547,9 @@ def ocr_pdf_to_text(path: Path, progress: ProgressCallback | None = None) -> str
             report_progress(progress, "ocr", completed, pages, f"OCR página {completed} de {pages}.")
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="fusion-reader-ocr") as executor:
-            futures = [executor.submit(ocr_pdf_page_to_text, path, page, pdftoppm, tesseract) for page in range(1, pages + 1)]
+            futures = [
+                executor.submit(ocr_pdf_page_to_text, path, page, pdftoppm, tesseract) for page in range(1, pages + 1)
+            ]
             page_items = []
             for future in as_completed(futures):
                 page_items.append(future.result())
@@ -695,10 +712,7 @@ def postprocess_ocr_text(text: str) -> str:
 
 
 def stopword_ratio(text: str) -> float:
-    words = [
-        word.lower().strip(".,;:!?¡¿()[]\"“”‘’")
-        for word in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}", text)
-    ]
+    words = [word.lower().strip('.,;:!?¡¿()[]"“”‘’') for word in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}", text)]
     if not words:
         return 0.0
     return sum(word in OCR_STOPWORDS for word in words) / len(words)
@@ -728,11 +742,18 @@ def ocr_lines_from_tsv(tsv: str) -> list[dict]:
         if not keep_ocr_word(text):
             continue
         try:
-            key = (int(row.get("block_num") or 0), int(row.get("par_num") or 0), int(row.get("line_num") or 0), int(row.get("top") or 0))
+            key = (
+                int(row.get("block_num") or 0),
+                int(row.get("par_num") or 0),
+                int(row.get("line_num") or 0),
+                int(row.get("top") or 0),
+            )
             left = int(row.get("left") or 0)
         except ValueError:
             continue
-        item = groups.setdefault(key, {"block": key[0], "par": key[1], "line": key[2], "top": key[3], "words": [], "confs": []})
+        item = groups.setdefault(
+            key, {"block": key[0], "par": key[1], "line": key[2], "top": key[3], "words": [], "confs": []}
+        )
         item["words"].append((left, text))
         item["confs"].append(conf)
 
@@ -743,13 +764,15 @@ def ocr_lines_from_tsv(tsv: str) -> list[dict]:
         if not text:
             continue
         confs = item["confs"]
-        out.append({
-            "block": item["block"],
-            "par": item["par"],
-            "line": item["line"],
-            "text": text,
-            "conf": sum(confs) / max(1, len(confs)),
-        })
+        out.append(
+            {
+                "block": item["block"],
+                "par": item["par"],
+                "line": item["line"],
+                "text": text,
+                "conf": sum(confs) / max(1, len(confs)),
+            }
+        )
     return out
 
 

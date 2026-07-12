@@ -1,6 +1,5 @@
 import unittest
 import time
-import os
 import tempfile
 from pathlib import Path
 from concurrent.futures import Future
@@ -11,9 +10,9 @@ from tests.helpers import (
     NullTTSProvider,
     FailingTTSProvider,
     make_reading_document,
-    make_reading_sections,
     manual_document,
 )
+
 
 class ReaderTests(unittest.TestCase):
     def test_split_text_packs_short_paragraphs_into_page_sized_chunks(self):
@@ -201,9 +200,7 @@ class ReaderTests(unittest.TestCase):
         app.prefetch_wait_seconds = 0.001
         app.load_text("doc", "Doc", "Uno.", prefetch=False)
         stale = Future()
-        key = app._prefetch_key(
-            app._document_generation, 0, "Uno.", app.voice.voice, app.voice.language
-        )
+        key = app._prefetch_key(app._document_generation, 0, "Uno.", app.voice.voice, app.voice.language)
         with app._prefetch_lock:
             app._prefetch_futures[key] = stale
             app._prefetch_index = 0

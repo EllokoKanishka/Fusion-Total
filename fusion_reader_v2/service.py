@@ -28,10 +28,11 @@ from .reader import Document, ReaderSession
 from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider
 from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
-from .services.notes import LABORATORY_NOTES_DOC_ID, LABORATORY_NOTES_TITLE, NotesService
+from .services.notes import NotesService
 from .services.audio_export import AudioExportService
 from .services.persistence import AtomicJSONStore
 from .services.session_persistence import SessionPersistenceService
+
 
 @dataclass
 class VoiceSettings:
@@ -68,10 +69,22 @@ class FusionReaderV2:
         self.stt = stt or default_stt_provider()
         self.notes = notes or ReaderNotesStore()
         self.prefetch_wait_seconds = prefetch_wait_seconds
-        self.prefetch_ahead = max(0, int(prefetch_ahead if prefetch_ahead is not None else os.environ.get("FUSION_READER_PREFETCH_AHEAD", "3")))
-        self.prefetch_workers = max(1, int(prefetch_workers if prefetch_workers is not None else os.environ.get("FUSION_READER_PREFETCH_WORKERS", "1")))
+        self.prefetch_ahead = max(
+            0,
+            int(prefetch_ahead if prefetch_ahead is not None else os.environ.get("FUSION_READER_PREFETCH_AHEAD", "3")),
+        )
+        self.prefetch_workers = max(
+            1,
+            int(
+                prefetch_workers
+                if prefetch_workers is not None
+                else os.environ.get("FUSION_READER_PREFETCH_WORKERS", "1")
+            ),
+        )
         self.tts_segment_chars = max(240, int(os.environ.get("FUSION_READER_TTS_SEGMENT_CHARS", "900")))
-        self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts"
+        )
         self._prefetch_executors: list[ThreadPoolExecutor] = [self._executor]
         self._prefetch_lock = threading.Lock()
         self._prefetch_futures: dict[tuple, Future[AudioArtifact]] = {}
@@ -118,13 +131,26 @@ class FusionReaderV2:
         self._dialogue_lock = threading.Lock()
         self._dialogue_history: list[dict] = []
         self.dialogue_tts_max_chars = int(os.environ.get("FUSION_READER_DIALOGUE_TTS_MAX_CHARS", "520"))
-        self.fast_note_ack = os.environ.get("FUSION_READER_FAST_NOTE_ACK", "0").strip().lower() not in {"0", "false", "no"}
-        self.fast_dialogue_ack = os.environ.get("FUSION_READER_FAST_DIALOGUE_ACK", "0").strip().lower() not in {"0", "false", "no"}
+        self.fast_note_ack = os.environ.get("FUSION_READER_FAST_NOTE_ACK", "0").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        self.fast_dialogue_ack = os.environ.get("FUSION_READER_FAST_DIALOGUE_ACK", "0").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
         self._reference_documents: dict[str, dict] = {}
         self._laboratory_focus: dict = {}
         self._main_source_path = ""
         self._main_source_type = ""
-        self.dialogue_allow_supreme = os.environ.get("FUSION_READER_DIALOGUE_ALLOW_SUPREME", "0").strip().lower() in {"1", "true", "yes", "on"}
+        self.dialogue_allow_supreme = os.environ.get("FUSION_READER_DIALOGUE_ALLOW_SUPREME", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.reasoning_mode = str(getattr(self.conversation, "default_reasoning_mode", "thinking") or "thinking")
         self.laboratory_mode = "document"
         self.profile = "academica"
@@ -138,8 +164,12 @@ class FusionReaderV2:
         self._persistence_service = SessionPersistenceService(self)
         self._lifecycle_service = BackgroundLifecycleService(self)
         self._notes_service = NotesService(self)
-        self.dialogue_trace_path = (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
-        self.audio_export_root = (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
+        self.dialogue_trace_path = (
+            (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
+        )
+        self.audio_export_root = (
+            (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
+        )
         self._restore_session_state()
         if self.session.document:
             self._document_generation = max(1, self._document_generation)
@@ -284,11 +314,57 @@ class FusionReaderV2:
 
     def _meaningful_search_terms(self, text: str) -> list[str]:
         stopwords = {
-            "a", "al", "alguna", "alguno", "andá", "anda", "andar", "bloque", "busca", "buscá", "buscar",
-            "chunk", "con", "consulta", "de", "del", "dice", "donde", "dónde", "documento", "el", "en", "esa", "ese",
-            "esta", "este", "exactamente", "habla", "ir", "la", "las", "lo", "los", "main", "muestra", "mostrame", "muéstrame",
-            "para", "parte", "por", "principal", "que", "qué", "quiero", "sección", "seccion", "sobre", "texto", "ver",
-            "vamos", "y",
+            "a",
+            "al",
+            "alguna",
+            "alguno",
+            "andá",
+            "anda",
+            "andar",
+            "bloque",
+            "busca",
+            "buscá",
+            "buscar",
+            "chunk",
+            "con",
+            "consulta",
+            "de",
+            "del",
+            "dice",
+            "donde",
+            "dónde",
+            "documento",
+            "el",
+            "en",
+            "esa",
+            "ese",
+            "esta",
+            "este",
+            "exactamente",
+            "habla",
+            "ir",
+            "la",
+            "las",
+            "lo",
+            "los",
+            "main",
+            "muestra",
+            "mostrame",
+            "muéstrame",
+            "para",
+            "parte",
+            "por",
+            "principal",
+            "que",
+            "qué",
+            "quiero",
+            "sección",
+            "seccion",
+            "sobre",
+            "texto",
+            "ver",
+            "vamos",
+            "y",
         }
         tokens = re.findall(r"[a-záéíóúñ0-9_./-]{3,}", self._normalize_search_text(text))
         out: list[str] = []
@@ -361,9 +437,13 @@ class FusionReaderV2:
             "revisa",
             "revisa",
         )
-        if any(clean.startswith(verb + " ") for verb in leading_verbs) and any(marker in clean for marker in academic_markers):
+        if any(clean.startswith(verb + " ") for verb in leading_verbs) and any(
+            marker in clean for marker in academic_markers
+        ):
             return True
-        if ("trae" in clean or "busca" in clean or "investiga" in clean) and ("fuentes" in clean or "tesis" in clean or "papers" in clean or "articulos" in clean):
+        if ("trae" in clean or "busca" in clean or "investiga" in clean) and (
+            "fuentes" in clean or "tesis" in clean or "papers" in clean or "articulos" in clean
+        ):
             return True
         return False
 
@@ -444,7 +524,8 @@ class FusionReaderV2:
         return None
 
     def _set_laboratory_focus(self, record: dict, chunk_index: int, query: str = "", reason: str = "") -> dict:
-        chunks = record.get("chunks") if isinstance(record.get("chunks"), list) else []
+        chunks_value = record.get("chunks")
+        chunks = chunks_value if isinstance(chunks_value, list) else []
         if chunk_index < 0 or chunk_index >= len(chunks):
             raise IndexError("chunk_out_of_bounds")
         item = chunks[chunk_index]
@@ -545,7 +626,9 @@ class FusionReaderV2:
         clean_doc_id = str(doc_id or "").strip()
         if main_doc and clean_doc_id and clean_doc_id == main_doc.doc_id:
             return {"ok": False, "error": "reference_matches_main_document"}
-        record = self._document_record(clean_doc_id or title, title, text, source_path=source_path, source_type=source_type)
+        record = self._document_record(
+            clean_doc_id or title, title, text, source_path=source_path, source_type=source_type
+        )
         self._reference_documents[record["doc_id"]] = record
         self._persist_session_state()
         return {
@@ -569,7 +652,12 @@ class FusionReaderV2:
         if str(self._laboratory_focus.get("doc_id") or "") == str(removed.get("doc_id") or ""):
             self._laboratory_focus = {}
         self._persist_session_state()
-        return {"ok": True, "removed": True, "reference": self._public_document_record(removed), "items": self._reference_document_items()}
+        return {
+            "ok": True,
+            "removed": True,
+            "reference": self._public_document_record(removed),
+            "items": self._reference_document_items(),
+        }
 
     def promote_reference_document(self, doc_id: str, prefetch: bool = True) -> dict:
         selected_id = str(doc_id or "")
@@ -578,7 +666,11 @@ class FusionReaderV2:
             return {"ok": False, "error": "reference_not_found"}
         previous_main = self._main_document_record()
         self._begin_document_lifecycle()
-        status = self.session.load(Document.from_text(str(record.get("doc_id") or ""), str(record.get("title") or ""), str(record.get("text") or "")))
+        status = self.session.load(
+            Document.from_text(
+                str(record.get("doc_id") or ""), str(record.get("title") or ""), str(record.get("text") or "")
+            )
+        )
         self._main_source_path = str(record.get("source_path") or "")
         self._main_source_type = str(record.get("source_type") or "text")
         if previous_main and previous_main["doc_id"] != status.get("doc_id"):
@@ -597,7 +689,11 @@ class FusionReaderV2:
         provider = getattr(self.conversation, "provider", None)
         if provider is None:
             return {"ok": False, "provider": "unknown", "detail": "chat_provider_missing"}
-        health = provider.health() if hasattr(provider, "health") else {"ok": False, "provider": getattr(provider, "name", "unknown"), "detail": "chat_health_missing"}
+        health = (
+            provider.health()
+            if hasattr(provider, "health")
+            else {"ok": False, "provider": getattr(provider, "name", "unknown"), "detail": "chat_health_missing"}
+        )
         out = dict(health or {})
         out.setdefault("provider", getattr(provider, "name", "unknown"))
         out.setdefault("model", getattr(provider, "default_model", "") or "")
@@ -627,20 +723,22 @@ class FusionReaderV2:
             out["agent"] = str(getattr(bridge, "agent") or "")
         if hasattr(bridge, "searxng"):
             out["mode"] = "auto"
+            searxng = getattr(bridge, "searxng")
             try:
                 out["searxng"] = {
-                    "provider": str(getattr(bridge.searxng, "name", "searxng") or "searxng"),
-                    "ok": bool(bridge.searxng.available()),
-                    "url": str(getattr(bridge.searxng, "base_url", "") or ""),
+                    "provider": str(getattr(searxng, "name", "searxng") or "searxng"),
+                    "ok": bool(searxng.available()),
+                    "url": str(getattr(searxng, "base_url", "") or ""),
                 }
             except Exception as exc:
                 out["searxng"] = {"provider": "searxng", "ok": False, "detail": str(exc)}
+            openclaw = getattr(bridge, "openclaw")
             try:
                 out["openclaw"] = {
-                    "provider": str(getattr(bridge.openclaw, "name", "openclaw_bridge") or "openclaw_bridge"),
-                    "ok": bool(bridge.openclaw.available()),
-                    "agent": str(getattr(bridge.openclaw, "agent", "") or ""),
-                    "command": str(getattr(bridge.openclaw, "command", "") or ""),
+                    "provider": str(getattr(openclaw, "name", "openclaw_bridge") or "openclaw_bridge"),
+                    "ok": bool(openclaw.available()),
+                    "agent": str(getattr(openclaw, "agent", "") or ""),
+                    "command": str(getattr(openclaw, "command", "") or ""),
                 }
             except Exception as exc:
                 out["openclaw"] = {"provider": "openclaw_bridge", "ok": False, "detail": str(exc)}
@@ -685,7 +783,6 @@ class FusionReaderV2:
 
     def _human_dialogue_error(self, detail: str, *, stage: str, provider: str = "") -> str:
         clean_detail = str(detail or "").strip()
-        clean_provider = str(provider or "").strip()
         if stage == "stt":
             if clean_detail in {"empty_transcript", "empty_audio"}:
                 return "No alcancé a escuchar una frase completa. Repetímela un poco más cerca o un poco más lento."
@@ -694,7 +791,9 @@ class FusionReaderV2:
             return "No pude entender bien el audio que llegó a Dialogar. Probemos otra vez con una frase más clara."
         if stage == "chat":
             if clean_detail == "empty_answer":
-                return "Me quedé sin respuesta útil del modelo local. Repetímelo en una frase corta y vuelvo a intentarlo."
+                return (
+                    "Me quedé sin respuesta útil del modelo local. Repetímelo en una frase corta y vuelvo a intentarlo."
+                )
             if "http_" in clean_detail or "Connection refused" in clean_detail or "timed out" in clean_detail:
                 return "El modelo local de diálogo no respondió a tiempo desde Fusion. La lectura sigue sana; probemos otra vez en unos segundos."
             return "Se cayó el diálogo local justo cuando estaba respondiendo. La lectura sigue sana; si querés, repetímelo y lo intento de nuevo."
@@ -798,9 +897,13 @@ class FusionReaderV2:
         with self._prefetch_lock:
             out["prefetch_index"] = self._prefetch_index
             out["prefetch_done"] = bool(self._prefetch_future and self._prefetch_future.done())
-            out["prefetch_age_ms"] = int((time.time() - self._prefetch_started_ts) * 1000) if self._prefetch_started_ts else 0
+            out["prefetch_age_ms"] = (
+                int((time.time() - self._prefetch_started_ts) * 1000) if self._prefetch_started_ts else 0
+            )
             out["prefetch_indexes"] = sorted({self._prefetch_index_from_key(key) for key in self._prefetch_futures})
-            out["prefetch_done_indexes"] = sorted({self._prefetch_index_from_key(key) for key, future in self._prefetch_futures.items() if future.done()})
+            out["prefetch_done_indexes"] = sorted(
+                {self._prefetch_index_from_key(key) for key, future in self._prefetch_futures.items() if future.done()}
+            )
             out["prefetch_ahead"] = self.prefetch_ahead
         out["document_generation"] = self._document_generation
         current_text = self.session.current_chunk()
@@ -810,7 +913,11 @@ class FusionReaderV2:
         out["audio_cached"] = cached_audio
         tts_health = dict(out.get("tts") or {})
         detail = str(tts_health.get("detail") or "").lower()
-        out["tts_state"] = "ready" if tts_health.get("ok") else ("starting" if "start" in detail or "loading" in detail else "temporarily_unavailable")
+        out["tts_state"] = (
+            "ready"
+            if tts_health.get("ok")
+            else ("starting" if "start" in detail or "loading" in detail else "temporarily_unavailable")
+        )
         out["prepare"] = self.prepare_status()
         out["audio_export"] = self.audio_export_overview()
         out["notes"] = self.notes_summary()
@@ -819,7 +926,9 @@ class FusionReaderV2:
     def _synthesize_cached(self, text: str) -> AudioArtifact:
         return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language)
 
-    def _synthesize_cached_with_settings(self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None) -> AudioArtifact:
+    def _synthesize_cached_with_settings(
+        self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None
+    ) -> AudioArtifact:
         if not self._begin_tts_operation():
             return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
         tts_locked = False
@@ -832,7 +941,9 @@ class FusionReaderV2:
                     if not self._background_work_is_open():
                         return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
                     with self._tts_gate:
-                        should_wait = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                        should_wait = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(
+                            prefetch_key
+                        )
                         if should_wait:
                             self._tts_gate.wait(timeout=0.1)
                     if should_wait:
@@ -842,7 +953,9 @@ class FusionReaderV2:
                     self._tts_lock.acquire()
                     tts_locked = True
                     with self._tts_gate:
-                        should_retry = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                        should_retry = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(
+                            prefetch_key
+                        )
                     if not should_retry:
                         break
                     self._tts_lock.release()
@@ -1026,7 +1139,9 @@ class FusionReaderV2:
                 existing = self._prefetch_futures.get(key)
                 if existing and not existing.done():
                     return
-                future = self._executor.submit(self._synthesize_cached_with_settings, text, voice, language, prefetch_key=key)
+                future = self._executor.submit(
+                    self._synthesize_cached_with_settings, text, voice, language, prefetch_key=key
+                )
                 self._prefetch_futures[key] = future
                 self._prefetch_started[key] = time.time()
                 self._set_primary_prefetch_locked()
@@ -1046,7 +1161,10 @@ class FusionReaderV2:
             self._prefetch_started_ts = None
             return
         current = self.session.cursor
-        key = min(self._prefetch_futures, key=lambda item: (abs(self._prefetch_index_from_key(item) - current), self._prefetch_index_from_key(item)))
+        key = min(
+            self._prefetch_futures,
+            key=lambda item: (abs(self._prefetch_index_from_key(item) - current), self._prefetch_index_from_key(item)),
+        )
         self._prefetch_index = self._prefetch_index_from_key(key)
         self._prefetch_future = self._prefetch_futures[key]
         self._prefetch_started_ts = self._prefetch_started.get(key)
@@ -1080,14 +1198,29 @@ class FusionReaderV2:
                 self._tts_gate.notify_all()
         ready_ms = int((time.perf_counter() - started) * 1000)
         current = self.session.document
-        stale = generation != self._document_generation or not current or current.doc_id != doc_id or self.session.cursor != index or self.session.current_chunk() != text or self.voice.voice != voice or self.voice.language != language
+        stale = (
+            generation != self._document_generation
+            or not current
+            or current.doc_id != doc_id
+            or self.session.cursor != index
+            or self.session.current_chunk() != text
+            or self.voice.voice != voice
+            or self.voice.language != language
+        )
         if stale:
             return {
-                **self.session.status(), "ok": False, "stale": True, "cancelled": True,
-                "detail": "audio_identity_changed", "error": "Lectura cancelada porque cambió el documento, el bloque o la voz.",
-                "document_generation": generation, "requested_doc_id": doc_id,
-                "requested_chunk_index": index, "read_request_id": request_id,
-                "ready_ms": ready_ms, "audio_state": "cancelled",
+                **self.session.status(),
+                "ok": False,
+                "stale": True,
+                "cancelled": True,
+                "detail": "audio_identity_changed",
+                "error": "Lectura cancelada porque cambió el documento, el bloque o la voz.",
+                "document_generation": generation,
+                "requested_doc_id": doc_id,
+                "requested_chunk_index": index,
+                "read_request_id": request_id,
+                "ready_ms": ready_ms,
+                "audio_state": "cancelled",
             }
         if play and artifact.ok:
             self._play(artifact.path)
@@ -1191,7 +1324,9 @@ class FusionReaderV2:
         with self._prepare_lock:
             return dict(self._prepare_status)
 
-    def _prepare_worker(self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event) -> None:
+    def _prepare_worker(
+        self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event
+    ) -> None:
         document = self.session.document
         if not document or document.doc_id != doc_id or document_generation != self._document_generation:
             self._finish_prepare("error", "El documento activo cambió antes de preparar audio.", generation=generation)
@@ -1220,11 +1355,33 @@ class FusionReaderV2:
         cached = generated = failed = processed = 0
         for index in order:
             if cancel_event.is_set():
-                self._finish_prepare("canceled", "Preparación cancelada.", processed, total, cached, generated, failed, generation=generation)
+                self._finish_prepare(
+                    "canceled",
+                    "Preparación cancelada.",
+                    processed,
+                    total,
+                    cached,
+                    generated,
+                    failed,
+                    generation=generation,
+                )
                 return
             current_document = self.session.document
-            if not current_document or current_document.doc_id != doc_id or document_generation != self._document_generation:
-                self._finish_prepare("canceled", "Preparación detenida porque cambió el documento.", processed, total, cached, generated, failed, generation=generation)
+            if (
+                not current_document
+                or current_document.doc_id != doc_id
+                or document_generation != self._document_generation
+            ):
+                self._finish_prepare(
+                    "canceled",
+                    "Preparación detenida porque cambió el documento.",
+                    processed,
+                    total,
+                    cached,
+                    generated,
+                    failed,
+                    generation=generation,
+                )
                 return
             text = current_document.chunks[index]
             if self.cache.get(text, voice, language):
@@ -1261,7 +1418,16 @@ class FusionReaderV2:
                 generation=generation,
             )
             return
-        self._finish_prepare("done", "Documento preparado para lectura.", processed, total, cached, generated, failed, generation=generation)
+        self._finish_prepare(
+            "done",
+            "Documento preparado para lectura.",
+            processed,
+            total,
+            cached,
+            generated,
+            failed,
+            generation=generation,
+        )
 
     def _reset_prepare_for_new_document(self) -> None:
         old_cancel = self._prepare_cancel
@@ -1309,7 +1475,9 @@ class FusionReaderV2:
             return "No pude preparar el audio porque la voz no está disponible en este momento."
         return "No pude leer este bloque porque la voz no está disponible en este momento."
 
-    def _update_prepare_status(self, current: int, total: int, cached: int, generated: int, failed: int, generation: int) -> None:
+    def _update_prepare_status(
+        self, current: int, total: int, cached: int, generated: int, failed: int, generation: int
+    ) -> None:
         with self._prepare_lock:
             if generation != self._prepare_generation:
                 return
@@ -1351,7 +1519,11 @@ class FusionReaderV2:
             if failed is not None:
                 self._prepare_status["failed"] = failed
             total_count = int(self._prepare_status.get("total") or 0)
-            done_count = int(self._prepare_status.get("cached") or 0) + int(self._prepare_status.get("generated") or 0) + int(self._prepare_status.get("failed") or 0)
+            done_count = (
+                int(self._prepare_status.get("cached") or 0)
+                + int(self._prepare_status.get("generated") or 0)
+                + int(self._prepare_status.get("failed") or 0)
+            )
             self._prepare_status["status"] = status
             self._prepare_status["percent"] = int(done_count * 100 / total_count) if total_count else 0
             self._prepare_status["message"] = message
@@ -1364,7 +1536,9 @@ class FusionReaderV2:
     def audio_export_status(self, job_id: str) -> dict:
         return self._audio_export_service.status(job_id)
 
-    def start_audio_export(self, mode: str, block: int | None = None, start: int | None = None, end: int | None = None) -> dict:
+    def start_audio_export(
+        self, mode: str, block: int | None = None, start: int | None = None, end: int | None = None
+    ) -> dict:
         return self._audio_export_service.start(mode, block, start, end)
 
     def cancel_audio_export(self, job_id: str) -> dict:
@@ -1441,7 +1615,9 @@ class FusionReaderV2:
                 "notes": [],
                 "main_document": {},
                 "document_chunks": [],
-                "reference_documents": [self._snapshot_document_record(item) for item in self._reference_documents.values()],
+                "reference_documents": [
+                    self._snapshot_document_record(item) for item in self._reference_documents.values()
+                ],
                 "laboratory_focus": self.laboratory_focus_status(),
                 "laboratory_mode": self.laboratory_mode_status(),
             }
@@ -1463,7 +1639,9 @@ class FusionReaderV2:
                 }
                 for index, chunk in enumerate(chunks)
             ],
-            "reference_documents": [self._snapshot_document_record(item) for item in self._reference_documents.values()],
+            "reference_documents": [
+                self._snapshot_document_record(item) for item in self._reference_documents.values()
+            ],
             "laboratory_focus": self.laboratory_focus_status(),
             "laboratory_mode": self.laboratory_mode_status(),
         }
@@ -1630,13 +1808,15 @@ class FusionReaderV2:
         if dialogue:
             parts = [
                 f"Comparé {left['title']} bloque {left['chunk_number']} con {right['title']} bloque {right['chunk_number']}.",
-                f"Coinciden en {', '.join(overlap[:3])}." if overlap else "No comparten vocabulario fuerte en esta muestra.",
+                f"Coinciden en {', '.join(overlap[:3])}."
+                if overlap
+                else "No comparten vocabulario fuerte en esta muestra.",
                 f"El primero dice: {left_excerpt}",
                 f"El segundo dice: {right_excerpt}",
             ]
             return " ".join(parts)
         lines = [
-            f"Comparación:",
+            "Comparación:",
             f"- {left['title']} | bloque {left['chunk_number']} de {left['total']}: {left_excerpt}",
             f"- {right['title']} | bloque {right['chunk_number']} de {right['total']}: {right_excerpt}",
             f"Coincidencias: {', '.join(overlap) if overlap else 'no encontré coincidencias léxicas fuertes en esta muestra.'}",
@@ -1776,7 +1956,8 @@ class FusionReaderV2:
                     "error": "document_not_found",
                 }
             chunk_number = int(plan.get("focus_chunk_number") or 0)
-            chunks = selected.get("chunks") if isinstance(selected.get("chunks"), list) else []
+            chunks_value = selected.get("chunks")
+            chunks = chunks_value if isinstance(chunks_value, list) else []
             if chunk_number < 1 or chunk_number > len(chunks):
                 return {
                     "ok": False,
@@ -1838,7 +2019,9 @@ class FusionReaderV2:
                     "error": "",
                     "matches": [],
                 }
-            focus_record = self._resolve_document_record(matches[0].get("doc_id") or "") or self._resolve_document_record(matches[0].get("title") or "")
+            focus_record = self._resolve_document_record(
+                matches[0].get("doc_id") or ""
+            ) or self._resolve_document_record(matches[0].get("title") or "")
             if not focus_record:
                 return {
                     "ok": False,
@@ -1883,7 +2066,9 @@ class FusionReaderV2:
         started = time.perf_counter()
         note_text = self._extract_note_command(message)
         if note_text:
-            if self._should_create_laboratory_note(message) or self._should_route_generic_note_to_laboratory(message, note_text):
+            if self._should_create_laboratory_note(message) or self._should_route_generic_note_to_laboratory(
+                message, note_text
+            ):
                 created = self.create_laboratory_note(note_text)
             else:
                 selected_chunk = self._resolve_note_chunk_index(chunk_index)
@@ -1946,7 +2131,7 @@ class FusionReaderV2:
             history = list(self._chat_history)
         selected_model = model
         if not selected_model and self.profile == "bohemia":
-            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL")
+            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
         result = self.conversation.ask(
             message,
             snapshot=snapshot,
@@ -2132,20 +2317,76 @@ class FusionReaderV2:
     def veil_catalog(self) -> list[dict]:
         return [
             {"mode": "lucy", "label": "Lucy", "description": ""},
-            {"mode": "nocturna", "label": "Nocturna", "description": "Hablá como en una conversación de madrugada: más cerca, más lenta, con sombra, sin volverlo clase."},
-            {"mode": "critica", "label": "Crítica", "description": "No cuides demasiado al lector. Buscá la tensión real, el punto débil y lo que la idea intenta evitar."},
-            {"mode": "sombra", "label": "Sombra", "description": "Buscá el deseo, miedo o autoengaño íntimo que sostiene esta idea por debajo."},
-            {"mode": "confesional", "label": "Confesional", "description": "Permitite hablar desde vos como Lucy cuando eso aclare la conversación, pero no te vuelvas protagonista."},
-            {"mode": "taller", "label": "Taller", "description": "Pensá con el lector, no para él. Ayudalo a fabricar una idea mejor."},
-            {"mode": "debate", "label": "Debate", "description": "No des una respuesta complaciente. Discutí y objetá; si hace falta, cerrá con una pregunta real, no automática."},
-            {"mode": "evocadora", "label": "Evocadora", "description": "No hagas poesía decorativa. Usá una imagen precisa para pensar mejor, y volvé enseguida al nervio conceptual."},
-            {"mode": "directa", "label": "Directa", "description": "Respondé seco y frontal. Una idea central, sin adornos, sin rodeos y sin suavizar lo importante."},
-            {"mode": "incomoda", "label": "Incómoda", "description": "No busques consuelo. Mostrá lo que esta idea no quiere aceptar de sí misma."},
-            {"mode": "rigurosa", "label": "Rigurosa", "description": "Ordená el argumento, separá conceptos y marcá qué no está sostenido."},
-            {"mode": "intima", "label": "Íntima", "description": "Acercá la conversación. Respondé como alguien que piensa al lado del lector, sin convertirlo en clase ni confesión teatral."},
-            {"mode": "bar_filosofico", "label": "Bar filosófico", "description": "Hablalo como una discusión inteligente de madrugada: ironía lúcida, cercanía y filo. Cerrá con una frase que deje resonancia, no necesariamente con pregunta."},
-            {"mode": "desarme", "label": "Desarme", "description": "Desarmá la frase como mecanismo: qué afirma, qué oculta, qué seduce y qué no se sostiene."},
-            {"mode": "pregunta_viva", "label": "Pregunta viva", "description": "No termines en moraleja. Cerrá con una pregunta que deje la idea abierta."},
+            {
+                "mode": "nocturna",
+                "label": "Nocturna",
+                "description": "Hablá como en una conversación de madrugada: más cerca, más lenta, con sombra, sin volverlo clase.",
+            },
+            {
+                "mode": "critica",
+                "label": "Crítica",
+                "description": "No cuides demasiado al lector. Buscá la tensión real, el punto débil y lo que la idea intenta evitar.",
+            },
+            {
+                "mode": "sombra",
+                "label": "Sombra",
+                "description": "Buscá el deseo, miedo o autoengaño íntimo que sostiene esta idea por debajo.",
+            },
+            {
+                "mode": "confesional",
+                "label": "Confesional",
+                "description": "Permitite hablar desde vos como Lucy cuando eso aclare la conversación, pero no te vuelvas protagonista.",
+            },
+            {
+                "mode": "taller",
+                "label": "Taller",
+                "description": "Pensá con el lector, no para él. Ayudalo a fabricar una idea mejor.",
+            },
+            {
+                "mode": "debate",
+                "label": "Debate",
+                "description": "No des una respuesta complaciente. Discutí y objetá; si hace falta, cerrá con una pregunta real, no automática.",
+            },
+            {
+                "mode": "evocadora",
+                "label": "Evocadora",
+                "description": "No hagas poesía decorativa. Usá una imagen precisa para pensar mejor, y volvé enseguida al nervio conceptual.",
+            },
+            {
+                "mode": "directa",
+                "label": "Directa",
+                "description": "Respondé seco y frontal. Una idea central, sin adornos, sin rodeos y sin suavizar lo importante.",
+            },
+            {
+                "mode": "incomoda",
+                "label": "Incómoda",
+                "description": "No busques consuelo. Mostrá lo que esta idea no quiere aceptar de sí misma.",
+            },
+            {
+                "mode": "rigurosa",
+                "label": "Rigurosa",
+                "description": "Ordená el argumento, separá conceptos y marcá qué no está sostenido.",
+            },
+            {
+                "mode": "intima",
+                "label": "Íntima",
+                "description": "Acercá la conversación. Respondé como alguien que piensa al lado del lector, sin convertirlo en clase ni confesión teatral.",
+            },
+            {
+                "mode": "bar_filosofico",
+                "label": "Bar filosófico",
+                "description": "Hablalo como una discusión inteligente de madrugada: ironía lúcida, cercanía y filo. Cerrá con una frase que deje resonancia, no necesariamente con pregunta.",
+            },
+            {
+                "mode": "desarme",
+                "label": "Desarme",
+                "description": "Desarmá la frase como mecanismo: qué afirma, qué oculta, qué seduce y qué no se sostiene.",
+            },
+            {
+                "mode": "pregunta_viva",
+                "label": "Pregunta viva",
+                "description": "No termines en moraleja. Cerrá con una pregunta que deje la idea abierta.",
+            },
         ]
 
     def clear_document(self) -> dict:
@@ -2157,10 +2398,12 @@ class FusionReaderV2:
         self._main_source_path = ""
         self._main_source_type = ""
         self._persist_session_state()
-        self._append_dialogue_trace({
-            "ts": time.time(),
-            "event": "document_cleared",
-        })
+        self._append_dialogue_trace(
+            {
+                "ts": time.time(),
+                "event": "document_cleared",
+            }
+        )
         return self.status()
 
     def veil_status(self) -> dict:
@@ -2180,11 +2423,13 @@ class FusionReaderV2:
         item = next((v for v in catalog if v["mode"] == mode), catalog[0])
         self.veil = item["mode"]
         self._persist_session_state()
-        self._append_dialogue_trace({
-            "ts": time.time(),
-            "event": "veil_changed",
-            "selected_mode": self.veil,
-        })
+        self._append_dialogue_trace(
+            {
+                "ts": time.time(),
+                "event": "veil_changed",
+                "selected_mode": self.veil,
+            }
+        )
         return self.veil_status()
 
     def dialogue_reset(self) -> dict:
@@ -2223,20 +2468,27 @@ class FusionReaderV2:
                 "stt_ms": 0,
                 "chat_ms": 0,
                 "tts_ms": 0,
-                "trace": {"intent_ms": int((time.perf_counter() - started) * 1000), "server_text_total_ms": int((time.perf_counter() - started) * 1000)},
+                "trace": {
+                    "intent_ms": int((time.perf_counter() - started) * 1000),
+                    "server_text_total_ms": int((time.perf_counter() - started) * 1000),
+                },
                 "duration_ms": int((time.perf_counter() - started) * 1000),
                 "voice_ok": True,
                 "reasoning_mode_requested": reasoning["requested"],
                 "reasoning_mode_applied": reasoning["applied"],
                 "reasoning_degraded": reasoning["degraded"],
             }
-            self._append_dialogue_trace({**trace_event, "ok": True, "detail": "dialogue_stopped", "duration_ms": out["duration_ms"]})
+            self._append_dialogue_trace(
+                {**trace_event, "ok": True, "detail": "dialogue_stopped", "duration_ms": out["duration_ms"]}
+            )
             return out
         note_text = self._extract_note_command(text)
         intent_ms = int((time.perf_counter() - started) * 1000)
         if note_text:
             note_started = time.perf_counter()
-            if self._should_create_laboratory_note(text) or self._should_route_generic_note_to_laboratory(text, note_text):
+            if self._should_create_laboratory_note(text) or self._should_route_generic_note_to_laboratory(
+                text, note_text
+            ):
                 created = self.create_laboratory_note(note_text)
             else:
                 selected_chunk = self._resolve_note_chunk_index(chunk_index)
@@ -2250,13 +2502,19 @@ class FusionReaderV2:
                     "model": "reader_notes",
                     "detail": created.get("error") or "note_failed",
                     "chat_ms": 0,
-                    "trace": {"intent_ms": intent_ms, "note_ms": note_ms, "server_text_total_ms": int((time.perf_counter() - started) * 1000)},
+                    "trace": {
+                        "intent_ms": intent_ms,
+                        "note_ms": note_ms,
+                        "server_text_total_ms": int((time.perf_counter() - started) * 1000),
+                    },
                     "duration_ms": int((time.perf_counter() - started) * 1000),
                     "reasoning_mode_requested": reasoning["requested"],
                     "reasoning_mode_applied": reasoning["applied"],
                     "reasoning_degraded": reasoning["degraded"],
                 }
-                self._append_dialogue_trace({**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]})
+                self._append_dialogue_trace(
+                    {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
+                )
                 return out
             note = created["note"]
             spoken_answer = self._note_saved_answer(note, spoken=True)
@@ -2339,7 +2597,15 @@ class FusionReaderV2:
                 "reasoning_mode_applied": reasoning["applied"],
                 "reasoning_degraded": reasoning["degraded"],
             }
-            self._append_dialogue_trace({**trace_event, "ok": True, "detail": "missing_note_text", "tts_ok": bool(artifact.ok), "duration_ms": out["duration_ms"]})
+            self._append_dialogue_trace(
+                {
+                    **trace_event,
+                    "ok": True,
+                    "detail": "missing_note_text",
+                    "tts_ok": bool(artifact.ok),
+                    "duration_ms": out["duration_ms"],
+                }
+            )
             return out
         comparison = self._handle_compare_intent(text, dialogue=True)
         if comparison is not None:
@@ -2357,7 +2623,9 @@ class FusionReaderV2:
                     "reasoning_mode_applied": reasoning["applied"],
                     "reasoning_degraded": reasoning["degraded"],
                 }
-                self._append_dialogue_trace({**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]})
+                self._append_dialogue_trace(
+                    {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
+                )
                 return out
             if self.fast_dialogue_ack:
                 artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
@@ -2395,13 +2663,23 @@ class FusionReaderV2:
                 "reasoning_mode_applied": reasoning["applied"],
                 "reasoning_degraded": reasoning["degraded"],
             }
-            self._append_dialogue_trace({**trace_event, "ok": True, "detail": str(out.get("detail") or ""), "tts_ok": bool(artifact.ok), "duration_ms": out["duration_ms"]})
+            self._append_dialogue_trace(
+                {
+                    **trace_event,
+                    "ok": True,
+                    "detail": str(out.get("detail") or ""),
+                    "tts_ok": bool(artifact.ok),
+                    "duration_ms": out["duration_ms"],
+                }
+            )
             return out
         if self._looks_like_external_research_request(text):
             research_started = time.perf_counter()
-            result = self._run_external_research(text)
-            research_ms = result.duration_ms or int((time.perf_counter() - research_started) * 1000)
-            spoken_answer = self._shorten_dialogue_answer(str(result.spoken_answer or result.answer or "").strip())
+            external_result = self._run_external_research(text)
+            research_ms = external_result.duration_ms or int((time.perf_counter() - research_started) * 1000)
+            spoken_answer = self._shorten_dialogue_answer(
+                str(external_result.spoken_answer or external_result.answer or "").strip()
+            )
             if self.fast_dialogue_ack:
                 artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
                 tts_ms = 0
@@ -2409,20 +2687,27 @@ class FusionReaderV2:
                 tts_started = time.perf_counter()
                 artifact = self._synthesize_cached(spoken_answer)
                 tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-            if result.ok and str(result.answer or "").strip():
+            if external_result.ok and str(external_result.answer or "").strip():
                 with self._dialogue_lock:
                     self._dialogue_history.append({"role": "user", "content": text})
-                    self._dialogue_history.append({"role": "assistant", "content": str(result.answer or "").strip()})
+                    self._dialogue_history.append(
+                        {"role": "assistant", "content": str(external_result.answer or "").strip()}
+                    )
                     self._dialogue_history = self._dialogue_history[-16:]
             out = {
                 "ok": True,
                 "transcript": text,
-                "answer": str(result.answer or "").strip() or self._human_dialogue_error(str(result.detail or ""), stage="external", provider=str(result.provider or "")),
+                "answer": str(external_result.answer or "").strip()
+                or self._human_dialogue_error(
+                    str(external_result.detail or ""),
+                    stage="external",
+                    provider=str(external_result.provider or ""),
+                ),
                 "audio": str(artifact.path or ""),
                 "cached": artifact.cached,
                 "provider": artifact.provider,
-                "detail": result.detail or artifact.detail,
-                "model": result.model or "openclaw_bridge",
+                "detail": external_result.detail or artifact.detail,
+                "model": external_result.model or "openclaw_bridge",
                 "stt_ms": 0,
                 "chat_ms": research_ms,
                 "tts_ms": tts_ms,
@@ -2440,24 +2725,32 @@ class FusionReaderV2:
                 "reasoning_mode_applied": reasoning["applied"],
                 "reasoning_degraded": reasoning["degraded"],
                 "external_research": True,
-                "external_query": result.query or text,
-                "external_summary": result.summary,
-                "external_findings": list(result.findings),
-                "external_sources": list(result.sources),
-                "voice_ok": artifact.ok,
+                "external_query": external_result.query or text,
+                "external_summary": external_result.summary,
+                "external_findings": list(external_result.findings),
+                "external_sources": list(external_result.sources),
                 "audio_available": bool(artifact.ok and artifact.path),
-                "human_error": "" if result.ok else (str(result.answer or "").strip() or self._human_dialogue_error(str(result.detail or ""), stage="external", provider=str(result.provider or ""))),
+                "human_error": ""
+                if external_result.ok
+                else (
+                    str(external_result.answer or "").strip()
+                    or self._human_dialogue_error(
+                        str(external_result.detail or ""),
+                        stage="external",
+                        provider=str(external_result.provider or ""),
+                    )
+                ),
             }
             self._append_dialogue_trace(
                 {
                     **trace_event,
-                    "ok": bool(result.ok),
+                    "ok": bool(external_result.ok),
                     "detail": str(out.get("detail") or ""),
                     "human_error": str(out.get("human_error") or ""),
                     "external_research": True,
-                    "external_provider": str(result.provider or ""),
-                    "external_model": str(result.model or ""),
-                    "chat_provider": str(result.provider or ""),
+                    "external_provider": str(external_result.provider or ""),
+                    "external_model": str(external_result.model or ""),
+                    "chat_provider": str(external_result.provider or ""),
                     "tts_provider": str(artifact.provider or ""),
                     "external_ms": research_ms,
                     "tts_ok": bool(artifact.ok),
@@ -2485,7 +2778,9 @@ class FusionReaderV2:
                         "reasoning_mode_applied": reasoning["applied"],
                         "reasoning_degraded": reasoning["degraded"],
                     }
-                    self._append_dialogue_trace({**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]})
+                    self._append_dialogue_trace(
+                        {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
+                    )
                     return out
                 if self.fast_dialogue_ack:
                     artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
@@ -2523,7 +2818,15 @@ class FusionReaderV2:
                     "reasoning_mode_applied": reasoning["applied"],
                     "reasoning_degraded": reasoning["degraded"],
                 }
-                self._append_dialogue_trace({**trace_event, "ok": True, "detail": str(out.get("detail") or ""), "tts_ok": bool(artifact.ok), "duration_ms": out["duration_ms"]})
+                self._append_dialogue_trace(
+                    {
+                        **trace_event,
+                        "ok": True,
+                        "detail": str(out.get("detail") or ""),
+                        "tts_ok": bool(artifact.ok),
+                        "duration_ms": out["duration_ms"],
+                    }
+                )
                 return out
         snapshot = self.reader_snapshot()
         with self._chat_lock:
@@ -2533,24 +2836,32 @@ class FusionReaderV2:
         chat_started = time.perf_counter()
         selected_model = model
         if not selected_model and self.profile == "bohemia":
-            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL")
-        result = self.conversation.ask_dialogue(text, snapshot=snapshot, history=history, model=selected_model, reasoning_mode=reasoning["applied"], profile=self.profile, veil=self.veil)
-        chat_ms = result.duration_ms or int((time.perf_counter() - chat_started) * 1000)
-        if not result.ok:
+            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
+        chat_result = self.conversation.ask_dialogue(
+            text,
+            snapshot=snapshot,
+            history=history,
+            model=selected_model,
+            reasoning_mode=reasoning["applied"],
+            profile=self.profile,
+            veil=self.veil,
+        )
+        chat_ms = chat_result.duration_ms or int((time.perf_counter() - chat_started) * 1000)
+        if not chat_result.ok:
             out = self._finalize_dialogue_failure(
                 started=started,
                 transcript=text,
                 answer="",
-                detail=str(result.detail or "dialogue_failed"),
-                model=result.model or "ollama",
+                detail=str(chat_result.detail or "dialogue_failed"),
+                model=chat_result.model or "ollama",
                 provider="ollama",
                 stage="chat",
                 chat_ms=chat_ms,
                 reasoning=reasoning,
                 trace_extra={"intent_ms": intent_ms},
             )
-            out["reasoning_mode"] = result.reasoning_mode or reasoning["applied"]
-            out["reasoning_passes"] = result.reasoning_passes or 1
+            out["reasoning_mode"] = chat_result.reasoning_mode or reasoning["applied"]
+            out["reasoning_passes"] = chat_result.reasoning_passes or 1
             self._append_dialogue_trace(
                 {
                     **trace_event,
@@ -2567,7 +2878,7 @@ class FusionReaderV2:
                 }
             )
             return out
-        spoken_answer = self._shorten_dialogue_answer(result.answer)
+        spoken_answer = self._shorten_dialogue_answer(chat_result.answer)
         if self.fast_dialogue_ack:
             artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
             tts_ms = 0
@@ -2587,13 +2898,13 @@ class FusionReaderV2:
             "audio": str(artifact.path or ""),
             "cached": artifact.cached,
             "provider": artifact.provider,
-            "detail": artifact.detail or result.detail,
-            "model": result.model,
+            "detail": artifact.detail or chat_result.detail,
+            "model": chat_result.model,
             "stt_ms": 0,
             "chat_ms": chat_ms,
             "tts_ms": tts_ms,
-            "reasoning_mode": result.reasoning_mode or reasoning["applied"],
-            "reasoning_passes": result.reasoning_passes or 1,
+            "reasoning_mode": chat_result.reasoning_mode or reasoning["applied"],
+            "reasoning_passes": chat_result.reasoning_passes or 1,
             "reasoning_mode_requested": reasoning["requested"],
             "reasoning_mode_applied": reasoning["applied"],
             "reasoning_degraded": reasoning["degraded"],
@@ -2625,7 +2936,14 @@ class FusionReaderV2:
         )
         return out
 
-    def dialogue_turn_audio(self, path: str | Path, mime: str = "", model: str = "", chunk_index: int | None = None, audio_meta: dict | None = None) -> dict:
+    def dialogue_turn_audio(
+        self,
+        path: str | Path,
+        mime: str = "",
+        model: str = "",
+        chunk_index: int | None = None,
+        audio_meta: dict | None = None,
+    ) -> dict:
         self._prioritize_dialogue()
         started = time.perf_counter()
         audio_path = Path(path)
@@ -2700,7 +3018,9 @@ class FusionReaderV2:
                 )
                 return out
             if transcript.detail in {"empty_transcript", "empty_audio"}:
-                spoken_answer = "No alcancé a escuchar una frase completa. Repetímela un poco más cerca o un poco más lento."
+                spoken_answer = (
+                    "No alcancé a escuchar una frase completa. Repetímela un poco más cerca o un poco más lento."
+                )
                 if self.fast_dialogue_ack:
                     artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
                     tts_ms = 0
@@ -2792,8 +3112,10 @@ class FusionReaderV2:
         text_turn_ms = int((time.perf_counter() - after_stt) * 1000)
         out["stt_provider"] = transcript.provider
         out["stt_ms"] = transcript.duration_ms
+        trace_value = out.get("trace")
+        existing_trace = trace_value if isinstance(trace_value, dict) else {}
         out["trace"] = {
-            **(out.get("trace") if isinstance(out.get("trace"), dict) else {}),
+            **existing_trace,
             **audio_trace,
             "stt_ms": transcript.duration_ms,
             "stt_wall_ms": stt_elapsed_ms,
@@ -2935,7 +3257,7 @@ class FusionReaderV2:
         suffix_target = r"(?:eso|esto|lo\s+anterior|esta\s+frase|esta\s+idea|lo\s+que\s+dije|lo\s+que\s+te\s+dije)"
         suffix_patterns = [
             rf"^(.{{8,}}?)\s+(?:{save_verbs}|anota|anot[áa]|anotar|anotame|an[óo]tame)\s+{suffix_target}\s+(?:en|como)\s+(?:una\s+)?notas?\s*[.!?]*$",
-            rf"^(.{{8,}}?)\s+(?:gu[áa]rdalo|guardalo|gu[áa]rdala|guardala|an[óo]talo|anotalo|an[óo]tala|anotala)\s+(?:en|como)\s+(?:una\s+)?notas?\s*[.!?]*$",
+            r"^(.{8,}?)\s+(?:gu[áa]rdalo|guardalo|gu[áa]rdala|guardala|an[óo]talo|anotalo|an[óo]tala|anotala)\s+(?:en|como)\s+(?:una\s+)?notas?\s*[.!?]*$",
             rf"^(.{{8,}}?)\s+(?:{save_verbs}|anota|anot[áa]|anotar)\s+{suffix_target}\s*[.!?]*$",
         ]
         for pattern in suffix_patterns:
@@ -3006,17 +3328,39 @@ class FusionReaderV2:
         if not clean:
             return False
         has_note_word = re.search(r"\bnotas?\b|\bapuntes?\b", clean, flags=re.IGNORECASE)
-        has_note_action = re.search(r"\b(?:tomar|toma|tom[áa]|tomad|tome|tomes|guardar|guarda|guard[áa]|guarde|guardes|guardalo|guard[áa]lo|guardala|guard[áa]la|anotar|anota|anot[áa]|pon|pon[eé]|poneme|hac[eé]|haceme|haz|hazme|crea|cre[áa]|agrega|agreg[áa]|suma|sum[áa]|deja|dej[áa]|dejar|dejame|d[eé]jame)\b", clean, flags=re.IGNORECASE)
-        has_save_clause = re.search(r"\b(?:quiero|necesito|quisiera|me\s+gustar[ií]a)\s+que\s+guardes\b", clean, flags=re.IGNORECASE)
-        has_suffix_reference = re.search(r"\b(?:guarda|guard[áa]|guardar|guarde|guardes|anota|anot[áa]|anotar)\s+(?:eso|esto|lo\s+anterior|esta\s+frase|esta\s+idea)\s+(?:en|como)\s+(?:una\s+)?notas?\b", clean, flags=re.IGNORECASE)
-        has_followup_save = re.search(r"^\s*(?:y\s+|adem[áa]s\s+|tambi[ée]n\s+)*(?:guarda|guard[áa]|guardar|guarde|guardes|gu[áa]rdame|guardame)\s+(?:tambi[ée]n\s+|adem[áa]s\s+)?.{6,}$", clean, flags=re.IGNORECASE)
-        return bool((has_note_word and (has_note_action or has_save_clause)) or has_suffix_reference or has_followup_save)
+        has_note_action = re.search(
+            r"\b(?:tomar|toma|tom[áa]|tomad|tome|tomes|guardar|guarda|guard[áa]|guarde|guardes|guardalo|guard[áa]lo|guardala|guard[áa]la|anotar|anota|anot[áa]|pon|pon[eé]|poneme|hac[eé]|haceme|haz|hazme|crea|cre[áa]|agrega|agreg[áa]|suma|sum[áa]|deja|dej[áa]|dejar|dejame|d[eé]jame)\b",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        has_save_clause = re.search(
+            r"\b(?:quiero|necesito|quisiera|me\s+gustar[ií]a)\s+que\s+guardes\b", clean, flags=re.IGNORECASE
+        )
+        has_suffix_reference = re.search(
+            r"\b(?:guarda|guard[áa]|guardar|guarde|guardes|anota|anot[áa]|anotar)\s+(?:eso|esto|lo\s+anterior|esta\s+frase|esta\s+idea)\s+(?:en|como)\s+(?:una\s+)?notas?\b",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        has_followup_save = re.search(
+            r"^\s*(?:y\s+|adem[áa]s\s+|tambi[ée]n\s+)*(?:guarda|guard[áa]|guardar|guarde|guardes|gu[áa]rdame|guardame)\s+(?:tambi[ée]n\s+|adem[áa]s\s+)?.{6,}$",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        return bool(
+            (has_note_word and (has_note_action or has_save_clause)) or has_suffix_reference or has_followup_save
+        )
 
     def _is_stop_dialogue_command(self, text: str) -> bool:
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).strip(" .,:;-!?").lower()
         if not clean:
             return False
-        return bool(re.fullmatch(r"(?:det[eé]nte|detente|par[áa]|para|stop|basta|callate|c[áa]llate|silencio|no\s+hables|esper[áa]|espera)(?:\s+por\s+favor)?", clean, flags=re.IGNORECASE))
+        return bool(
+            re.fullmatch(
+                r"(?:det[eé]nte|detente|par[áa]|para|stop|basta|callate|c[áa]llate|silencio|no\s+hables|esper[áa]|espera)(?:\s+por\s+favor)?",
+                clean,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def _clean_note_text(self, text: str) -> str:
         note = str(text or "").strip(" .,:;-¿?¡!")
@@ -3060,7 +3404,11 @@ class FusionReaderV2:
     def _play(self, path: Path | None) -> None:
         if not path:
             return
-        for cmd in (["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)], ["paplay", str(path)], ["aplay", str(path)]):
+        for cmd in (
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)],
+            ["paplay", str(path)],
+            ["aplay", str(path)],
+        ):
             try:
                 subprocess.run(cmd, check=False, timeout=300)
                 return

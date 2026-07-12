@@ -1,7 +1,5 @@
 import unittest
 import tempfile
-import json
-import os
 from pathlib import Path
 from fusion_reader_v2 import ConversationCore, NullChatProvider
 from fusion_reader_v2.metrics import VoiceMetric, VoiceMetricsStore
@@ -11,6 +9,7 @@ from tests.helpers import (
 )
 from tests.helpers import web_source
 
+
 class NotesMetricsTests(unittest.TestCase):
     def test_notes_are_persisted_to_json_file(self):
         root = Path(tempfile.mkdtemp())
@@ -19,7 +18,7 @@ class NotesMetricsTests(unittest.TestCase):
         app.create_note("Nota de prueba", 0)
         notes_file = root / "notes" / "doc1.json"
         self.assertTrue(notes_file.exists())
-        
+
     def test_notes_can_be_filtered_by_document(self):
         app = test_app()
         app.load_text("doc1", "D1", "C1", prefetch=False)
@@ -28,7 +27,6 @@ class NotesMetricsTests(unittest.TestCase):
         app.create_note("N2", 0)
         self.assertEqual(len(app.list_notes(doc_id="doc1")["items"]), 1)
         self.assertEqual(app.list_notes(doc_id="doc1")["items"][0]["text"], "N1")
-
 
     def test_notes_include_timestamp(self):
         app = test_app()

@@ -26,6 +26,7 @@ class TranscriptResult:
 
 class STTProvider:
     name = "base"
+    requested_provider = "auto"
 
     def health(self) -> dict:
         return {"ok": False, "provider": self.name, "detail": "not_implemented"}
@@ -84,7 +85,9 @@ class NullSTTProvider(STTProvider):
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         started = time.perf_counter()
         self.calls.append((Path(path), mime, language))
-        return TranscriptResult(True, text=self.text, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000))
+        return TranscriptResult(
+            True, text=self.text, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+        )
 
 
 class WhisperCliSTTProvider(STTProvider):
@@ -139,17 +142,37 @@ class WhisperCliSTTProvider(STTProvider):
             try:
                 proc = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=self.timeout_seconds)
             except subprocess.TimeoutExpired:
-                return TranscriptResult(False, provider=self.name, detail="timeout", duration_ms=int((time.perf_counter() - started) * 1000))
+                return TranscriptResult(
+                    False, provider=self.name, detail="timeout", duration_ms=int((time.perf_counter() - started) * 1000)
+                )
             if proc.returncode != 0:
                 detail = (proc.stderr or proc.stdout or "whisper_failed").strip().splitlines()
-                return TranscriptResult(False, provider=self.name, detail=(detail[-1] if detail else "whisper_failed"), duration_ms=int((time.perf_counter() - started) * 1000))
+                return TranscriptResult(
+                    False,
+                    provider=self.name,
+                    detail=(detail[-1] if detail else "whisper_failed"),
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
             transcript = self._read_transcript(out_dir, source)
         transcript = self._clean_text(transcript)
         if not transcript:
-            return TranscriptResult(False, provider=self.name, detail="empty_transcript", duration_ms=int((time.perf_counter() - started) * 1000))
+            return TranscriptResult(
+                False,
+                provider=self.name,
+                detail="empty_transcript",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
         if is_hallucinated_transcript(transcript):
-            return TranscriptResult(False, text=transcript, provider=self.name, detail="hallucinated_transcript", duration_ms=int((time.perf_counter() - started) * 1000))
-        return TranscriptResult(True, text=transcript, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000))
+            return TranscriptResult(
+                False,
+                text=transcript,
+                provider=self.name,
+                detail="hallucinated_transcript",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
+        return TranscriptResult(
+            True, text=transcript, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+        )
 
     def _read_transcript(self, out_dir: Path, source: Path) -> str:
         expected = out_dir / f"{source.stem}.txt"
@@ -194,9 +217,16 @@ class FasterWhisperServerSTTProvider(STTProvider):
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 data = _json_response(resp.read())
         except urllib.error.HTTPError as exc:
-            return TranscriptResult(False, provider=self.name, detail=f"http_{exc.code}", duration_ms=int((time.perf_counter() - started) * 1000))
+            return TranscriptResult(
+                False,
+                provider=self.name,
+                detail=f"http_{exc.code}",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
         except Exception as exc:
-            return TranscriptResult(False, provider=self.name, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000))
+            return TranscriptResult(
+                False, provider=self.name, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
+            )
         if not bool(data.get("ok")):
             return TranscriptResult(
                 False,
@@ -204,15 +234,30 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 provider=self.name,
                 detail=str(data.get("error") or data.get("detail") or "stt_server_failed"),
                 duration_ms=int(data.get("duration_ms") or ((time.perf_counter() - started) * 1000)),
-                timings={key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data},
+                timings={
+                    key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data
+                },
             )
         transcript = str(data.get("text") or "").strip()
         timings = {key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data}
         duration_ms = int(data.get("duration_ms") or ((time.perf_counter() - started) * 1000))
         if not transcript:
-            return TranscriptResult(False, provider=str(data.get("provider") or self.name), detail="empty_transcript", duration_ms=duration_ms, timings=timings)
+            return TranscriptResult(
+                False,
+                provider=str(data.get("provider") or self.name),
+                detail="empty_transcript",
+                duration_ms=duration_ms,
+                timings=timings,
+            )
         if is_hallucinated_transcript(transcript):
-            return TranscriptResult(False, text=transcript, provider=str(data.get("provider") or self.name), detail="hallucinated_transcript", duration_ms=duration_ms, timings=timings)
+            return TranscriptResult(
+                False,
+                text=transcript,
+                provider=str(data.get("provider") or self.name),
+                detail="hallucinated_transcript",
+                duration_ms=duration_ms,
+                timings=timings,
+            )
         return TranscriptResult(
             True,
             text=transcript,
@@ -249,6 +294,7 @@ class AutoSTTProvider(STTProvider):
 
 def default_stt_provider() -> STTProvider:
     selected = normalize_stt_provider(os.environ.get("FUSION_READER_STT_PROVIDER", "auto"))
+    provider: STTProvider
     if selected == "cli":
         provider = WhisperCliSTTProvider()
     elif selected == "server":

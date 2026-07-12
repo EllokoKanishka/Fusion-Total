@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest import mock
 
 from fusion_reader_v2 import (
-    AudioArtifact,
     AudioCache,
     AllTalkProvider,
     AutoExternalResearchBridge,
@@ -28,11 +27,8 @@ from fusion_reader_v2 import (
     OllamaChatProvider,
     OpenClawResearchBridge,
     SearxngResearchBridge,
-    STTProvider,
-    TranscriptResult,
     VoiceMetricsStore,
     WhisperCliSTTProvider,
-    ReaderNotesStore,
     import_document_bytes,
     split_text,
 )
@@ -71,7 +67,9 @@ def make_simple_pdf_bytes(lines: list[str]) -> bytes:
     objects: list[bytes] = []
     objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
     objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>")
+    objects.append(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+    )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     objects.append(f"<< /Length {len(content)} >>\nstream\n".encode("latin-1") + content + b"\nendstream")
 
@@ -88,10 +86,7 @@ def make_simple_pdf_bytes(lines: list[str]) -> bytes:
     for offset in offsets[1:]:
         out.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
     out.extend(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref_pos}\n%%EOF\n"
-        ).encode("latin-1")
+        (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n").encode("latin-1")
     )
     return bytes(out)
 
@@ -149,7 +144,9 @@ class FusionReaderV2Tests(unittest.TestCase):
                 }
             ]
         }
-        with mock.patch("fusion_reader_v2.local_web_bridge.urlopen", return_value=FakeUrlOpenResponse(json.dumps(payload))):
+        with mock.patch(
+            "fusion_reader_v2.local_web_bridge.urlopen", return_value=FakeUrlOpenResponse(json.dumps(payload))
+        ):
             result = bridge.research("busca en internet eros en platon")
         self.assertTrue(result.ok)
         self.assertEqual(result.provider, "searxng")
@@ -162,7 +159,9 @@ class FusionReaderV2Tests(unittest.TestCase):
 
     def test_searxng_bridge_handles_no_results(self):
         bridge = SearxngResearchBridge(base_url="http://127.0.0.1:8080", timeout_seconds=2)
-        with mock.patch("fusion_reader_v2.local_web_bridge.urlopen", return_value=FakeUrlOpenResponse(json.dumps({"results": []}))):
+        with mock.patch(
+            "fusion_reader_v2.local_web_bridge.urlopen", return_value=FakeUrlOpenResponse(json.dumps({"results": []}))
+        ):
             result = bridge.research("busca papers imposibles")
         self.assertFalse(result.ok)
         self.assertEqual(result.detail, "searxng_no_results")
@@ -275,7 +274,13 @@ class FusionReaderV2Tests(unittest.TestCase):
                                 "query": "Fedro en El banquete",
                                 "summary": "Encontré una tesis relevante.",
                                 "findings": ["Una tesis doctoral lo presenta como apertura elogiosa del eros."],
-                                "sources": [{"title": "Universidad X", "url": "https://ejemplo.test/tesis", "note": "tesis doctoral"}],
+                                "sources": [
+                                    {
+                                        "title": "Universidad X",
+                                        "url": "https://ejemplo.test/tesis",
+                                        "note": "tesis doctoral",
+                                    }
+                                ],
                                 "suggested_followup": "",
                                 "error": "",
                             }
@@ -284,7 +289,10 @@ class FusionReaderV2Tests(unittest.TestCase):
                 ],
             },
         }
-        with mock.patch("fusion_reader_v2.openclaw_bridge.subprocess.run") as run, mock.patch("fusion_reader_v2.openclaw_bridge.time.sleep") as sleep:
+        with (
+            mock.patch("fusion_reader_v2.openclaw_bridge.subprocess.run") as run,
+            mock.patch("fusion_reader_v2.openclaw_bridge.time.sleep") as sleep,
+        ):
             run.side_effect = [
                 subprocess.CompletedProcess(["openclaw"], 0, stdout=json.dumps(restart_payload), stderr=""),
                 subprocess.CompletedProcess(["openclaw"], 0, stdout=json.dumps(success_payload), stderr=""),
@@ -514,8 +522,9 @@ class FusionReaderV2Tests(unittest.TestCase):
                 os.environ["FUSION_READER_CPU_TTS_PORT"] = "7851"
                 os.environ["FUSION_READER_REQUIRE_TTS_OWNER"] = "1"
                 os.environ["FUSION_READER_TTS_OWNER_FILE"] = str(owner_file)
-                with mock.patch.object(AllTalkProvider, "_gpu_service_ready", return_value=True), mock.patch.object(
-                    AllTalkProvider, "_owner_guard", return_value=(True, "")
+                with (
+                    mock.patch.object(AllTalkProvider, "_gpu_service_ready", return_value=True),
+                    mock.patch.object(AllTalkProvider, "_owner_guard", return_value=(True, "")),
                 ):
                     provider = AllTalkProvider()
                 self.assertEqual(provider.base_url, "http://127.0.0.1:7853")
@@ -539,8 +548,9 @@ class FusionReaderV2Tests(unittest.TestCase):
             os.environ["FUSION_READER_GPU_TTS_PORT"] = "7853"
             os.environ["FUSION_READER_CPU_TTS_PORT"] = "7851"
             os.environ["FUSION_READER_REQUIRE_TTS_OWNER"] = "1"
-            with mock.patch.object(AllTalkProvider, "_gpu_service_ready", return_value=False), mock.patch.object(
-                AllTalkProvider, "_owner_guard", return_value=(False, "tts_owner_missing")
+            with (
+                mock.patch.object(AllTalkProvider, "_gpu_service_ready", return_value=False),
+                mock.patch.object(AllTalkProvider, "_owner_guard", return_value=(False, "tts_owner_missing")),
             ):
                 provider = AllTalkProvider()
             self.assertEqual(provider.base_url, "http://127.0.0.1:7851")
@@ -606,13 +616,13 @@ class FusionReaderV2Tests(unittest.TestCase):
     def legacy_fusion_launcher_waits_for_owned_gpu_tts_before_cpu_fallback(self):
         root = Path(__file__).resolve().parents[1]
         text = (root / "scripts" / "start_fusion_reader_v2.sh").read_text(encoding="utf-8")
-        self.assertIn('FUSION_READER_GPU_TTS_WAIT_SECONDS', text)
-        self.assertIn('fusion_gpu_ready()', text)
-        self.assertIn('while (( $(date +%s) < gpu_wait_deadline )); do', text)
-        self.assertIn('sleep 1', text)
-        self.assertIn('owner valido', text)
-        self.assertIn('Fusion TTS URL selected:', text)
-        self.assertIn('Fusion TTS fallback selected:', text)
+        self.assertIn("FUSION_READER_GPU_TTS_WAIT_SECONDS", text)
+        self.assertIn("fusion_gpu_ready()", text)
+        self.assertIn("while (( $(date +%s) < gpu_wait_deadline )); do", text)
+        self.assertIn("sleep 1", text)
+        self.assertIn("owner valido", text)
+        self.assertIn("Fusion TTS URL selected:", text)
+        self.assertIn("Fusion TTS fallback selected:", text)
         self.assertNotIn("127.0.0.1:7852", text)
 
     def legacy_fusion_launcher_has_persistent_log_and_pid_lifecycle(self):
@@ -620,12 +630,12 @@ class FusionReaderV2Tests(unittest.TestCase):
         text = (root / "scripts" / "start_fusion_reader_v2.sh").read_text(encoding="utf-8")
         self.assertIn('RUNTIME_DIR="${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}"', text)
         self.assertIn('LOG_DIR="${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}"', text)
-        self.assertIn('fusion_reader_v2_server.log', text)
-        self.assertIn('fusion_reader_v2.pid', text)
-        self.assertIn('API/UI port: ${PORT}', text)
+        self.assertIn("fusion_reader_v2_server.log", text)
+        self.assertIn("fusion_reader_v2.pid", text)
+        self.assertIn("API/UI port: ${PORT}", text)
         self.assertIn('if [[ -n "$existing_pid" ]]; then', text)
         self.assertIn('curl -fsS --max-time 2 "$startup_status_url"', text)
-        self.assertIn('Fusion Reader v2 health OK', text)
+        self.assertIn("Fusion Reader v2 health OK", text)
 
     def test_server_ui_surfaces_tts_gpu_and_cpu_fallback_modes(self):
         text = web_source()
@@ -673,13 +683,19 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertIn("function resetReaderViewport()", server)
         self.assertIn("document.querySelector('.reader')", server)
         self.assertIn("reader.scrollTop = 0;", server)
-        self.assertIn("const didChangeViewport = nextDocId !== lastRenderedDocId || nextBlockIndex !== lastRenderedBlockIndex || header.chunk !== lastRenderedBlockText;", server)
+        self.assertIn(
+            "const didChangeViewport = nextDocId !== lastRenderedDocId || nextBlockIndex !== lastRenderedBlockIndex || header.chunk !== lastRenderedBlockText;",
+            server,
+        )
         self.assertIn("if (didChangeViewport) {", server)
         self.assertIn("resetReaderViewport();", server)
 
     def test_server_ui_reader_layout_starts_chunks_from_top(self):
         server = web_source()
-        self.assertIn(".reader {\n  overflow: auto;\n  padding: 24px clamp(26px, 3vw, 42px) 14px;\n  display: flex;\n  justify-content: center;\n  align-items: stretch;", server)
+        self.assertIn(
+            ".reader {\n  overflow: auto;\n  padding: 24px clamp(26px, 3vw, 42px) 14px;\n  display: flex;\n  justify-content: center;\n  align-items: stretch;",
+            server,
+        )
         chunk_start = server.index(".chunk {")
         chunk_end = server.index(".chunk.empty {", chunk_start)
         chunk_css = server[chunk_start:chunk_end]
@@ -695,8 +711,14 @@ class FusionReaderV2Tests(unittest.TestCase):
         header_end = server.index("function dialogueAppliedReasoningLabel(data) {", header_start)
         header_logic = server[header_start:header_end]
         self.assertIn("const loaded = Boolean(item.loaded);", header_logic)
-        self.assertIn("const documentActive = Boolean(loaded || usesDocument || (title && (current > 0 || total > 0 || hasChunkText)));", header_logic)
-        self.assertIn("const documentAvailable = Boolean(anchor.document_available !== undefined ? anchor.document_available : documentActive);", header_logic)
+        self.assertIn(
+            "const documentActive = Boolean(loaded || usesDocument || (title && (current > 0 || total > 0 || hasChunkText)));",
+            header_logic,
+        )
+        self.assertIn(
+            "const documentAvailable = Boolean(anchor.document_available !== undefined ? anchor.document_available : documentActive);",
+            header_logic,
+        )
         self.assertIn("if (documentActive && title) {", header_logic)
         self.assertIn("Documento — ${title}", header_logic)
         self.assertIn("Modo libre", header_logic)
@@ -755,7 +777,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertIn("async function microphonePermissionState()", server)
         self.assertIn("Permiso de micrófono pendiente. Aprobalo en el navegador para empezar a escuchar.", server)
         self.assertIn("El micrófono está bloqueado en el navegador. Permitilo para usar Dialogar.", server)
-        self.assertIn("El micrófono está bloqueado o fue rechazado. Permitilo en el navegador y volvé a intentar.", server)
+        self.assertIn(
+            "El micrófono está bloqueado o fue rechazado. Permitilo en el navegador y volvé a intentar.", server
+        )
 
     def legacy_dialogue_audio_trace_keeps_microphone_diagnostics(self):
         app = test_app(stt=EmptyTranscriptSTTProvider())
@@ -978,7 +1002,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertEqual(status["state"], "done")
         self.assertGreater(len(provider.calls), 2)
         self.assertTrue(any(len(call[0]) <= 120 for call in provider.calls[1:]))
-        app.cache.root.joinpath(app.cache.key(long_text, app.voice.voice, app.voice.language) + ".wav").unlink(missing_ok=True)
+        app.cache.root.joinpath(app.cache.key(long_text, app.voice.voice, app.voice.language) + ".wav").unlink(
+            missing_ok=True
+        )
         provider.calls.clear()
         out = app.read_current(play=False)
         self.assertTrue(out["ok"])
@@ -1302,7 +1328,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         for call in chat_provider.calls:
             msgs = call[0]
             for m in msgs:
-                if m["role"] == "system" and ("Auditor" in m["content"] or "Critico" in m["content"] or "Antitesis" in m["content"]):
+                if m["role"] == "system" and (
+                    "Auditor" in m["content"] or "Critico" in m["content"] or "Antitesis" in m["content"]
+                ):
                     found_auditor = True
                     break
         self.assertTrue(found_auditor, "No se encontró el rol de Auditor/Crítico en las llamadas al provider")
@@ -1332,7 +1360,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertTrue(out["reasoning_degraded"])
         # Verificar vía dialogue_status que la razón es correcta
         status = app.dialogue_status()
-        self.assertEqual(status["dialogue_reasoning"]["degraded_reason"], "dialogue_pensamiento_critico_degraded_to_thinking")
+        self.assertEqual(
+            status["dialogue_reasoning"]["degraded_reason"], "dialogue_pensamiento_critico_degraded_to_thinking"
+        )
 
     def test_server_ui_contains_pensamiento_critico_button(self):
         text = web_source()
@@ -1515,7 +1545,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app.jump(2)
         app.create_note("Segunda nota")
         reopened = test_app(root=root)
-        self.assertEqual([item["text"] for item in reopened.list_notes(doc_id="doc")["items"]], ["Primera nota", "Segunda nota"])
+        self.assertEqual(
+            [item["text"] for item in reopened.list_notes(doc_id="doc")["items"]], ["Primera nota", "Segunda nota"]
+        )
         current_notes = app.list_notes(current_only=True)["items"]
         self.assertEqual(len(current_notes), 1)
         self.assertEqual(current_notes[0]["text"], "Segunda nota")
@@ -1663,7 +1695,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
         app.load_text("doc", "Doc", "Bloque visible.", prefetch=False)
-        out = app.chat("Hola, ¿puedes tomar notas en notas del documento que vamos a hablar de la transformación del lenguaje humano en el bloque 3?")
+        out = app.chat(
+            "Hola, ¿puedes tomar notas en notas del documento que vamos a hablar de la transformación del lenguaje humano en el bloque 3?"
+        )
         self.assertTrue(out["ok"])
         self.assertEqual(out["model"], "reader_notes")
         self.assertEqual(out["note"]["text"], "la transformación del lenguaje humano")
@@ -1720,7 +1754,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
         app.load_text("doc", "Doc", "Pantalla actual.", prefetch=False)
-        out = app.dialogue_turn_text("Estamos en una prueba, así que tomad nota de esta defensa reconoce la inquietud filosófica para hablarlo después.")
+        out = app.dialogue_turn_text(
+            "Estamos en una prueba, así que tomad nota de esta defensa reconoce la inquietud filosófica para hablarlo después."
+        )
         self.assertTrue(out["ok"])
         self.assertEqual(out["model"], "reader_notes")
         self.assertEqual(out["note"]["text"], "esta defensa reconoce la inquietud filosófica para hablarlo después")
@@ -1731,7 +1767,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
         app.load_text("doc", "Doc", "Idea 2: Ontología del lenguaje como cálculo probabilístico.", prefetch=False)
-        out = app.dialogue_turn_text("me puedes guardar la nota de ontología del lenguaje como cálculo probabilístico para después")
+        out = app.dialogue_turn_text(
+            "me puedes guardar la nota de ontología del lenguaje como cálculo probabilístico para después"
+        )
         self.assertTrue(out["ok"])
         self.assertEqual(out["model"], "reader_notes")
         self.assertEqual(out["note"]["chunk_number"], 1)
@@ -1815,7 +1853,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         audio = root / "audio.webm"
         audio.write_bytes(b"fake audio")
-        stt = AutoSTTProvider(primary=EmptyTranscriptSTTProvider(), fallback=NullSTTProvider("Recuperado por fallback."))
+        stt = AutoSTTProvider(
+            primary=EmptyTranscriptSTTProvider(), fallback=NullSTTProvider("Recuperado por fallback.")
+        )
         out = stt.transcribe_file(audio, mime="audio/webm")
         self.assertTrue(out.ok)
         self.assertEqual(out.text, "Recuperado por fallback.")
@@ -1933,7 +1973,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
         app.load_text("doc", "Principal", "Texto principal.\n\nContexto del principal.", prefetch=False)
-        app.add_reference_text("ref", "Consulta", "Texto de consulta sobre el mismo tema.\n\nComparación complementaria.")
+        app.add_reference_text(
+            "ref", "Consulta", "Texto de consulta sobre el mismo tema.\n\nComparación complementaria."
+        )
         out = app.chat("Compará el principal con la consulta.")
         self.assertTrue(out["ok"])
         messages = chat_provider.calls[0][0]
@@ -2026,7 +2068,9 @@ class FusionReaderV2Tests(unittest.TestCase):
                 ("Consulta tres", "Mas texto."),
             ),
         )
-        out = app.chat("Andá al bloque 1 de Desgrabaciones.docx y buscá dónde habla de YouTube y ese bloque qué dice exactamente.")
+        out = app.chat(
+            "Andá al bloque 1 de Desgrabaciones.docx y buscá dónde habla de YouTube y ese bloque qué dice exactamente."
+        )
         self.assertTrue(out["ok"])
         self.assertEqual(out["detail"], "search_matches")
         self.assertEqual(out["current"], app.laboratory_focus_status()["chunk_number"])
@@ -2148,7 +2192,9 @@ class FusionReaderV2Tests(unittest.TestCase):
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
         app.load_text("doc", "Principal", "Bloque principal uno.\n\nBloque principal dos.", prefetch=False)
-        app.add_reference_text("ref", "Desgrabaciones.docx", "Uno consulta.\n\nDos consulta con YouTube.\n\nTres consulta.")
+        app.add_reference_text(
+            "ref", "Desgrabaciones.docx", "Uno consulta.\n\nDos consulta con YouTube.\n\nTres consulta."
+        )
         nav = app.chat("buscá YouTube en Desgrabaciones.docx")
         self.assertTrue(nav["ok"])
         followup = app.chat("¿y ese bloque qué plantea?")
@@ -2415,7 +2461,7 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertNotIn("new MediaRecorder", server)
         self.assertNotIn("requestData()", server)
         self.assertIn('FUSION_READER_STT_BEAM_SIZE", "1"', stt_server)
-        self.assertIn('FUSION_READER_STT_RECOVERY_BEAM_SIZE', stt_server)
+        self.assertIn("FUSION_READER_STT_RECOVERY_BEAM_SIZE", stt_server)
         self.assertIn("STT convert_failed", stt_server)
 
     def legacy_server_exposes_free_laboratory_mode_button_and_endpoint(self):
@@ -2435,8 +2481,8 @@ class FusionReaderV2Tests(unittest.TestCase):
     def legacy_academic_profile_uses_larger_token_budget(self):
         academic = Path("scripts/start_fusion_reader_v2_academic.sh").read_text(encoding="utf-8")
         launcher = Path("/home/lucy-ubuntu/.local/bin/fusion-reader-launcher").read_text(encoding="utf-8")
-        self.assertIn('FUSION_READER_CHAT_NUM_PREDICT:-1536', academic)
-        self.assertIn('FUSION_READER_CHAT_NUM_PREDICT:-1536', launcher)
+        self.assertIn("FUSION_READER_CHAT_NUM_PREDICT:-1536", academic)
+        self.assertIn("FUSION_READER_CHAT_NUM_PREDICT:-1536", launcher)
 
     def legacy_ollama_thinking_default_token_budget_is_not_tiny(self):
         previous_think = os.environ.get("FUSION_READER_CHAT_THINK")
@@ -2532,10 +2578,11 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_lucy_profiles_academica_and_bohemia(self):
         from unittest.mock import patch
+
         chat_provider = NullChatProvider("Respuesta de prueba.")
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
-        
+
         # Default is academica
         self.assertEqual(app.profile_status()["mode"], "academica")
         app.load_text("doc", "Doc", "Contexto.", prefetch=False)
@@ -2545,7 +2592,7 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertIn("Lucy Cunningham", system_prompt)
         self.assertIn("lectora crítica, rigurosa", system_prompt)
         self.assertIn("pensamiento crítico como rigor", system_prompt)
-        
+
         # Switch to bohemia
         app.set_profile("bohemia")
         self.assertEqual(app.profile_status()["mode"], "bohemia")
@@ -2556,7 +2603,7 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertIn("salvaje, libre y directa", system_prompt)
         self.assertIn("humanismo barato", system_prompt)
         self.assertNotIn("lectora crítica, rigurosa", system_prompt)
-        
+
         # Verify model selection
         with patch.dict(os.environ, {"FUSION_READER_BOHEMIA_CHAT_MODEL": "bohemia-model:latest"}):
             app.chat("Test model")
@@ -2565,17 +2612,21 @@ Sigue en otra línea y mantiene la misma idea.
     def legacy_persona_overlay_length_and_independence(self):
         chat_provider = NullChatProvider("Respuesta.")
         core = ConversationCore(chat_provider)
-        
-        academica_overlay = core._persona_overlay(reasoning_mode="thinking", dialogue=True, profile="academica", free_mode=False)
-        bohemia_overlay = core._persona_overlay(reasoning_mode="pensamiento_critico", dialogue=False, profile="bohemia", free_mode=True)
-        
+
+        academica_overlay = core._persona_overlay(
+            reasoning_mode="thinking", dialogue=True, profile="academica", free_mode=False
+        )
+        bohemia_overlay = core._persona_overlay(
+            reasoning_mode="pensamiento_critico", dialogue=False, profile="bohemia", free_mode=True
+        )
+
         self.assertLess(len(academica_overlay), 3000)
         self.assertLess(len(bohemia_overlay), 3000)
-        
+
         # Verificar anclaje
         self.assertIn("Responde anclada al documento", academica_overlay)
         self.assertIn("modo libre", bohemia_overlay)
-        
+
         # Verificar razonamiento independiente del perfil
         self.assertIn("con más calma", academica_overlay)
         self.assertIn("tensión dialéctica", bohemia_overlay)
@@ -2604,14 +2655,14 @@ Sigue en otra línea y mantiene la misma idea.
         chat_provider = NullChatProvider("Entendido.")
         app = test_app()
         app.conversation = ConversationCore(chat_provider)
-        
+
         # Test nocturna
         app.set_veil("nocturna")
         app.load_text("doc", "Doc", "Pantalla actual.", prefetch=False)
         app.chat("Hola")
         prompt = "\n".join(item["content"] for item in chat_provider.calls[0][0])
         self.assertIn("madrugada", prompt)
-        
+
         # Test evocadora
         app.set_veil("evocadora")
         app.chat("Hola")
@@ -2774,7 +2825,7 @@ Sigue en otra línea y mantiene la misma idea.
         app = test_app()
         app.load_text("doc123", "El Quijote", "En un lugar de la Mancha...", prefetch=False)
         self.assertEqual(app.session.status()["title"], "El Quijote")
-        
+
         status = app.clear_document()
         self.assertEqual(status["title"], "")
         self.assertEqual(status["total"], 0)
@@ -2783,13 +2834,14 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_server_contains_clear_document_button_and_endpoint(self):
         import scripts.fusion_reader_v2_server as server
+
         self.assertIn('id="clearDocBtn"', server.INDEX_HTML)
-        self.assertIn('function clearDocument()', server.INDEX_HTML)
+        self.assertIn("function clearDocument()", server.INDEX_HTML)
         # Check endpoint existence in do_POST logic via reflection or simple string check in script content
         script_path = os.path.join(os.path.dirname(__file__), "..", "scripts", "fusion_reader_v2_server.py")
         with open(script_path, "r") as f:
             content = f.read()
-            self.assertIn('/api/document/clear', content)
+            self.assertIn("/api/document/clear", content)
 
     def legacy_closing_discipline_is_applied_by_default(self):
         chat_provider = NullChatProvider("Entendido.")
@@ -2843,6 +2895,7 @@ Sigue en otra línea y mantiene la misma idea.
         class VoiceTTS(NullTTSProvider):
             def voices(self):
                 return ["voice1.wav", "voice2.wav"]
+
         app = test_app(tts=VoiceTTS())
         app.voice.voice = "voice1.wav"
         catalog = app.get_voice_catalog()
@@ -2852,15 +2905,17 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_set_voice_updates_state_and_persists(self):
         root = Path(tempfile.mkdtemp())
+
         class VoiceTTS(NullTTSProvider):
             def voices(self):
                 return ["female_03.wav", "new_voice.wav"]
+
         app = test_app(tts=VoiceTTS(), root=root)
         app.voice.voice = "female_03.wav"
         out = app.set_voice("new_voice.wav")
         self.assertTrue(out["ok"])
         self.assertEqual(app.voice.voice, "new_voice.wav")
-        
+
         # Verify persistence
         reopened = test_app(tts=VoiceTTS(), root=root)
         self.assertEqual(reopened.voice.voice, "new_voice.wav")
@@ -2874,18 +2929,18 @@ Sigue en otra línea y mantiene la misma idea.
             old_executor = app._executor
             future = Future()
             app._prefetch_futures[1] = future
-        
-        app.prepare_document() # Start preparation
+
+        app.prepare_document()  # Start preparation
         # Wait a bit for it to start
         for _ in range(20):
             if app.prepare_status()["status"] == "running":
                 break
             time.sleep(0.01)
-        
+
         self.assertEqual(app.prepare_status()["status"], "running")
-        
+
         app.set_voice("female_01.wav")
-        
+
         # Verify prefetch cleared
         self.assertEqual(len(app._prefetch_futures), 0)
         self.assertIsNot(app._executor, old_executor)
@@ -2901,7 +2956,6 @@ Sigue en otra línea y mantiene la misma idea.
                 break
             time.sleep(0.01)
         self.assertNotEqual(app.prepare_status()["status"], "running")
-
 
     def legacy_server_ui_contains_friendly_voice_labels(self):
         root = Path(__file__).resolve().parents[1]
@@ -2933,9 +2987,17 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_find_downloads_dir_prefers_descargas_then_downloads_then_safe_fallback(self):
         with mock.patch("fusion_reader_v2.pdf_to_docx.Path.home", return_value=Path("/tmp/fake-home")):
-            with mock.patch("fusion_reader_v2.pdf_to_docx.Path.exists", autospec=True, side_effect=lambda path: str(path).endswith("/Descargas")):
+            with mock.patch(
+                "fusion_reader_v2.pdf_to_docx.Path.exists",
+                autospec=True,
+                side_effect=lambda path: str(path).endswith("/Descargas"),
+            ):
                 self.assertEqual(find_downloads_dir(), Path("/tmp/fake-home/Descargas"))
-            with mock.patch("fusion_reader_v2.pdf_to_docx.Path.exists", autospec=True, side_effect=lambda path: str(path).endswith("/Downloads")):
+            with mock.patch(
+                "fusion_reader_v2.pdf_to_docx.Path.exists",
+                autospec=True,
+                side_effect=lambda path: str(path).endswith("/Downloads"),
+            ):
                 self.assertEqual(find_downloads_dir(), Path("/tmp/fake-home/Downloads"))
             with mock.patch("fusion_reader_v2.pdf_to_docx.Path.exists", autospec=True, return_value=False):
                 self.assertEqual(find_downloads_dir(), Path("/tmp/fake-home/Descargas"))
@@ -2956,23 +3018,25 @@ Sigue en otra línea y mantiene la misma idea.
     def legacy_pdf_to_word_ui_is_compact_and_correct(self):
         server = web_source()
         self.assertIn('id="pdfToWordTool"', server)
-        self.assertIn('PDF → Word', server)
+        self.assertIn("PDF → Word", server)
         # Should not have long descriptive text anymore
         self.assertNotIn("Soltá un PDF o hacé click para convertir", server)
 
     def legacy_server_pdf_to_word_limit_is_500mb(self):
         server = web_source()
-        self.assertIn('max_bytes: int = 500 * 1024 * 1024', server)
-        self.assertIn('Límite: {max_bytes // (1024 * 1024)} MB.', server)
+        self.assertIn("max_bytes: int = 500 * 1024 * 1024", server)
+        self.assertIn("Límite: {max_bytes // (1024 * 1024)} MB.", server)
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
     @mock.patch("fusion_reader_v2.pdf_to_docx._ocr_pdf_pages")
     def legacy_pdf_to_word_ocr_fallback_logic(self, mock_ocr, mock_gpu):
         from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx
+
         # If no Docling GPU and it's a scan, it should now return error
-        with mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["   ", "  "]), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=2):
-            
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["   ", "  "]),
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=2),
+        ):
             res = convert_pdf_to_docx("dummy.pdf", "output.docx")
             self.assertFalse(res.ok)
             self.assertIn("Motor Docling GPU no disponible", res.error)
@@ -2980,20 +3044,24 @@ Sigue en otra línea y mantiene la misma idea.
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
     def legacy_pdf_to_word_job_progress(self, mock_gpu):
         from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx, JobStatus
-        from unittest.mock import patch
 
         job = JobStatus(job_id="test_job")
         progress_calls = []
+
         def callback(j):
             progress_calls.append((j.stage, j.current_page))
 
         # Use a string longer than 12 alpha chars
-        with mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["Este es un texto digital suficientemente largo."]), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._write_minimal_docx"), \
-             mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1):
-            
+        with (
+            mock.patch(
+                "fusion_reader_v2.pdf_to_docx._extract_pages_text",
+                return_value=["Este es un texto digital suficientemente largo."],
+            ),
+            mock.patch("fusion_reader_v2.pdf_to_docx._write_minimal_docx"),
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+        ):
             convert_pdf_to_docx("dummy.pdf", "output.docx", status_callback=callback, job=job)
-            
+
             self.assertEqual(job.state, "done")
             self.assertEqual(job.total_pages, 1)
             stages = [c[0] for c in progress_calls]
@@ -3003,8 +3071,7 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_pdf_to_word_docling_gpu_selection(self):
         from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx, JobStatus
-        import fusion_reader_v2.pdf_to_docx as pdf_to_docx
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock
 
         # Mock is_docling_gpu_available to True
         with mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=True):
@@ -3018,8 +3085,6 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_pdf_to_word_no_docling_gpu_fallback_for_scans(self):
         from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx, JobStatus
-        import fusion_reader_v2.pdf_to_docx as pdf_to_docx
-        from unittest.mock import patch
 
         # Mock is_docling_gpu_available to False
         # Mock _extract_pages_text to return empty text (scanned)
@@ -3032,7 +3097,7 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_md_to_docx_sanitization_v2(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
-        
+
         # 1. Images and Placeholders
         md = "# Titulo\n![Image](data:image/png;base64,ABC)\n<!-- image -->\n福\n"
         sanitized = sanitize_markdown(md)
@@ -3040,7 +3105,7 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertNotIn("![Image]", sanitized)
         self.assertNotIn("<!-- image -->", sanitized)
         self.assertNotIn("福", sanitized)
-        
+
         # 2. OCR Corrections
         md_ocr = "Hrs Magica y la CuartaEdicion. Detectos y Hechbizos."
         sanitized_ocr = sanitize_markdown(md_ocr)
@@ -3048,14 +3113,14 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertIn("Cuarta Edición", sanitized_ocr)
         self.assertIn("Defectos", sanitized_ocr)
         self.assertIn("Hechizos", sanitized_ocr)
-        
+
         # 3. Glued Words
         md_glued = "QueDios nos ayude enel viaje mimaestra."
         sanitized_glued = sanitize_markdown(md_glued)
         self.assertIn("Que Dios", sanitized_glued)
         self.assertIn("en el", sanitized_glued)
         self.assertIn("mi maestra", sanitized_glued)
-        
+
         # 4. Punctuation Spacing
         md_punct = "Hola,mundo.Esto;está:pegado."
         sanitized_punct = sanitize_markdown(md_punct)
@@ -3065,27 +3130,27 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_md_to_docx_glued_words(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
-        
+
         # 1. Frequent patterns
         md = "Desarrollo, ediciony maqueta. Diariode Antoninus. todoslos Magos."
         sanitized = sanitize_markdown(md)
         self.assertIn("edición y", sanitized)
         self.assertIn("Diario de", sanitized)
         self.assertIn("todos los", sanitized)
-        
+
         # 2. Long spans
         md_long = "Que Dios Majestuosoqueha observadotodamivida."
         sanitized_long = sanitize_markdown(md_long)
         self.assertIn("Majestuoso que ha", sanitized_long)
         self.assertIn("observado toda mi vida", sanitized_long)
-        
+
         # 3. CamelCase separation
         md_camel = "QueDios bendiga Mimaestra y Nuestroviaje."
         sanitized_camel = sanitize_markdown(md_camel)
         self.assertIn("Que Dios", sanitized_camel)
         self.assertIn("Mi maestra", sanitized_camel)
         self.assertIn("Nuestro viaje", sanitized_camel)
-        
+
         # 4. Protected terms (should NOT be split)
         md_prot = "Bonisagus y Bjornaer son Quaesitores que usan Intellego."
         sanitized_prot = sanitize_markdown(md_prot)
@@ -3136,46 +3201,52 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertGreaterEqual(metrics["exact_fixes"], 2)
 
     def test_pdf_to_word_docling_uses_placeholder(self):
-        from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx, JobStatus
+        from fusion_reader_v2.pdf_to_docx import convert_pdf_to_docx
         from unittest import mock
-        
-        with mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=True), \
-             mock.patch("subprocess.Popen") as mock_popen, \
-             mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["   "]), \
-             mock.patch("subprocess.run"):
-            
+
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=True),
+            mock.patch("subprocess.Popen") as mock_popen,
+            mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["   "]),
+            mock.patch("subprocess.run"),
+        ):
             mock_proc = mock.MagicMock()
             mock_proc.poll.return_value = 0
             mock_proc.returncode = 0
             mock_proc.communicate.return_value = ("ok", "")
             mock_popen.return_value = mock_proc
-            
+
             # Temporary mock for find md files
             with mock.patch("pathlib.Path.glob", return_value=[Path("dummy.md")]):
                 convert_pdf_to_docx("test.pdf", "test.docx")
-            
+
             args, kwargs = mock_popen.call_args
             cmd = args[0]
             self.assertIn("--image-export-mode", cmd)
             self.assertIn("placeholder", cmd)
 
     def test_pdf_to_word_ocr_cleanup_logic(self):
-        from fusion_reader_v2.pdf_to_docx import _clean_ocr_line, _is_noise_line, _detect_heading, _should_merge_with_previous
-        
+        from fusion_reader_v2.pdf_to_docx import (
+            _clean_ocr_line,
+            _is_noise_line,
+            _detect_heading,
+            _should_merge_with_previous,
+        )
+
         # 1. Cleaning
         self.assertEqual(_clean_ocr_line("...  Texto sucio!!!"), "Texto sucio!!!")
         self.assertEqual(_clean_ocr_line("Palabra — con raya"), "Palabra - con raya")
-        
+
         # 2. Noise
         self.assertTrue(_is_noise_line("A E A E A E"))
         self.assertTrue(_is_noise_line("... --- ..."))
         self.assertFalse(_is_noise_line("Este es un párrafo válido."))
-        
+
         # 3. Headings
         self.assertEqual(_detect_heading("CAPÍTULO 1: EL COMIENZO"), "Heading1")
         self.assertEqual(_detect_heading("Introducción"), "Heading2")
         self.assertIsNone(_detect_heading("Esta es una línea normal que termina en punto."))
-        
+
         # 4. Merging
         self.assertTrue(_should_merge_with_previous("Esta línea no termina en punto", "esta continúa"))
         self.assertFalse(_should_merge_with_previous("Esta sí termina en punto.", "Esta es nueva"))
@@ -3183,32 +3254,32 @@ Sigue en otra línea y mantiene la misma idea.
 
     def legacy_mcp_memory_server_core_logic(self):
         from scripts import fusion_memory_mcp_server as mcp_mod
-        
+
         # 1. list
         files = mcp_mod.allowed_memory_files()
         self.assertIn("project_state.md", files)
         self.assertIn("decisions.md", files)
         self.assertIn("boundaries.md", files)
-        
+
         # 2. read project_state
         content = mcp_mod.read_memory_file("project_state.md")
         self.assertIn("Project State", content)
         self.assertIn("2b7024b", content)
         self.assertIn("164 OK", content)
-        
+
         # 3. Security: read outside
         fail_content = mcp_mod.read_memory_file("../FUSION_READER_V2_STATE.md")
         self.assertTrue(fail_content.startswith("Error:"))
-        
+
         # 4. Security: read .env
         fail_env = mcp_mod.read_memory_file(".env")
         self.assertTrue(fail_env.startswith("Error:"))
-        
+
         # 5. Security: read non-md
         # (Actually the whitelist already prevents this, but test it)
         fail_bin = mcp_mod.read_memory_file("audio_cache/some.wav")
         self.assertTrue(fail_bin.startswith("Error:"))
-        
+
         # 6. search
         results = mcp_mod.search_memory("cinco ejes")
         self.assertGreater(len(results), 0)
@@ -3216,21 +3287,22 @@ Sigue en otra línea y mantiene la misma idea.
         self.assertIn("project_state.md", found_files)
         # Check one of the fragments
         self.assertIn("cinco ejes", results[0]["content"].lower())
-        
+
         # 7. specific helpers
         state_content = mcp_mod.read_memory_file("project_state.md")
         self.assertIn("Project State", state_content)
-        
+
         boundaries_content = mcp_mod.read_memory_file("boundaries.md")
         self.assertIn("System Boundaries", boundaries_content)
         self.assertIn("Doctora Lucy", boundaries_content)
-        
+
         steps_content = mcp_mod.read_memory_file("next_steps.md")
         self.assertIn("Next Steps", steps_content)
 
 
 if __name__ == "__main__":
     unittest.main()
+
 
 def load_tests(loader, tests, pattern):
     if pattern is not None:

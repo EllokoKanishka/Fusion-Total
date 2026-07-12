@@ -251,8 +251,8 @@ class BackgroundLifecycleService:
         for thread in shutdown_threads:
             owner._wait_for_thread(thread, label="prefetch executor shutdown", deadline=deadline)
         if shutdown_errors:
-            label, exc = shutdown_errors[0]
-            raise AssertionError(f"prefetch executor shutdown failed for {label}: {exc}") from exc
+            label, shutdown_error = shutdown_errors[0]
+            raise AssertionError(f"prefetch executor shutdown failed for {label}: {shutdown_error}") from shutdown_error
         with owner._background_work_condition:
             owner._wait_for_active_tts_locked(deadline)
             owner._set_background_work_state_locked("closed")

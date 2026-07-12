@@ -8,6 +8,7 @@ except Exception:
     FastAPI = None
 
 if FastAPI is not None and not hasattr(FastAPI, "route"):
+
     def route(self, path, methods=None, **kwargs):
         return self.api_route(path, methods=methods, **kwargs)
 

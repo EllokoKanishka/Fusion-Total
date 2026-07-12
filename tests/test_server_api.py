@@ -14,6 +14,7 @@ def _web_source() -> str:
     )
     return "\\n".join(path.read_text(encoding="utf-8") for path in paths)
 
+
 class ServerAPITests(unittest.TestCase):
     def test_server_api_returns_status(self):
         app = test_app()
@@ -81,7 +82,7 @@ class ServerAPITests(unittest.TestCase):
 
     def test_academic_profile_uses_larger_token_budget(self):
         academic = Path("scripts/start_fusion_reader_v2_academic.sh").read_text(encoding="utf-8")
-        self.assertIn('FUSION_READER_CHAT_NUM_PREDICT:-1536', academic)
+        self.assertIn("FUSION_READER_CHAT_NUM_PREDICT:-1536", academic)
 
     def test_ollama_thinking_default_token_budget_is_not_tiny(self):
         previous_think = os.environ.get("FUSION_READER_CHAT_THINK")
@@ -91,7 +92,8 @@ class ServerAPITests(unittest.TestCase):
             provider = OllamaChatProvider(base_url="http://x")
             self.assertGreaterEqual(provider.num_predict, 1024)
         finally:
-            if previous_think: os.environ["FUSION_READER_CHAT_THINK"] = previous_think
+            if previous_think:
+                os.environ["FUSION_READER_CHAT_THINK"] = previous_think
 
     def test_server_ui_contains_friendly_voice_labels(self):
         server = _web_source()
@@ -110,15 +112,17 @@ class ServerAPITests(unittest.TestCase):
     def test_server_contains_clear_document_button_and_endpoint(self):
         server = _web_source()
         self.assertIn('id="clearDocBtn"', server)
-        self.assertIn('/api/document/clear', server)
+        self.assertIn("/api/document/clear", server)
 
     def test_mcp_memory_server_core_logic(self):
         from scripts import fusion_memory_mcp_server as mcp
+
         self.assertIn("project_state.md", mcp.allowed_memory_files())
         self.assertTrue(mcp.read_memory_file("project_state.md").startswith("# Project State"))
 
     def test_status_reports_runtime_metadata(self):
         from scripts import fusion_reader_v2_server as server_mod
+
         rt = server_mod.RUNTIME_INFO
         self.assertEqual(rt["app"], "fusion_reader_v2")
         self.assertIn("commit", rt)

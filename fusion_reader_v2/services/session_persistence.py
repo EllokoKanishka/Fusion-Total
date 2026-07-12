@@ -68,7 +68,9 @@ class SessionPersistenceService:
         raw = self.read()
         owner.reasoning_mode = str(raw.get("reasoning_mode") or owner.reasoning_mode or "thinking")
         owner.reasoning_mode = str(owner.conversation.reasoning_status(owner.reasoning_mode).get("mode") or "thinking")
-        owner.laboratory_mode = "free" if str(raw.get("laboratory_mode") or "").strip().lower() == "free" else "document"
+        owner.laboratory_mode = (
+            "free" if str(raw.get("laboratory_mode") or "").strip().lower() == "free" else "document"
+        )
         owner.profile = str(raw.get("profile") or "academica").strip().lower()
         owner.veil = str(raw.get("veil") or "lucy").strip().lower()
         saved_voice = str(raw.get("voice") or "").strip()

@@ -1,6 +1,5 @@
 from contextlib import contextmanager
 import inspect
-import json
 import os
 import tempfile
 import time
@@ -67,15 +66,31 @@ def close_test_app(app, timeout: float = 10.0) -> None:
 
 
 @contextmanager
-def managed_test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT):
-    app = test_app(tts=tts, stt=stt, root=root, external_research=external_research, audio_export_root=audio_export_root, register_cleanup=False)
+def managed_test_app(
+    tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT
+):
+    app = test_app(
+        tts=tts,
+        stt=stt,
+        root=root,
+        external_research=external_research,
+        audio_export_root=audio_export_root,
+        register_cleanup=False,
+    )
     try:
         yield app
     finally:
         close_test_app(app)
 
 
-def test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT, register_cleanup: bool = True) -> FusionReaderV2:
+def test_app(
+    tts=None,
+    stt=None,
+    root: Path | None = None,
+    external_research=None,
+    audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT,
+    register_cleanup: bool = True,
+) -> FusionReaderV2:
     tempdir = None
     if root is None:
         tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_v2_test_")
@@ -88,7 +103,9 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
             tts_provider.set_output_root(root / "tts_outputs")
         except Exception:
             pass
-    effective_audio_export_root = root / "Descargas" if audio_export_root is _DEFAULT_AUDIO_EXPORT_ROOT else audio_export_root
+    effective_audio_export_root = (
+        root / "Descargas" if audio_export_root is _DEFAULT_AUDIO_EXPORT_ROOT else audio_export_root
+    )
     app = FusionReaderV2(
         tts=tts_provider,
         stt=stt or NullSTTProvider(),
@@ -96,7 +113,8 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
         metrics=VoiceMetricsStore(root / "voice_metrics.jsonl"),
         notes=ReaderNotesStore(root / "notes"),
         conversation=ConversationCore(NullChatProvider("Entendido.")),
-        external_research=external_research or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
+        external_research=external_research
+        or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
         session_state_path=root / "session_state.json",
         audio_export_root=effective_audio_export_root,
     )
@@ -110,7 +128,9 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
     return app
 
 
-def wait_for_audio_export(app, job_id: str, timeout: float = 5.0, terminal_states: tuple[str, ...] = ("done", "cancelled", "error")) -> dict:
+def wait_for_audio_export(
+    app, job_id: str, timeout: float = 5.0, terminal_states: tuple[str, ...] = ("done", "cancelled", "error")
+) -> dict:
     deadline = time.monotonic() + float(timeout)
     last_status: dict = {}
     while time.monotonic() < deadline:
@@ -129,12 +149,14 @@ def wait_for_audio_export(app, job_id: str, timeout: float = 5.0, terminal_state
         f"last_state={last_status.get('state')!r}; last_detail={last_status.get('detail')!r}"
     )
 
+
 class FailingTTSProvider(NullTTSProvider):
     name = "failing_tts"
 
     def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
         self.calls.append((text, voice, language))
         return AudioArtifact(False, provider=self.name, detail="tts_down")
+
 
 def _write_synthetic_wav(text: str, output_root: Path | None) -> Path:
     if output_root is not None:
@@ -145,13 +167,14 @@ def _write_synthetic_wav(text: str, output_root: Path | None) -> Path:
     os.close(fd)
     path = Path(name)
     sample_rate = 16000
-    frames = (max(1, len(text)) * 160)
+    frames = max(1, len(text)) * 160
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(b"\0\0" * frames)
     return path
+
 
 class SyntheticWavTTSProvider(NullTTSProvider):
     name = "synthetic_wav_tts"
@@ -171,6 +194,7 @@ class SyntheticWavTTSProvider(NullTTSProvider):
         path = _write_synthetic_wav(text, self.output_root)
         return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
 
+
 class BlockingSyntheticWavTTSProvider(SyntheticWavTTSProvider):
     name = "blocking_synthetic_wav_tts"
 
@@ -188,6 +212,7 @@ class BlockingSyntheticWavTTSProvider(SyntheticWavTTSProvider):
         path = _write_synthetic_wav(text, self.output_root)
         return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
 
+
 class LengthLimitedSyntheticWavTTSProvider(SyntheticWavTTSProvider):
     def __init__(self, max_chars: int, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
         super().__init__(delay_seconds=delay_seconds, output_root=output_root)
@@ -199,11 +224,13 @@ class LengthLimitedSyntheticWavTTSProvider(SyntheticWavTTSProvider):
             return AudioArtifact(False, provider=self.name, detail="http_400")
         return super().synthesize(text, voice=voice, language=language)
 
+
 class EmptyTranscriptSTTProvider(STTProvider):
     name = "empty_stt"
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         return TranscriptResult(False, provider=self.name, detail="empty_transcript")
+
 
 class HallucinatedTranscriptSTTProvider(STTProvider):
     name = "hallucinated_stt"
@@ -212,7 +239,10 @@ class HallucinatedTranscriptSTTProvider(STTProvider):
         return {"ok": True, "provider": self.name}
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
-        return TranscriptResult(False, text="¡Suscríbete!", provider=self.name, detail="hallucinated_transcript", duration_ms=12)
+        return TranscriptResult(
+            False, text="¡Suscríbete!", provider=self.name, detail="hallucinated_transcript", duration_ms=12
+        )
+
 
 class BrokenSTTProvider(STTProvider):
     name = "broken_stt"
@@ -222,6 +252,7 @@ class BrokenSTTProvider(STTProvider):
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         return TranscriptResult(False, provider=self.name, detail="connection_refused", duration_ms=33)
+
 
 class FailingChatProvider:
     name = "failing_chat"
@@ -236,7 +267,9 @@ class FailingChatProvider:
     def chat(self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None):
         self.calls.append((messages, model, {"think": think, "num_predict": num_predict}))
         from fusion_reader_v2.conversation import ChatResult
+
         return ChatResult(False, model=model or "broken-local", detail=self.detail, duration_ms=41)
+
 
 def web_source() -> str:
     paths = (
@@ -257,9 +290,11 @@ class NullResearchProvider:
         self.calls.append(query)
         return self.results
 
+
 class FailingResearchProvider:
     def search(self, query: str) -> list:
         raise RuntimeError("failed_to_research")
+
 
 class FakeExternalResearchBridge:
     def __init__(self, result: ExternalResearchResult, *, available: bool = True) -> None:
@@ -273,6 +308,7 @@ class FakeExternalResearchBridge:
     def research(self, request: str, snapshot: dict | None = None) -> ExternalResearchResult:
         self.calls.append((str(request or ""), dict(snapshot or {})))
         return self.result
+
 
 def make_simple_pdf_bytes(lines: list[str]) -> bytes:
     def esc(text: str) -> str:
@@ -288,7 +324,9 @@ def make_simple_pdf_bytes(lines: list[str]) -> bytes:
     objects: list[bytes] = []
     objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
     objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>")
+    objects.append(
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+    )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     objects.append(f"<< /Length {len(content)} >>\nstream\n".encode("latin-1") + content + b"\nendstream")
 
@@ -305,17 +343,16 @@ def make_simple_pdf_bytes(lines: list[str]) -> bytes:
     for offset in offsets[1:]:
         out.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
     out.extend(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref_pos}\n%%EOF\n"
-        ).encode("latin-1")
+        (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n").encode("latin-1")
     )
     return bytes(out)
+
 
 READING_FILLER = (
     "La lectura continua necesita suficiente contexto para sostener una pagina mental coherente "
     "sin fragmentarse en unidades diminutas que vuelvan torpe la navegacion del lector."
 )
+
 
 def make_reading_paragraph(label: str, extra: str = "") -> str:
     parts = [str(label or "").strip(), READING_FILLER]
@@ -323,8 +360,10 @@ def make_reading_paragraph(label: str, extra: str = "") -> str:
         parts.append(str(extra).strip())
     return " ".join(part for part in parts if part).strip()
 
+
 def make_reading_document(label: str, paragraphs: int, extra: str = "") -> str:
     return "\n\n".join(make_reading_paragraph(f"{label} {index}.", extra=extra) for index in range(1, paragraphs + 1))
+
 
 def make_reading_sections(*sections: tuple[str, str], paragraphs_per_section: int = 10) -> str:
     paragraphs: list[str] = []
@@ -334,9 +373,12 @@ def make_reading_sections(*sections: tuple[str, str], paragraphs_per_section: in
             paragraphs.append(make_reading_paragraph(f"{label} {index}.", extra=extra))
     return "\n\n".join(paragraphs)
 
+
 def manual_document(doc_id: str, title: str, chunks: list[str]):
     from fusion_reader_v2 import Document
+
     return Document(doc_id=doc_id, title=title, text="\n\n".join(chunks), chunks=list(chunks))
+
 
 class FakeUrlOpenResponse:
     def __init__(self, payload: str, status: int = 200) -> None:

@@ -157,7 +157,11 @@ class AudioExportService:
                 if not owner._background_work_is_open_locked():
                     return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
                 if owner._audio_export_thread and owner._audio_export_thread.is_alive():
-                    return {"ok": False, "error": "audio_export_busy", "detail": "Ya hay una exportación de audio en curso."}
+                    return {
+                        "ok": False,
+                        "error": "audio_export_busy",
+                        "detail": "Ya hay una exportación de audio en curso.",
+                    }
                 owner._audio_export_cancel.clear()
                 job = owner._new_audio_export_job(snapshot)
                 job.download_url = f"/api/audio-export/download/{job.job_id}"
@@ -294,7 +298,9 @@ class AudioExportService:
                         current_job.completed_blocks += 1
                         current_job.detail = f"Bloque {chunk_number} listo."
             if not inputs:
-                owner._finish_audio_export_job(job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs")
+                owner._finish_audio_export_job(
+                    job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs"
+                )
                 return
             target = unique_audio_download_target(job.filename, owner.audio_export_root)
             temporary = target.with_name(f".{target.stem}.{job_id}.part.wav")

@@ -98,7 +98,9 @@ class NullTTSProvider(TTSProvider):
         os.close(fd)
         path = Path(name)
         path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
-        return AudioArtifact(True, path=path, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000))
+        return AudioArtifact(
+            True, path=path, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+        )
 
 
 class AllTalkProvider(TTSProvider):
@@ -362,11 +364,24 @@ class AllTalkProvider(TTSProvider):
             os.close(fd)
             path = Path(name)
             path.write_bytes(audio)
-            return AudioArtifact(True, path=path, provider=self.name, source_url=audio_url, duration_ms=int((time.perf_counter() - started) * 1000))
+            return AudioArtifact(
+                True,
+                path=path,
+                provider=self.name,
+                source_url=audio_url,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
         except urllib.error.HTTPError as e:
-            return AudioArtifact(False, provider=self.name, detail=f"http_{e.code}", duration_ms=int((time.perf_counter() - started) * 1000))
+            return AudioArtifact(
+                False,
+                provider=self.name,
+                detail=f"http_{e.code}",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
         except Exception as e:
-            return AudioArtifact(False, provider=self.name, detail=str(e), duration_ms=int((time.perf_counter() - started) * 1000))
+            return AudioArtifact(
+                False, provider=self.name, detail=str(e), duration_ms=int((time.perf_counter() - started) * 1000)
+            )
 
     def _audio_url(self, audio_ref: str) -> str:
         if not audio_ref.startswith("http"):
@@ -430,13 +445,16 @@ class AudioCache:
         temporary: Path | None = None
         with self._lock:
             try:
-                with artifact.path.open("rb") as source, tempfile.NamedTemporaryFile(
-                    mode="wb",
-                    dir=self.root,
-                    prefix=f".{target.stem}.",
-                    suffix=".tmp",
-                    delete=False,
-                ) as handle:
+                with (
+                    artifact.path.open("rb") as source,
+                    tempfile.NamedTemporaryFile(
+                        mode="wb",
+                        dir=self.root,
+                        prefix=f".{target.stem}.",
+                        suffix=".tmp",
+                        delete=False,
+                    ) as handle,
+                ):
                     temporary = Path(handle.name)
                     shutil.copyfileobj(source, handle, length=1024 * 1024)
                     handle.flush()
@@ -448,7 +466,14 @@ class AudioCache:
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
-        return AudioArtifact(True, path=target, provider=artifact.provider, cached=False, source_url=artifact.source_url, duration_ms=artifact.duration_ms)
+        return AudioArtifact(
+            True,
+            path=target,
+            provider=artifact.provider,
+            cached=False,
+            source_url=artifact.source_url,
+            duration_ms=artifact.duration_ms,
+        )
 
     def inspect(self, *, now: float | None = None) -> dict:
         if not self.root.exists():

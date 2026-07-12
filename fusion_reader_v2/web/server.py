@@ -4,10 +4,10 @@ import base64
 import binascii
 import hmac
 import json
-import mimetypes
 import os
 import re
 import signal
+import sys
 import tempfile
 import threading
 import time
@@ -136,7 +136,7 @@ class WebContext:
             self._closed = True
             threads = list(self._threads)
         for job in self.pdf_jobs.snapshot().values():
-            if not job.state in {"done", "cancelled", "error"}:
+            if job.state not in {"done", "cancelled", "error"}:
                 job.cancelled = True
                 job.state = "cancelled"
         deadline = time.monotonic() + max(0.0, timeout)
@@ -231,12 +231,14 @@ def library_items(context: WebContext) -> list[dict]:
         except Exception:
             text = ""
         preview = " ".join(text.split())[:170]
-        items.append({
-            "id": rel,
-            "title": path.name,
-            "bytes": path.stat().st_size,
-            "preview": preview,
-        })
+        items.append(
+            {
+                "id": rel,
+                "title": path.name,
+                "bytes": path.stat().st_size,
+                "preview": preview,
+            }
+        )
     return items
 
 
@@ -284,9 +286,18 @@ def load_imported_document(context: WebContext, imported, role: str = "main") ->
         raw_target = context.converted_root / f"{imported.doc_id}.raw.txt"
         raw_target.write_text(imported.raw_text, encoding="utf-8")
     if str(role or "main") == "reference":
-        out = context.app.add_reference_text(imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type)
+        out = context.app.add_reference_text(
+            imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type
+        )
     else:
-        out = context.app.load_text(imported.doc_id, imported.title, imported.text, prefetch=False, source_path=str(target), source_type=imported.source_type)
+        out = context.app.load_text(
+            imported.doc_id,
+            imported.title,
+            imported.text,
+            prefetch=False,
+            source_path=str(target),
+            source_type=imported.source_type,
+        )
     out["role"] = "reference" if str(role or "") == "reference" else "main"
     out["source_type"] = imported.source_type
     out["import_detail"] = imported.detail
@@ -747,36 +758,39 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
             job_id = str((params.get("id") or [""])[0])
-            job = get_import_job(self.context, job_id)
-            if not job:
+            import_job = get_import_job(self.context, job_id)
+            if not import_job:
                 self._json(404, {"ok": False, "error": "import_job_not_found"})
                 return
-            self._json(200, job)
+            self._json(200, import_job)
             return
         if path.startswith("/api/tools/pdf-to-docx/status/"):
             job_id = path.split("/")[-1]
-            job = self.context.pdf_jobs.get(job_id)
-            if not job:
+            pdf_job = self.context.pdf_jobs.get(job_id)
+            if not pdf_job:
                 self._json(404, {"ok": False, "error": "Job no encontrado."})
                 return
-            self._json(200, {
-                "ok": True,
-                "job_id": job.job_id,
-                "state": job.state,
-                "stage": job.stage,
-                "current_page": job.current_page,
-                "total_pages": job.total_pages,
-                "percent": job.percent,
-                "message": job.message,
-                "filename": job.filename,
-                "saved_path": job.saved_path,
-                "download_url": job.download_url,
-                "warnings": job.warnings,
-                "error": job.error,
-                "noise_lines_removed": job.result.noise_lines_removed if job.result else 0,
-                "paragraphs_merged": job.result.paragraphs_merged if job.result else 0,
-                "headings_detected": job.result.headings_detected if job.result else 0,
-            })
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "job_id": pdf_job.job_id,
+                    "state": pdf_job.state,
+                    "stage": pdf_job.stage,
+                    "current_page": pdf_job.current_page,
+                    "total_pages": pdf_job.total_pages,
+                    "percent": pdf_job.percent,
+                    "message": pdf_job.message,
+                    "filename": pdf_job.filename,
+                    "saved_path": pdf_job.saved_path,
+                    "download_url": pdf_job.download_url,
+                    "warnings": pdf_job.warnings,
+                    "error": pdf_job.error,
+                    "noise_lines_removed": pdf_job.result.noise_lines_removed if pdf_job.result else 0,
+                    "paragraphs_merged": pdf_job.result.paragraphs_merged if pdf_job.result else 0,
+                    "headings_detected": pdf_job.result.headings_detected if pdf_job.result else 0,
+                },
+            )
             return
 
         if path.startswith("/api/tools/pdf-to-docx/download/"):
@@ -793,7 +807,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Content-Disposition", f"attachment; filename=\"{Path(str(item.get('filename') or 'documento.docx')).name}\"")
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{Path(str(item.get("filename") or "documento.docx")).name}"',
+            )
             self.end_headers()
             self.wfile.write(raw)
             return
@@ -813,7 +830,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(raw)))
-            self.send_header("Content-Disposition", f"attachment; filename=\"{Path(str(item.get('filename') or 'audio.wav')).name}\"")
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{Path(str(item.get("filename") or "audio.wav")).name}"'
+            )
             self.end_headers()
             self.wfile.write(raw)
             return
@@ -895,10 +914,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.replace(input_path, owned_input)
                 input_path = owned_input
 
-                job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
-                job.created_ts = time.time()
-                job.updated_ts = job.created_ts
-                self.context.pdf_jobs.add(job_id, job)
+                pdf_job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
+                self.context.pdf_jobs.add(job_id, pdf_job)
 
                 def _run_job(j: JobStatus, in_p: Path, original_name: str):
                     temp_docx = self.context.pdf_root / f"{j.job_id}.docx"
@@ -938,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 self.context.start_thread(
                     target=_run_job,
-                    args=(job, input_path, clean_name),
+                    args=(pdf_job, input_path, clean_name),
                     name=f"fusion-pdf-to-docx-{job_id}",
                 )
                 self._json(200, {"ok": True, "job_id": job_id})
@@ -946,12 +963,12 @@ class Handler(BaseHTTPRequestHandler):
 
             if path.startswith("/api/tools/pdf-to-docx/cancel/"):
                 job_id = path.split("/")[-1]
-                job = self.context.pdf_jobs.get(job_id)
-                if not job:
+                cancelled_job = self.context.pdf_jobs.get(job_id)
+                if not cancelled_job:
                     self._json(404, {"ok": False, "error": "Job no encontrado."})
                     return
-                job.cancelled = True
-                job.state = "cancelled"
+                cancelled_job.cancelled = True
+                cancelled_job.state = "cancelled"
                 self._json(200, {"ok": True, "job_id": job_id})
                 return
             if path == "/api/import-file/start":
@@ -960,13 +977,13 @@ class Handler(BaseHTTPRequestHandler):
                 mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
                 role = str((params.get("role") or ["main"])[0])
                 tmp_path = self._read_body_to_temp(filename)
-                job = new_import_job(self.context, filename, mime, tmp_path, tmp_path.stat().st_size, role=role)
+                import_job = new_import_job(self.context, filename, mime, tmp_path, tmp_path.stat().st_size, role=role)
                 self.context.start_thread(
                     target=import_job_worker,
-                    args=(self.context, str(job["job_id"]), filename, tmp_path, mime, role),
-                    name=f"fusion-import-{job['job_id']}",
+                    args=(self.context, str(import_job["job_id"]), filename, tmp_path, mime, role),
+                    name=f"fusion-import-{import_job['job_id']}",
                 )
-                self._json(202, job)
+                self._json(202, import_job)
                 return
             if path == "/api/import-file":
                 params = parse_qs(parsed.query)
@@ -984,8 +1001,8 @@ class Handler(BaseHTTPRequestHandler):
                 content_type = self.headers.get("Content-Type", "") or ""
                 params = parse_qs(parsed.query)
                 filename = str((params.get("filename") or ["dialogue.webm"])[0])
-                raw_chunk_index = (params.get("chunk_index") or [None])[0]
-                chunk_index = int(raw_chunk_index) if raw_chunk_index not in (None, "") else None
+                raw_chunk_index = (params.get("chunk_index") or [""])[0]
+                chunk_index = int(raw_chunk_index) if raw_chunk_index else None
                 audio_meta = {
                     "audio_size_bytes": str((params.get("audio_size_bytes") or [""])[0]),
                     "capture_ms": str((params.get("capture_ms") or [""])[0]),
@@ -996,7 +1013,16 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 tmp_path = self._read_body_to_temp(filename)
                 try:
-                    self._result(200, self.app.dialogue_turn_audio(tmp_path, mime=content_type, model=str((params.get("model") or [""])[0]), chunk_index=chunk_index, audio_meta=audio_meta))
+                    self._result(
+                        200,
+                        self.app.dialogue_turn_audio(
+                            tmp_path,
+                            mime=content_type,
+                            model=str((params.get("model") or [""])[0]),
+                            chunk_index=chunk_index,
+                            audio_meta=audio_meta,
+                        ),
+                    )
                 finally:
                     tmp_path.unlink(missing_ok=True)
                 return
@@ -1005,9 +1031,19 @@ class Handler(BaseHTTPRequestHandler):
                 role = str(payload.get("role") or "main")
                 if payload.get("book_id"):
                     if role == "reference":
-                        self._json(200, self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("book_id")))))
+                        self._json(
+                            200,
+                            self.app.add_reference_file(
+                                resolve_library_path(self.context, str(payload.get("book_id")))
+                            ),
+                        )
                     else:
-                        self._json(200, self.app.load_file(resolve_library_path(self.context, str(payload.get("book_id"))), prefetch=False))
+                        self._json(
+                            200,
+                            self.app.load_file(
+                                resolve_library_path(self.context, str(payload.get("book_id"))), prefetch=False
+                            ),
+                        )
                     return
                 if payload.get("text"):
                     if role == "reference":
@@ -1034,9 +1070,17 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if payload.get("path"):
                     if role == "reference":
-                        self._json(200, self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("path")))))
+                        self._json(
+                            200,
+                            self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("path")))),
+                        )
                     else:
-                        self._json(200, self.app.load_file(resolve_library_path(self.context, str(payload.get("path"))), prefetch=False))
+                        self._json(
+                            200,
+                            self.app.load_file(
+                                resolve_library_path(self.context, str(payload.get("path"))), prefetch=False
+                            ),
+                        )
                     return
                 self._json(400, {"ok": False, "error": "missing_text_or_book_id"})
                 return
@@ -1088,13 +1132,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.app.cancel_prepare())
                 return
             if path == "/api/audio-export":
+                block_value = payload.get("block")
+                start_value = payload.get("start")
+                end_value = payload.get("end")
                 self._json(
                     200,
                     self.app.start_audio_export(
                         str(payload.get("mode") or ""),
-                        block=int(payload.get("block")) if payload.get("block") is not None else None,
-                        start=int(payload.get("start")) if payload.get("start") is not None else None,
-                        end=int(payload.get("end")) if payload.get("end") is not None else None,
+                        block=int(block_value) if block_value is not None else None,
+                        start=int(start_value) if start_value is not None else None,
+                        end=int(end_value) if end_value is not None else None,
                     ),
                 )
                 return
@@ -1103,16 +1150,39 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/notes/create":
                 chunk_index = payload.get("chunk_index")
-                self._json(200, self.app.create_note(str(payload.get("text") or ""), chunk_index=int(chunk_index) if chunk_index is not None else None))
+                self._json(
+                    200,
+                    self.app.create_note(
+                        str(payload.get("text") or ""),
+                        chunk_index=int(chunk_index) if chunk_index is not None else None,
+                    ),
+                )
                 return
             if path == "/api/notes/update":
-                self._json(200, self.app.update_note(str(payload.get("note_id") or ""), str(payload.get("text") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(
+                    200,
+                    self.app.update_note(
+                        str(payload.get("note_id") or ""),
+                        str(payload.get("text") or ""),
+                        doc_id=str(payload.get("doc_id") or ""),
+                    ),
+                )
                 return
             if path == "/api/notes/rename":
-                self._json(200, self.app.rename_note(str(payload.get("note_id") or ""), str(payload.get("label") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(
+                    200,
+                    self.app.rename_note(
+                        str(payload.get("note_id") or ""),
+                        str(payload.get("label") or ""),
+                        doc_id=str(payload.get("doc_id") or ""),
+                    ),
+                )
                 return
             if path == "/api/notes/delete":
-                self._json(200, self.app.delete_note(str(payload.get("note_id") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(
+                    200,
+                    self.app.delete_note(str(payload.get("note_id") or ""), doc_id=str(payload.get("doc_id") or "")),
+                )
                 return
             if path == "/api/dialogue/reset":
                 self._json(200, self.app.dialogue_reset())
@@ -1138,23 +1208,41 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/dialogue/turn":
                 content_type = self.headers.get("Content-Type", "") or ""
                 if "application/json" in content_type:
-                    raw_chunk_index = payload.get("chunk_index")
-                    self._result(200, self.app.dialogue_turn_text(str(payload.get("text") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
+                    dialogue_chunk_value = payload.get("chunk_index")
+                    self._result(
+                        200,
+                        self.app.dialogue_turn_text(
+                            str(payload.get("text") or ""),
+                            model=str(payload.get("model") or ""),
+                            chunk_index=int(dialogue_chunk_value) if dialogue_chunk_value is not None else None,
+                        ),
+                    )
                     return
             if path == "/api/voice/test":
-                self._result(200, self.app.test_voice(str(payload.get("text") or "Prueba de voz neural del lector conversacional."), play=bool(payload.get("play", False))))
+                self._result(
+                    200,
+                    self.app.test_voice(
+                        str(payload.get("text") or "Prueba de voz neural del lector conversacional."),
+                        play=bool(payload.get("play", False)),
+                    ),
+                )
                 return
             if path == "/api/chat":
-                raw_chunk_index = payload.get("chunk_index")
-                self._result(200, self.app.chat(str(payload.get("message") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
+                chat_chunk_value = payload.get("chunk_index")
+                self._result(
+                    200,
+                    self.app.chat(
+                        str(payload.get("message") or ""),
+                        model=str(payload.get("model") or ""),
+                        chunk_index=int(chat_chunk_value) if chat_chunk_value is not None else None,
+                    ),
+                )
                 return
         except Exception as exc:
             status, payload = error_response(exc, self.request_id)
             self._json(status, payload)
             return
         self._json(404, {"ok": False, "error": "not_found"})
-
-
 
 
 def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTPServer:
@@ -1166,7 +1254,7 @@ def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTP
         "cwd": str(settings.paths.repository),
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "server_file": __file__,
-        "python": os.sys.executable,
+        "python": sys.executable,
         "log_file": str(settings.paths.logs / "fusion_reader_v2_server.log"),
     }
     context = WebContext(app=app, settings=settings, runtime_info=runtime_info)
@@ -1187,10 +1275,7 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
-    print(
-        f"Fusion Reader v2 API listening on "
-        f"http://{settings.security.bind_host}:{settings.ports.api}"
-    )
+    print(f"Fusion Reader v2 API listening on http://{settings.security.bind_host}:{settings.ports.api}")
     try:
         server.serve_forever()
     finally:

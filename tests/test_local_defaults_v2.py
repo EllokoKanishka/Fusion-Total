@@ -26,23 +26,23 @@ class LocalDefaultsV2Tests(unittest.TestCase):
     def test_runtime_scripts_keep_external_defaults_overrideable(self):
         checks = {
             "scripts/start_reader_neural_tts.sh": (
-                'DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts',
-                'DIRECT_CHAT_ALLTALK_PYTHON:-/home/lucy-ubuntu/ebook2audiobook/python_env/bin/python',
+                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "DIRECT_CHAT_ALLTALK_PYTHON:-/home/lucy-ubuntu/ebook2audiobook/python_env/bin/python",
             ),
             "scripts/start_reader_neural_tts_gpu_5090.sh": (
-                'DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts',
-                'FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311',
+                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311",
             ),
             "scripts/bootstrap_alltalk_gpu_5090.sh": (
-                'DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts',
-                'FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311',
+                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311",
             ),
             "scripts/start_fusion_reader_v2_stt.sh": (
-                'FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}',
+                "FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}",
             ),
             "scripts/verify_voice_port_isolation.sh": (
-                'DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy',
-                'DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts',
+                "DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy",
+                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
             ),
         }
         for relative, tokens in checks.items():
