@@ -102,14 +102,20 @@ class NullTTSProvider(TTSProvider):
 class AllTalkProvider(TTSProvider):
     name = "alltalk"
 
-    def __init__(self, base_url: str = "", default_voice: str = "", timeout_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str = "",
+        default_voice: str = "",
+        timeout_seconds: float | None = None,
+        owner_file: Path | str | None = None,
+    ) -> None:
         default_url = f"http://127.0.0.1:{_configured_gpu_tts_port()}"
         configured_url = (base_url or os.environ.get("FUSION_READER_ALLTALK_URL") or default_url).rstrip("/")
         self.default_voice = default_voice or os.environ.get("FUSION_READER_VOICE", "female_03.wav")
         self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_TTS_TIMEOUT", "120"))
         self.max_input_chars = int(os.environ.get("FUSION_READER_TTS_MAX_INPUT_CHARS", "0"))
         self.require_owner = _truthy(os.environ.get("FUSION_READER_REQUIRE_TTS_OWNER"), default=True)
-        self.owner_file = _default_owner_file()
+        self.owner_file = Path(owner_file) if owner_file is not None else _default_owner_file()
         self.base_url = self._preferred_base_url(configured_url)
 
     def _local_port(self, url: str | None = None) -> int | None:
