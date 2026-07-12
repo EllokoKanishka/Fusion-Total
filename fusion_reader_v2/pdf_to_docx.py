@@ -136,7 +136,16 @@ def convert_pdf_to_docx(
 
     # Fallback to legacy engines if Docling GPU is not available
     # Initial fast check for textual content
-    page_texts_sample = _extract_pages_text(pdf_path, limit=20)
+    try:
+        page_texts_sample = _extract_pages_text(pdf_path, limit=20)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        err_msg = f"No se pudo extraer texto del PDF: {exc}"
+        if job:
+            job.state = "error"
+            job.error = err_msg
+            if status_callback:
+                status_callback(job)
+        return ConversionResult(False, error=err_msg, pages=pages, output_path=str(output_path))
     meaningful_pages = [text for text in page_texts_sample if _has_meaningful_text(text)]
 
     if not meaningful_pages:
@@ -219,8 +228,11 @@ def build_docx_from_pdf_structure(page_texts: Iterable[str], output_docx: str | 
 
 
 def _page_count(pdf_path: Path) -> int:
+    tool = shutil.which("pdfinfo")
+    if not tool:
+        return 0
     proc = subprocess.run(
-        ["pdfinfo", str(pdf_path)],
+        [tool, str(pdf_path)],
         check=False,
         capture_output=True,
         text=True,
@@ -360,7 +372,10 @@ def _preprocess_image(image_path: Path) -> None:
 
 
 def _pdftotext_page(pdf_path: Path, page: int | None) -> str:
-    cmd = ["pdftotext", "-layout"]
+    tool = shutil.which("pdftotext")
+    if not tool:
+        raise RuntimeError("pdftotext_not_found")
+    cmd = [tool, "-layout"]
     if page is not None:
         cmd.extend(["-f", str(page), "-l", str(page)])
     cmd.extend([str(pdf_path), "-"])

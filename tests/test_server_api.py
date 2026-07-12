@@ -1,6 +1,8 @@
 import unittest
 import os
+import tempfile
 from pathlib import Path
+from unittest import mock
 from fusion_reader_v2 import OllamaChatProvider
 from tests.helpers import test_app
 
@@ -117,8 +119,12 @@ class ServerAPITests(unittest.TestCase):
     def test_mcp_memory_server_core_logic(self):
         from scripts import fusion_memory_mcp_server as mcp
 
-        self.assertIn("project_state.md", mcp.allowed_memory_files())
-        self.assertTrue(mcp.read_memory_file("project_state.md").startswith("# Project State"))
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp)
+            (memory / "project_state.md").write_text("# Project State\n", encoding="utf-8")
+            with mock.patch.object(mcp, "MEMORY_DIR", memory):
+                self.assertIn("project_state.md", mcp.allowed_memory_files())
+                self.assertTrue(mcp.read_memory_file("project_state.md").startswith("# Project State"))
 
     def test_status_reports_runtime_metadata(self):
         from scripts import fusion_reader_v2_server as server_mod

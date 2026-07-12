@@ -18,15 +18,15 @@ state is preserved before clean recovery.
 
 ## Local verification
 
-Executed from `/tmp/fusion-reader-v2-clean-env-20260712`, Python 3.12.3, editable
+Executed from `/tmp/fusion-reader-v2-clean-env`, Python 3.13.12, editable
 `.[dev]` install:
 
 | Gate | Result |
 |---|---|
-| Python suite | 500 passed in 35.577 s under final coverage run |
-| Stress | 3 passed in 5.834 s; required 100/100/50/50/20 repetition matrix |
-| Line coverage | 91.33% (`6,756 / 7,397`) |
-| Branch coverage | 80.02% (`1,959 / 2,448`) |
+| Python suite | 500 passed in 29.062 s under final coverage run; 27.819 s through `fusionctl test` |
+| Stress | 3 passed in 6.084 s; required 100/100/50/50/20 repetition matrix |
+| Line coverage | 91.27% (`6,765 / 7,412`) |
+| Branch coverage | 80.01% (`1,965 / 2,456`, independently thresholded) |
 | Ruff check/format | pass |
 | mypy | pass, 31 active modules |
 | py_compile | pass |
@@ -46,7 +46,8 @@ dated final report.
 
 ## Operational verification
 
-- `fusionctl doctor` returned `ok: true` and valid owner metadata for 7853.
+- `fusionctl doctor` returned `ok: true`; after the host restart, 7853 was not
+  listening and its temporary owner metadata was absent.
 - `fusionctl status` correctly reported unavailable when no default UI process
   was running.
 - `fusionctl smoke` returned `OK_WITH_WARNINGS`: optional UI/TTS/STT were not

@@ -41,7 +41,9 @@ class PDFToWordTests(unittest.TestCase):
 
     def test_clean_pdf_text_repairs_split_words_and_drops_mechanical_headers(self):
         raw = "[Pagina 1]\nREP UB UC A VII 339\nca ve rna y som bras\neduca ción y prisión con tra\n514..\n"
-        clean = clean_pdf_text(raw)
+        words = {"caverna", "sombras", "educación", "contra"}
+        with mock.patch("fusion_reader_v2.documents._spanish_wordlist", return_value=words):
+            clean = clean_pdf_text(raw)
         self.assertIn("caverna", clean)
         self.assertIn("sombras", clean)
         self.assertIn("educación", clean)
@@ -110,16 +112,18 @@ class PDFToWordTests(unittest.TestCase):
         self.assertIn("el año", text)
 
     def test_import_pdf_keeps_raw_text_when_pdf_uses_text_layer(self):
-        pdf = make_simple_pdf_bytes(
-            [
-                "REP UB UC A VII 339",
-                "ca ve rna y som bras",
-                "educa ción y prisión con tra",
-                "ca ve rna y som bras otra vez",
-                "educa ción y prisión con tra otra vez",
-            ]
+        raw = (
+            "REP UB UC A VII 339\nca ve rna y som bras\neduca ción y prisión con tra\n"
+            "ca ve rna y som bras otra vez\neduca ción y prisión con tra otra vez"
         )
-        doc = import_document_bytes("mito.pdf", pdf)
+        words = {"caverna", "sombras", "educación", "contra"}
+        with mock.patch("fusion_reader_v2.documents._spanish_wordlist", return_value=words):
+            clean = clean_pdf_text(raw)
+        with mock.patch(
+            "fusion_reader_v2.documents.pdf_to_text",
+            return_value=(clean, "pdf textual", raw),
+        ):
+            doc = import_document_bytes("mito.pdf", b"%PDF synthetic")
         self.assertEqual(doc.source_type, "pdf")
         self.assertTrue(doc.raw_text)
         self.assertIn("REP UB UC A VII 339", doc.raw_text)
@@ -161,7 +165,15 @@ class PDFToWordTests(unittest.TestCase):
         pdf = root / "p.pdf"
         docx = root / "p.docx"
         pdf.write_bytes(make_simple_pdf_bytes(["Capitulo 1", "Realidad"]))
-        result = convert_pdf_to_docx(pdf, docx)
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+            mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False),
+            mock.patch(
+                "fusion_reader_v2.pdf_to_docx._extract_pages_text",
+                return_value=["CAPÍTULO 1\nRealidad y lectura estable."],
+            ),
+        ):
+            result = convert_pdf_to_docx(pdf, docx)
         self.assertTrue(result.ok)
         self.assertTrue(docx.exists())
 
@@ -200,14 +212,20 @@ class PDFToWordTests(unittest.TestCase):
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=True)
     def test_pdf_to_word_docling_gpu_selection(self, mock_gpu):
-        with mock.patch("fusion_reader_v2.pdf_to_docx._convert_with_docling_gpu") as mock_conv:
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+            mock.patch("fusion_reader_v2.pdf_to_docx._convert_with_docling_gpu") as mock_conv,
+        ):
             mock_conv.return_value = mock.MagicMock(ok=True, engine="docling_gpu")
             res = convert_pdf_to_docx("d.pdf", "o.docx")
             self.assertEqual(res.engine, "docling_gpu")
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
     def test_pdf_to_word_no_docling_gpu_fallback_for_scans(self, mock_gpu):
-        with mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=[""]):
+        with (
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+            mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=[""]),
+        ):
             res = convert_pdf_to_docx("d.pdf", "o.docx")
             self.assertFalse(res.ok)
 
