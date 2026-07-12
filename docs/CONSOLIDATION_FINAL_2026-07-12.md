@@ -18,15 +18,15 @@ state is preserved before clean recovery.
 
 ## Local verification
 
-Executed from `/tmp/fusion-reader-v2-clean-env`, Python 3.13.12, editable
+Executed from `/tmp/fusion-reader-v2-py312`, Python 3.12.3, editable
 `.[dev]` install:
 
 | Gate | Result |
 |---|---|
-| Python suite | 500 passed in 29.062 s under final coverage run; 27.819 s through `fusionctl test` |
-| Stress | 3 passed in 6.084 s; required 100/100/50/50/20 repetition matrix |
-| Line coverage | 91.27% (`6,765 / 7,412`) |
-| Branch coverage | 80.01% (`1,965 / 2,456`, independently thresholded) |
+| Python suite | 500 passed in 29.471 s under final Python 3.12 coverage run |
+| Stress | 3 passed in 6.528 s; required 100/100/50/50/20 repetition matrix |
+| Line coverage | 91.32% (`6,769 / 7,412`) |
+| Branch coverage | 80.17% (`1,969 / 2,456`, independently thresholded) |
 | Ruff check/format | pass |
 | mypy | pass, 31 active modules |
 | py_compile | pass |

@@ -505,6 +505,25 @@ Párrafo normal.
             def callback(job: pdf.JobStatus) -> None:
                 events.append(job.stage)
 
+            extraction_job = pdf.JobStatus("extract-error")
+            with (
+                mock.patch.object(pdf, "_page_count", return_value=0),
+                mock.patch.object(pdf, "is_docling_gpu_available", return_value=False),
+                mock.patch.object(pdf, "_extract_pages_text", side_effect=OSError("missing")),
+            ):
+                extraction_error = pdf.convert_pdf_to_docx(source, output, callback, extraction_job)
+            self.assertFalse(extraction_error.ok)
+            self.assertEqual(extraction_job.state, "error")
+            self.assertIn("missing", extraction_job.error)
+
+            extraction_without_callback = pdf.JobStatus("extract-error-no-callback")
+            with (
+                mock.patch.object(pdf, "_page_count", return_value=0),
+                mock.patch.object(pdf, "is_docling_gpu_available", return_value=False),
+                mock.patch.object(pdf, "_extract_pages_text", side_effect=subprocess.SubprocessError("failed")),
+            ):
+                self.assertFalse(pdf.convert_pdf_to_docx(source, output, job=extraction_without_callback).ok)
+
             job = pdf.JobStatus("docling")
             docling_result = pdf.ConversionResult(True, output_path=str(output), engine="docling_gpu")
             with (
@@ -520,6 +539,14 @@ Párrafo normal.
                 mock.patch.object(pdf, "_convert_with_docling_gpu", side_effect=RuntimeError("gpu")),
             ):
                 self.assertIn("Fallo", pdf.convert_pdf_to_docx(source, output, callback, job).error)
+
+            docling_without_callback = pdf.JobStatus("docling-no-callback")
+            with (
+                mock.patch.object(pdf, "_page_count", return_value=2),
+                mock.patch.object(pdf, "is_docling_gpu_available", return_value=True),
+                mock.patch.object(pdf, "_convert_with_docling_gpu", side_effect=RuntimeError("gpu")),
+            ):
+                self.assertIn("Fallo", pdf.convert_pdf_to_docx(source, output, job=docling_without_callback).error)
 
             with (
                 mock.patch.object(pdf, "_page_count", return_value=1),
