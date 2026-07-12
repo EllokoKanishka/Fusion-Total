@@ -238,12 +238,15 @@ class FailingChatProvider:
         from fusion_reader_v2.conversation import ChatResult
         return ChatResult(False, model=model or "broken-local", detail=self.detail, duration_ms=41)
 
-def attach_legacy_tests(target_class, names: tuple[str, ...]) -> None:
-    from tests.test_fusion_reader_v2 import FusionReaderV2Tests
+def web_source() -> str:
+    paths = (
+        Path("fusion_reader_v2/web/server.py"),
+        Path("fusion_reader_v2/web/static/index.html"),
+        Path("fusion_reader_v2/web/static/app.js"),
+        Path("fusion_reader_v2/web/static/styles.css"),
+    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
-    for name in names:
-        legacy_name = "legacy_" + name.removeprefix("test_")
-        setattr(target_class, name, getattr(FusionReaderV2Tests, legacy_name))
 
 class NullResearchProvider:
     def __init__(self, results=None) -> None:

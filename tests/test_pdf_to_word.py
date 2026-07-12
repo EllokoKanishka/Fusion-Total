@@ -22,10 +22,11 @@ from tests.helpers import (
     test_app,
     make_simple_pdf_bytes,
 )
+from tests.helpers import web_source
 
 class PDFToWordTests(unittest.TestCase):
     def test_pdf_to_word_ui_exists_and_uses_compact_tool_naming(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn("PDF → Word", server)
         self.assertIn("pdfToWordTool", server)
 
@@ -154,12 +155,12 @@ class PDFToWordTests(unittest.TestCase):
         self.assertTrue(docx.exists())
 
     def test_pdf_to_word_ui_is_compact_and_correct(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn('id="pdfToWordTool"', server)
         self.assertNotIn("Soltá un PDF", server)
 
     def test_server_pdf_to_word_limit_is_500mb(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn('500 * 1024 * 1024', server)
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
@@ -211,11 +212,3 @@ class PDFToWordTests(unittest.TestCase):
     def test_md_to_docx_glued_words_v4_real_ars_magica_examples(self):
         from fusion_reader_v2.md_to_docx import sanitize_markdown
         self.assertIn("Diario de", sanitize_markdown("Diariode Antoninus"))
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(PDFToWordTests, (
-    "test_clean_heading_preserves_chapter_number",
-    "test_pdf_to_word_docling_uses_placeholder",
-    "test_pdf_to_word_ocr_cleanup_logic",
-))

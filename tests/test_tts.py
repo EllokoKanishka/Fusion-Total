@@ -281,11 +281,3 @@ class TTSTests(unittest.TestCase):
             if app.prepare_status()["status"] != "running": break
             time.sleep(0.01)
         self.assertNotEqual(app.prepare_status()["status"], "running")
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(TTSTests, (
-    "test_server_ui_surfaces_active_stt_provider_and_fallback_state",
-    "test_server_ui_surfaces_tts_gpu_and_cpu_fallback_modes",
-    "test_voice_port_isolation_verifier_covers_doctora_memory_sources",
-))

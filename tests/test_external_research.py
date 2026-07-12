@@ -88,12 +88,3 @@ class ExternalResearchTests(unittest.TestCase):
         out = app.dialogue_turn_text("buscá en internet algo")
         self.assertTrue(out["external_research"])
         self.assertIn("Resultado de prueba", out["answer"])
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(ExternalResearchTests, (
-    "test_openclaw_bridge_humanizes_rate_limit_failures",
-    "test_openclaw_bridge_retries_after_gateway_restart",
-    "test_searxng_bridge_handles_no_results",
-    "test_searxng_bridge_handles_timeout",
-))

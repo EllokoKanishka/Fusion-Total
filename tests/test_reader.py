@@ -309,9 +309,3 @@ class ReaderTests(unittest.TestCase):
         self.assertFalse(status["document"]["loaded"])
         self.assertFalse(status["anchor"]["document_available"])
         self.assertFalse(status["anchor"]["uses_document"])
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(ReaderTests, (
-    "test_restart_restores_last_document_cursor_and_notes",
-))

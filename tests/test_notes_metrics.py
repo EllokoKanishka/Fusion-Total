@@ -8,6 +8,7 @@ from tests.helpers import (
     test_app,
     NullTTSProvider,
 )
+from tests.helpers import web_source
 
 class NotesMetricsTests(unittest.TestCase):
     def test_notes_are_persisted_to_json_file(self):
@@ -82,20 +83,6 @@ class NotesMetricsTests(unittest.TestCase):
         self.assertNotIn("Pasted", prompt)
 
     def test_server_exposes_laboratory_history_reset_button_and_endpoint(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn("clearLabHistoryBtn", server)
         self.assertIn("/api/laboratory/reset", server)
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(NotesMetricsTests, (
-    "test_note_command_understands_natural_document_notes_phrase",
-    "test_note_command_understands_take_note_language",
-    "test_note_request_without_content_does_not_reach_llm",
-    "test_notes_get_compact_labels_and_can_be_renamed",
-    "test_notes_persist_by_document_and_chunk",
-    "test_notes_update_delete_and_chat_command",
-    "test_voice_metrics_are_persisted",
-    "test_voice_metrics_group_by_document_and_chunk",
-    "test_voice_metrics_summary_groups_by_provider",
-))

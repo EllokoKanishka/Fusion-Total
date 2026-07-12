@@ -474,14 +474,3 @@ class ConversationTests(unittest.TestCase):
         app.set_reasoning_mode("thinking")
         app.chat("H")
         self.assertIn("Abrí preguntas solo si son realmente necesarias", chat_provider.calls[0][0][0]["content"])
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(ConversationTests, (
-    "test_chat_document_search_stays_local_even_when_bridge_exists",
-    "test_chat_explicit_academic_search_activates_external_research",
-    "test_chat_explicit_external_research_uses_openclaw_bridge",
-    "test_chat_laboratory_reference_uses_l_note_even_with_document_loaded",
-    "test_chat_normal_question_does_not_activate_external_research",
-    "test_chat_note_without_document_becomes_laboratory_note",
-))

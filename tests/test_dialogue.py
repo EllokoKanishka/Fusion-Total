@@ -19,6 +19,7 @@ from tests.helpers import (
     NullTTSProvider,
     FailingTTSProvider,
 )
+from tests.helpers import web_source
 
 class DialogueTests(unittest.TestCase):
     def test_dialogue_degrades_supreme_to_thinking_by_default(self):
@@ -295,7 +296,7 @@ class DialogueTests(unittest.TestCase):
         self.assertNotIn("...", out)
 
     def test_dialogue_barge_in_keeps_pre_roll_for_short_commands(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn("interruptedWhileSpeech", server)
 
     def test_dialogue_status_reports_degraded_reasoning(self):
@@ -353,16 +354,3 @@ class DialogueTests(unittest.TestCase):
         auto = AutoSTTProvider(primary=primary, fallback=fallback)
         res = auto.transcribe_file(Path("/tmp/x.wav"))
         self.assertEqual(res.text, "¡Suscríbete!")
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(DialogueTests, (
-    "test_closing_discipline_is_strict_in_dialogue",
-    "test_dialogue_context_includes_reference_document_intro_chunks",
-    "test_dialogue_external_research_keeps_text_when_tts_fails",
-    "test_dialogue_external_research_uses_bridge_and_keeps_urls_out_of_spoken_tts",
-    "test_dialogue_microphone_capture_diagnostics_are_exposed",
-    "test_dialogue_ui_reports_microphone_permission_states",
-    "test_normal_mode_dialogue_prompt_includes_lucy_persona",
-    "test_thinking_mode_dialogue_prompt_includes_lucy_persona",
-))

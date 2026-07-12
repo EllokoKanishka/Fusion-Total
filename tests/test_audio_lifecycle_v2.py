@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fusion_reader_v2 import AudioArtifact, NullTTSProvider
 from tests.helpers import test_app
+from tests.helpers import web_source
 
 
 class ControlledTTS(NullTTSProvider):
@@ -342,7 +343,7 @@ class AudioLifecycleV2Tests(unittest.TestCase):
 
 class AudioLifecycleFrontendTests(unittest.TestCase):
     def test_frontend_invalidates_requests_and_resets_player(self):
-        text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        text = web_source()
         for token in ("AbortController", "audioLifecycleSequence", "activeReadRequest", "els.player.pause()", "els.player.currentTime = 0", "els.player.removeAttribute('src')", "els.player.load()", "resetAudioLifecycle"):
             self.assertIn(token, text)
         load = text[text.index("async function loadFile(file)"):text.index("async function navigate(")]
@@ -350,7 +351,7 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         self.assertNotIn("if (role === 'reference') {\n        resetAudioLifecycle", load)
 
     def test_frontend_checks_identity_and_does_not_gate_read_on_tts_snapshot(self):
-        text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        text = web_source()
         self.assertIn("Number(data.document_generation || 0) !== currentGeneration", text)
         self.assertIn("String(data.requested_doc_id || '') !== currentDocId", text)
         self.assertIn("String(data.voice || '') !== currentVoice", text)
@@ -363,9 +364,10 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         self.assertIn('self._result(409 if result.get("stale") else 200, result)', text)
 
     def test_frontend_busy_leases_are_balanced_for_resetting_operations(self):
-        server_text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
-        helper_text = Path("scripts/fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
-        self.assertIn("BUSY_CONTROL_HELPERS", server_text)
+        server_text = web_source()
+        helper_text = Path("fusion_reader_v2/web/static/busy_controls.js").read_text(encoding="utf-8")
+        self.assertNotIn("__BUSY_CONTROL_HELPERS__", server_text)
+        self.assertIn('src="/static/busy_controls.js"', server_text)
         self.assertIn("busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '')", server_text)
         self.assertIn("els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));", server_text)
         self.assertNotIn("function setBusy(", server_text)
