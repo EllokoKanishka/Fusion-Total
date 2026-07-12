@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Archived desktop file agent; not part of Fusion Reader v2."""
+
 from __future__ import annotations
 
 import datetime as dt

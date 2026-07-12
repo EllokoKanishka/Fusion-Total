@@ -1,3 +1,5 @@
+"""Archived sensor prototype; not part of Fusion Reader v2."""
+
 import json
 import logging
 import os
