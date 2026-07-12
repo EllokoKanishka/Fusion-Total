@@ -117,6 +117,64 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["doc_id"], "d")
 
+    def test_two_servers_keep_application_state_and_jobs_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._start(root / "first")
+            second = self._start(root / "second")
+            self.assertIsNot(first.context, second.context)
+            self.assertIsNot(first.context.import_jobs, second.context.import_jobs)
+            self.assertIsNone(web_server.APP)
+
+            def load(server, doc_id: str) -> None:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/load",
+                    data=json.dumps({"doc_id": doc_id, "title": doc_id, "text": "Texto"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=3.0) as response:
+                    self.assertEqual(response.status, 200)
+
+            load(first, "first-doc")
+            load(second, "second-doc")
+            self.assertEqual(first.context.app.status()["doc_id"], "first-doc")
+            self.assertEqual(second.context.app.status()["doc_id"], "second-doc")
+
+    def test_status_exposes_bounded_operational_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/status"
+            with urllib.request.urlopen(url, timeout=3.0) as response:
+                payload = json.loads(response.read())
+            for key in ("version", "commit", "pid", "uptime_seconds", "state_schema", "cache", "jobs", "providers", "ports", "warnings", "degradations"):
+                self.assertIn(key, payload)
+            self.assertEqual(payload["ports"]["tts_gpu"], 7853)
+            self.assertEqual(payload["ports"]["tts_cpu"], 7851)
+
+    def test_malformed_json_and_content_type_return_stable_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            url = f"http://127.0.0.1:{server.server_address[1]}/api/load"
+            cases = (
+                (b"{", "application/json", "invalid_json"),
+                (b"plain", "text/plain", "application_json_required"),
+                (b"[]", "application/json", "json_object_required"),
+            )
+            for body, content_type, error in cases:
+                with self.subTest(error=error):
+                    request = urllib.request.Request(
+                        url,
+                        data=body,
+                        headers={"Content-Type": content_type},
+                        method="POST",
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(request, timeout=3.0)
+                    payload = json.loads(raised.exception.read())
+                    self.assertEqual(payload["error"], error)
+                    self.assertTrue(payload["request_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

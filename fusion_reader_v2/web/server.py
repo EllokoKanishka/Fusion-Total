@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hmac
 import json
 import mimetypes
@@ -11,35 +12,31 @@ import tempfile
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from fusion_reader_v2 import FusionReaderV2, import_document_bytes, import_document_path
 from fusion_reader_v2.config import Settings, create_settings
+from fusion_reader_v2.domain.jobs import JobRegistry
+from fusion_reader_v2.version import __version__
+from fusion_reader_v2.web.errors import error_response
+from fusion_reader_v2.web.routing import create_router
 from fusion_reader_v2.pdf_to_docx import (
     ConversionResult,
     JobStatus,
     convert_pdf_to_docx,
-    find_downloads_dir,
     safe_output_name,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 PORT = 8010
-LIBRARY_ROOT = ROOT / "library"
-CONVERTED_ROOT = ROOT / "runtime" / "fusion_reader_v2" / "imported_texts"
-UPLOAD_ROOT = ROOT / "runtime" / "fusion_reader_v2" / "upload_jobs"
-PDF_TO_WORD_ROOT = ROOT / "runtime" / "fusion_reader_v2" / "pdf_to_word"
 ALLOWED_LIBRARY_SUFFIXES = {".txt", ".md"}
-IMPORT_JOBS: dict[str, dict] = {}
-IMPORT_JOBS_LOCK = threading.Lock()
-PDF_TO_DOCX_DOWNLOADS: dict[str, dict] = {}
-PDF_TO_WORD_JOBS: dict[str, JobStatus] = {}
-PDF_TO_DOCX_LOCK = threading.Lock()
+# Compatibility sentinel: application state is owned by each WebContext.
 APP: FusionReaderV2 | None = None
-SETTINGS: Settings | None = None
+ROUTER = create_router()
 
 
 def _load_static_text(filename: str, fallback: str = "") -> str:
@@ -66,6 +63,132 @@ RUNTIME_INFO = {
 }
 
 
+@dataclass
+class WebContext:
+    app: FusionReaderV2
+    settings: Settings
+    runtime_info: dict
+    import_jobs: JobRegistry[dict] = field(init=False)
+    pdf_jobs: JobRegistry[JobStatus] = field(init=False)
+    pdf_downloads: JobRegistry[dict] = field(init=False)
+    _threads: set[threading.Thread] = field(default_factory=set, init=False)
+    _threads_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _closed: bool = field(default=False, init=False)
+    _started_monotonic: float = field(default_factory=time.monotonic, init=False)
+
+    def __post_init__(self) -> None:
+        limits = self.settings.limits
+        self.import_jobs = JobRegistry(
+            max_items=limits.job_max_items,
+            ttl_seconds=limits.job_ttl_seconds,
+            is_terminal=lambda item: str(item.get("status") or "") in {"done", "cancelled", "error"},
+            updated_at=lambda item: float(item.get("updated_ts") or item.get("created_ts") or 0),
+        )
+        self.pdf_jobs = JobRegistry(
+            max_items=limits.job_max_items,
+            ttl_seconds=limits.job_ttl_seconds,
+            is_terminal=lambda item: str(item.state or "") in {"done", "cancelled", "error"},
+            updated_at=lambda item: float(getattr(item, "updated_ts", getattr(item, "created_ts", 0)) or 0),
+        )
+        self.pdf_downloads = JobRegistry(
+            max_items=limits.job_max_items,
+            ttl_seconds=limits.job_ttl_seconds,
+            is_terminal=lambda _item: True,
+            updated_at=lambda item: float(item.get("created_ts") or 0),
+        )
+
+    @property
+    def library_root(self) -> Path:
+        return self.settings.paths.library
+
+    @property
+    def converted_root(self) -> Path:
+        return self.settings.paths.runtime / "imported_texts"
+
+    @property
+    def upload_root(self) -> Path:
+        return self.settings.paths.runtime / "upload_jobs"
+
+    @property
+    def pdf_root(self) -> Path:
+        return self.settings.paths.runtime / "pdf_to_word"
+
+    def start_thread(self, *, target, args: tuple, name: str) -> threading.Thread:
+        def run_owned() -> None:
+            try:
+                target(*args)
+            finally:
+                with self._threads_lock:
+                    self._threads.discard(threading.current_thread())
+
+        with self._threads_lock:
+            if self._closed:
+                raise RuntimeError("web_context_closed")
+            thread = threading.Thread(target=run_owned, name=name, daemon=False)
+            self._threads.add(thread)
+            thread.start()
+            return thread
+
+    def shutdown_jobs(self, timeout: float = 10.0) -> None:
+        with self._threads_lock:
+            if self._closed and not self._threads:
+                return
+            self._closed = True
+            threads = list(self._threads)
+        for job in self.pdf_jobs.snapshot().values():
+            if not job.state in {"done", "cancelled", "error"}:
+                job.cancelled = True
+                job.state = "cancelled"
+        deadline = time.monotonic() + max(0.0, timeout)
+        for thread in threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+
+    def status(self) -> dict:
+        status = self.app.status()
+        services = dict(status.get("services") or {})
+        degradations = [
+            name
+            for name in ("tts", "stt", "chat", "external_research")
+            if not bool((services.get(name) or {}).get("ready", (services.get(name) or {}).get("ok")))
+        ]
+        persistence_warnings = [
+            warning.code for warning in getattr(getattr(self.app, "_session_store", None), "warnings", ())
+        ]
+        status.update(
+            {
+                "version": __version__,
+                "commit": self.runtime_info.get("commit", "unknown"),
+                "pid": self.runtime_info.get("pid", os.getpid()),
+                "uptime_seconds": round(time.monotonic() - self._started_monotonic, 3),
+                "state_schema": 1,
+                "cache": self.app.cache.inspect(),
+                "jobs": {
+                    "imports": len(self.import_jobs),
+                    "pdf_to_docx": len(self.pdf_jobs),
+                    "pdf_downloads": len(self.pdf_downloads),
+                    "audio_export": status.get("audio_export", {}),
+                    "prepare": status.get("prepare", {}),
+                },
+                "providers": services,
+                "ports": {
+                    "api": self.settings.ports.api,
+                    "tts_gpu": self.settings.ports.tts_gpu,
+                    "tts_cpu": self.settings.ports.tts_cpu,
+                    "stt": self.settings.ports.stt,
+                    "ollama": self.settings.ports.ollama,
+                    "searxng": self.settings.ports.searxng,
+                },
+                "warnings": persistence_warnings,
+                "degradations": degradations,
+                "runtime": self.runtime_info,
+            }
+        )
+        return status
+
+
 def _get_git_commit(repository: Path) -> str:
     import subprocess
 
@@ -87,14 +210,22 @@ class FusionHTTPServer(ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True
 
-def library_items() -> list[dict]:
-    if not LIBRARY_ROOT.exists():
+    context: WebContext
+
+    def server_close(self) -> None:
+        if hasattr(self, "context"):
+            self.context.shutdown_jobs(timeout=10.0)
+        super().server_close()
+
+
+def library_items(context: WebContext) -> list[dict]:
+    if not context.library_root.exists():
         return []
     items: list[dict] = []
-    for path in sorted(LIBRARY_ROOT.rglob("*")):
+    for path in sorted(context.library_root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
             continue
-        rel = path.relative_to(LIBRARY_ROOT).as_posix()
+        rel = path.relative_to(context.library_root).as_posix()
         try:
             text = path.read_text(encoding="utf-8", errors="replace").strip()
         except Exception:
@@ -109,13 +240,13 @@ def library_items() -> list[dict]:
     return items
 
 
-def resolve_library_path(book_id: str) -> Path:
+def resolve_library_path(context: WebContext, book_id: str) -> Path:
     raw = unquote(str(book_id or "")).strip()
     rel = Path(raw)
     if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
         raise ValueError("invalid_book_id")
-    path = (LIBRARY_ROOT / rel).resolve()
-    library_root = LIBRARY_ROOT.resolve()
+    path = (context.library_root / rel).resolve()
+    library_root = context.library_root.resolve()
     if path != library_root and library_root not in path.parents:
         raise ValueError("book_outside_library")
     if path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
@@ -125,37 +256,37 @@ def resolve_library_path(book_id: str) -> Path:
     return path
 
 
-def audio_url_for(path_value: str) -> str:
+def audio_url_for(context: WebContext, path_value: str) -> str:
     if not path_value:
         return ""
     path = Path(path_value).resolve()
-    cache_root = APP.cache.root.resolve()
+    cache_root = context.app.cache.root.resolve()
     if path.parent != cache_root or not path.exists():
         return ""
     return f"/audio/{path.name}"
 
 
-def cached_audio_path(url_path: str) -> Path | None:
+def cached_audio_path(context: WebContext, url_path: str) -> Path | None:
     filename = Path(unquote(url_path.removeprefix("/audio/"))).name
-    audio_path = (APP.cache.root / filename).resolve()
-    cache_root = APP.cache.root.resolve()
+    audio_path = (context.app.cache.root / filename).resolve()
+    cache_root = context.app.cache.root.resolve()
     if audio_path.parent != cache_root or not audio_path.exists():
         return None
     return audio_path
 
 
-def load_imported_document(imported, role: str = "main") -> dict:
-    CONVERTED_ROOT.mkdir(parents=True, exist_ok=True)
-    target = CONVERTED_ROOT / f"{imported.doc_id}.txt"
+def load_imported_document(context: WebContext, imported, role: str = "main") -> dict:
+    context.converted_root.mkdir(parents=True, exist_ok=True)
+    target = context.converted_root / f"{imported.doc_id}.txt"
     target.write_text(imported.text, encoding="utf-8")
     raw_target = None
     if getattr(imported, "raw_text", ""):
-        raw_target = CONVERTED_ROOT / f"{imported.doc_id}.raw.txt"
+        raw_target = context.converted_root / f"{imported.doc_id}.raw.txt"
         raw_target.write_text(imported.raw_text, encoding="utf-8")
     if str(role or "main") == "reference":
-        out = APP.add_reference_text(imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type)
+        out = context.app.add_reference_text(imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type)
     else:
-        out = APP.load_text(imported.doc_id, imported.title, imported.text, prefetch=False, source_path=str(target), source_type=imported.source_type)
+        out = context.app.load_text(imported.doc_id, imported.title, imported.text, prefetch=False, source_path=str(target), source_type=imported.source_type)
     out["role"] = "reference" if str(role or "") == "reference" else "main"
     out["source_type"] = imported.source_type
     out["import_detail"] = imported.detail
@@ -165,7 +296,14 @@ def load_imported_document(imported, role: str = "main") -> dict:
     return out
 
 
-def new_import_job(filename: str, mime: str, upload_path: Path, size_bytes: int, role: str = "main") -> dict:
+def new_import_job(
+    context: WebContext,
+    filename: str,
+    mime: str,
+    upload_path: Path,
+    size_bytes: int,
+    role: str = "main",
+) -> dict:
     job_id = uuid.uuid4().hex[:16]
     now = time.time()
     job = {
@@ -186,29 +324,16 @@ def new_import_job(filename: str, mime: str, upload_path: Path, size_bytes: int,
         "result": None,
         "error": "",
     }
-    with IMPORT_JOBS_LOCK:
-        IMPORT_JOBS[job_id] = job
-        prune_import_jobs_locked()
+    context.import_jobs.add(job_id, job)
     return dict(job)
 
 
-def prune_import_jobs_locked(max_age_seconds: int = 6 * 60 * 60) -> None:
-    now = time.time()
-    stale = [
-        job_id
-        for job_id, job in IMPORT_JOBS.items()
-        if now - float(job.get("updated_ts") or job.get("created_ts") or now) > max_age_seconds
-        and str(job.get("status")) in {"done", "error"}
-    ]
-    for job_id in stale:
-        IMPORT_JOBS.pop(job_id, None)
+def prune_import_jobs(context: WebContext) -> int:
+    return context.import_jobs.prune()
 
 
-def update_import_job(job_id: str, **changes) -> None:
-    with IMPORT_JOBS_LOCK:
-        job = IMPORT_JOBS.get(job_id)
-        if not job:
-            return
+def update_import_job(context: WebContext, job_id: str, **changes) -> None:
+    def update(job: dict) -> None:
         job.update(changes)
         current = int(job.get("current") or 0)
         total = int(job.get("total") or 0)
@@ -216,21 +341,47 @@ def update_import_job(job_id: str, **changes) -> None:
             job["percent"] = max(0, min(100, int(current * 100 / total)))
         job["updated_ts"] = time.time()
 
+    context.import_jobs.update(job_id, update)
 
-def import_progress_for(job_id: str):
+
+def import_progress_for(context: WebContext, job_id: str):
     def progress(stage: str, current: int = 0, total: int = 0, message: str = "") -> None:
-        update_import_job(job_id, status="running", stage=stage, current=int(current or 0), total=int(total or 0), message=message or stage)
+        update_import_job(
+            context,
+            job_id,
+            status="running",
+            stage=stage,
+            current=int(current or 0),
+            total=int(total or 0),
+            message=message or stage,
+        )
 
     return progress
 
 
-def import_job_worker(job_id: str, filename: str, upload_path: Path, mime: str, role: str = "main") -> None:
-    update_import_job(job_id, status="running", stage="starting", message="Preparando conversión...")
+def import_job_worker(
+    context: WebContext,
+    job_id: str,
+    filename: str,
+    upload_path: Path,
+    mime: str,
+    role: str = "main",
+) -> None:
+    update_import_job(context, job_id, status="running", stage="starting", message="Preparando conversión...")
     try:
-        imported = import_document_path(filename, upload_path, mime=mime, progress=import_progress_for(job_id))
-        update_import_job(job_id, status="running", stage="loading", current=0, total=0, message="Cargando texto convertido en el lector...")
-        result = load_imported_document(imported, role=role)
+        imported = import_document_path(filename, upload_path, mime=mime, progress=import_progress_for(context, job_id))
         update_import_job(
+            context,
+            job_id,
+            status="running",
+            stage="loading",
+            current=0,
+            total=0,
+            message="Cargando texto convertido en el lector...",
+        )
+        result = load_imported_document(context, imported, role=role)
+        update_import_job(
+            context,
             job_id,
             status="done",
             stage="done",
@@ -241,51 +392,53 @@ def import_job_worker(job_id: str, filename: str, upload_path: Path, mime: str, 
             result=result,
         )
     except Exception as exc:
-        update_import_job(job_id, status="error", stage="error", message=f"No pude convertir el documento: {exc}", error=str(exc))
+        update_import_job(
+            context,
+            job_id,
+            status="error",
+            stage="error",
+            message="No pude convertir el documento.",
+            error=type(exc).__name__,
+        )
     finally:
         upload_path.unlink(missing_ok=True)
 
 
-def get_import_job(job_id: str) -> dict | None:
-    with IMPORT_JOBS_LOCK:
-        job = IMPORT_JOBS.get(job_id)
-        return dict(job) if job else None
+def get_import_job(context: WebContext, job_id: str) -> dict | None:
+    job = context.import_jobs.get(job_id)
+    return dict(job) if job else None
 
 
-def prune_pdf_to_docx_locked(max_age_seconds: int = 6 * 60 * 60) -> None:
-    now = time.time()
-    stale = [
-        job_id
-        for job_id, job in PDF_TO_DOCX_DOWNLOADS.items()
-        if now - float(job.get("created_ts") or now) > max_age_seconds
-    ]
-    for job_id in stale:
-        PDF_TO_DOCX_DOWNLOADS.pop(job_id, None)
+def prune_pdf_to_docx(context: WebContext) -> int:
+    return context.pdf_downloads.prune()
 
 
-def register_pdf_to_docx_download(saved_path: Path, filename: str, result: ConversionResult) -> dict:
+def register_pdf_to_docx_download(
+    context: WebContext,
+    saved_path: Path,
+    filename: str,
+    result: ConversionResult,
+) -> dict:
     job_id = uuid.uuid4().hex[:16]
-    with PDF_TO_DOCX_LOCK:
-        PDF_TO_DOCX_DOWNLOADS[job_id] = {
-            "id": job_id,
-            "path": str(saved_path),
-            "filename": filename,
-            "created_ts": time.time(),
-            "pages": result.pages,
-            "warnings": list(result.warnings),
-        }
-        prune_pdf_to_docx_locked()
-    return dict(PDF_TO_DOCX_DOWNLOADS[job_id])
+    item = {
+        "id": job_id,
+        "path": str(saved_path),
+        "filename": filename,
+        "created_ts": time.time(),
+        "pages": result.pages,
+        "warnings": list(result.warnings),
+    }
+    context.pdf_downloads.add(job_id, item)
+    return dict(item)
 
 
-def get_pdf_to_docx_download(job_id: str) -> dict | None:
-    with PDF_TO_DOCX_LOCK:
-        item = PDF_TO_DOCX_DOWNLOADS.get(job_id)
-        return dict(item) if item else None
+def get_pdf_to_docx_download(context: WebContext, job_id: str) -> dict | None:
+    item = context.pdf_downloads.get(job_id)
+    return dict(item) if item else None
 
 
-def unique_download_target(filename: str) -> Path:
-    downloads_dir = find_downloads_dir()
+def unique_download_target(context: WebContext, filename: str) -> Path:
+    downloads_dir = context.settings.paths.downloads
     downloads_dir.mkdir(parents=True, exist_ok=True)
     candidate = downloads_dir / filename
     if not candidate.exists():
@@ -301,6 +454,18 @@ def unique_download_target(filename: str) -> Path:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "FusionReaderV2/0.1"
+
+    @property
+    def context(self) -> WebContext:
+        return self.server.context  # type: ignore[attr-defined]
+
+    @property
+    def app(self) -> FusionReaderV2:
+        return self.context.app
+
+    @property
+    def settings(self) -> Settings:
+        return self.context.settings
 
     def setup(self) -> None:
         super().setup()
@@ -340,14 +505,14 @@ class Handler(BaseHTTPRequestHandler):
     def _result(self, status: int, payload: dict) -> None:
         out = dict(payload)
         if out.get("audio"):
-            out["audio_url"] = audio_url_for(str(out.get("audio") or ""))
+            out["audio_url"] = audio_url_for(self.context, str(out.get("audio") or ""))
         self._json(status, out)
 
     def _payload(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             return {}
-        limit = SETTINGS.limits.upload_max_bytes if SETTINGS else 128 * 1024 * 1024
+        limit = self.settings.limits.upload_max_bytes
         if length > limit:
             raise ValueError("request_body_too_large")
         content_type = (self.headers.get("Content-Type", "") or "").lower()
@@ -355,22 +520,25 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("application_json_required")
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid_json") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("json_object_required")
+        return payload
 
     def _read_body_to_temp(self, filename: str) -> Path:
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             raise ValueError("missing_file_data")
         suffix = Path(Path(filename).name).suffix
-        limit = SETTINGS.limits.upload_max_bytes if SETTINGS else 128 * 1024 * 1024
-        if suffix.lower() == ".pdf" and SETTINGS:
-            limit = SETTINGS.limits.pdf_max_bytes
+        limit = self.settings.limits.upload_max_bytes
+        if suffix.lower() == ".pdf":
+            limit = self.settings.limits.pdf_max_bytes
         if length > limit:
             raise ValueError("upload_too_large")
-        UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=suffix, dir=UPLOAD_ROOT)
+        self.context.upload_root.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root)
         path = Path(name)
         remaining = length
         try:
@@ -389,7 +557,11 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("incomplete_upload")
         return path
 
-    def _read_multipart_file(self, field_name: str = "file", max_bytes: int = 500 * 1024 * 1024) -> tuple[str, str, bytes]:
+    def _read_multipart_file(
+        self,
+        field_name: str = "file",
+        max_bytes: int | None = None,
+    ) -> tuple[str, str, Path]:
         content_type = self.headers.get("Content-Type", "") or ""
         match = re.search(r'boundary="?([^";]+)"?', content_type)
         if "multipart/form-data" not in content_type or not match:
@@ -397,35 +569,81 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             raise ValueError("missing_file_data")
-        if length > max_bytes:
-            raise ValueError(f"PDF demasiado grande para esta versión. Límite: {max_bytes // (1024 * 1024)} MB.")
+        limit = self.settings.limits.pdf_max_bytes if max_bytes is None else int(max_bytes)
+        if length > limit:
+            raise ValueError("pdf_too_large")
         boundary = match.group(1).encode("utf-8")
-        body = self.rfile.read(length)
-        marker = b"--" + boundary
-        for part in body.split(marker):
-            if not part or part in {b"--", b"--\r\n"}:
-                continue
-            part = part.strip(b"\r\n")
-            if part.endswith(b"--"):
-                part = part[:-2].rstrip(b"\r\n")
-            header_blob, sep, data = part.partition(b"\r\n\r\n")
-            if not sep:
-                continue
-            headers_text = header_blob.decode("utf-8", errors="replace")
-            disposition = next((line for line in headers_text.split("\r\n") if line.lower().startswith("content-disposition:")), "")
-            if f'name="{field_name}"' not in disposition:
-                continue
-            filename_match = re.search(r'filename="([^"]+)"', disposition)
-            filename = Path(filename_match.group(1)).name if filename_match else "documento.pdf"
-            mime_match = re.search(r"^Content-Type:\s*([^\r\n]+)", headers_text, flags=re.IGNORECASE | re.MULTILINE)
-            mime = str(mime_match.group(1)).strip() if mime_match else "application/pdf"
-            return filename, mime, data.rstrip(b"\r\n")
-        raise ValueError("missing_file_field")
+        opening = b"--" + boundary
+        remaining = length
+
+        def read_line() -> bytes:
+            nonlocal remaining
+            if remaining <= 0:
+                return b""
+            line = self.rfile.readline(min(remaining, 64 * 1024 + 1))
+            remaining -= len(line)
+            if len(line) > 64 * 1024:
+                raise ValueError("multipart_header_too_large")
+            return line
+
+        if read_line().rstrip(b"\r\n") != opening:
+            raise ValueError("invalid_multipart_boundary")
+        headers: list[bytes] = []
+        while True:
+            line = read_line()
+            if line in {b"\r\n", b"\n"}:
+                break
+            if not line:
+                raise ValueError("incomplete_multipart_headers")
+            headers.append(line)
+        headers_text = b"".join(headers).decode("utf-8", errors="replace")
+        disposition = next(
+            (line for line in headers_text.splitlines() if line.lower().startswith("content-disposition:")),
+            "",
+        )
+        if f'name="{field_name}"' not in disposition:
+            raise ValueError("missing_file_field")
+        filename_match = re.search(r'filename="([^"]+)"', disposition)
+        filename = Path(filename_match.group(1)).name if filename_match else "documento.pdf"
+        mime_match = re.search(r"^Content-Type:\s*([^\r\n]+)", headers_text, flags=re.IGNORECASE | re.MULTILINE)
+        mime = str(mime_match.group(1)).strip() if mime_match else "application/pdf"
+        suffix = Path(filename).suffix or ".bin"
+        self.context.upload_root.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="fusion_reader_multipart_",
+            suffix=suffix,
+            dir=self.context.upload_root,
+        )
+        temporary = Path(temporary_name)
+        marker = b"\r\n--" + boundary
+        buffer = b""
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("incomplete_upload")
+                    remaining -= len(chunk)
+                    buffer += chunk
+                    marker_index = buffer.find(marker)
+                    if marker_index >= 0:
+                        handle.write(buffer[:marker_index])
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                        return filename, mime, temporary
+                    safe_length = len(buffer) - len(marker) - 4
+                    if safe_length > 0:
+                        handle.write(buffer[:safe_length])
+                        buffer = buffer[safe_length:]
+            raise ValueError("incomplete_multipart_boundary")
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def _remote_mutation_authorized(self) -> bool:
-        if SETTINGS is None or not SETTINGS.security.allow_remote:
+        if not self.settings.security.allow_remote:
             return True
-        expected = SETTINGS.security.api_token.encode("utf-8")
+        expected = self.settings.security.api_token.encode("utf-8")
         authorization = self.headers.get("Authorization", "")
         supplied = authorization.removeprefix("Bearer ").strip()
         if not supplied:
@@ -434,6 +652,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if ROUTER.resolve("GET", path) is None:
+            self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
+            return
         if path == "/":
             self._send(200, "text/html; charset=utf-8", INDEX_HTML.encode("utf-8"))
             return
@@ -455,10 +676,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "status": "live", "pid": os.getpid()})
             return
         if path == "/health/ready":
-            if APP is None:
-                self._json(503, {"ok": False, "error": "reader_not_composed"})
-                return
-            status = APP.status()
+            status = self.context.status()
             services = status.get("services", {})
             degradations = [
                 name
@@ -477,43 +695,41 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if path in ("/health", "/api/status"):
-            st = APP.status()
-            st["runtime"] = RUNTIME_INFO
-            self._json(200, st)
+            self._json(200, self.context.status())
             return
         if path == "/api/build":
-            self._json(200, {"ok": True, **RUNTIME_INFO})
+            self._json(200, {"ok": True, **self.context.runtime_info})
             return
         if path == "/api/library":
-            self._json(200, {"ok": True, "items": library_items()})
+            self._json(200, {"ok": True, "items": library_items(self.context)})
             return
         if path == "/api/voice/voices" or path == "/api/voices":
-            self._json(200, APP.get_voice_catalog())
+            self._json(200, self.app.get_voice_catalog())
             return
         if path == "/api/voice/metrics":
-            self._json(200, APP.recent_voice_metrics())
+            self._json(200, self.app.recent_voice_metrics())
             return
         if path == "/api/voice/metrics/summary":
-            self._json(200, APP.voice_metrics_summary())
+            self._json(200, self.app.voice_metrics_summary())
             return
         if path == "/api/voice/metrics/documents":
-            self._json(200, APP.voice_metrics_by_document())
+            self._json(200, self.app.voice_metrics_by_document())
             return
         if path == "/api/voice/metrics/chunks":
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
             doc_id = str((params.get("doc_id") or [""])[0])
             limit = int((params.get("limit") or ["20"])[0])
-            self._json(200, APP.voice_metrics_by_chunk(doc_id=doc_id, limit=limit))
+            self._json(200, self.app.voice_metrics_by_chunk(doc_id=doc_id, limit=limit))
             return
         if path == "/api/prepare/status":
-            self._json(200, APP.prepare_status())
+            self._json(200, self.app.prepare_status())
             return
         if path == "/api/audio-export/status":
-            self._json(200, APP.audio_export_overview())
+            self._json(200, self.app.audio_export_overview())
             return
         if path == "/api/references":
-            self._json(200, APP.list_reference_documents())
+            self._json(200, self.app.list_reference_documents())
             return
         if path == "/api/notes":
             parsed = urlparse(self.path)
@@ -522,16 +738,16 @@ class Handler(BaseHTTPRequestHandler):
             current_only = str((params.get("current_only") or ["0"])[0]).lower() in {"1", "true", "yes"}
             chunk_index_raw = str((params.get("chunk_index") or [""])[0])
             chunk_index = int(chunk_index_raw) if chunk_index_raw else None
-            self._json(200, APP.list_notes(doc_id=doc_id, chunk_index=chunk_index, current_only=current_only))
+            self._json(200, self.app.list_notes(doc_id=doc_id, chunk_index=chunk_index, current_only=current_only))
             return
         if path == "/api/dialogue/status":
-            self._json(200, APP.dialogue_status())
+            self._json(200, self.app.dialogue_status())
             return
         if path == "/api/import-status":
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
             job_id = str((params.get("id") or [""])[0])
-            job = get_import_job(job_id)
+            job = get_import_job(self.context, job_id)
             if not job:
                 self._json(404, {"ok": False, "error": "import_job_not_found"})
                 return
@@ -539,8 +755,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/tools/pdf-to-docx/status/"):
             job_id = path.split("/")[-1]
-            with PDF_TO_DOCX_LOCK:
-                job = PDF_TO_WORD_JOBS.get(job_id)
+            job = self.context.pdf_jobs.get(job_id)
             if not job:
                 self._json(404, {"ok": False, "error": "Job no encontrado."})
                 return
@@ -566,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/tools/pdf-to-docx/download/"):
             job_id = Path(path).name
-            item = get_pdf_to_docx_download(job_id)
+            item = get_pdf_to_docx_download(self.context, job_id)
             if not item:
                 self._json(404, {"ok": False, "error": "pdf_to_docx_download_not_found"})
                 return
@@ -584,12 +799,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/audio-export/status/"):
             job_id = Path(path).name
-            status = APP.audio_export_status(job_id)
+            status = self.app.audio_export_status(job_id)
             self._json(200 if status.get("ok") else 404, status)
             return
         if path.startswith("/api/audio-export/download/"):
             job_id = Path(path).name
-            item = APP.get_audio_export_download(job_id)
+            item = self.app.get_audio_export_download(job_id)
             if not item.get("ok"):
                 self._json(404, item)
                 return
@@ -603,7 +818,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
         if path.startswith("/audio/"):
-            audio_path = cached_audio_path(path)
+            audio_path = cached_audio_path(self.context, path)
             if not audio_path:
                 self._json(404, {"ok": False, "error": "audio_not_found"})
                 return
@@ -613,6 +828,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         path = urlparse(self.path).path
+        if ROUTER.resolve("HEAD", path) is None:
+            self.send_response(404)
+            self.end_headers()
+            return
         if path == "/":
             raw = INDEX_HTML.encode("utf-8")
             self.send_response(200)
@@ -632,8 +851,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path in ("/health", "/api/status"):
-            st = APP.status()
-            st["runtime"] = RUNTIME_INFO
+            st = self.context.status()
             raw = json.dumps(st).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -641,7 +859,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path.startswith("/audio/"):
-            audio_path = cached_audio_path(path)
+            audio_path = cached_audio_path(self.context, path)
             if not audio_path:
                 self.send_response(404)
                 self.end_headers()
@@ -657,28 +875,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if ROUTER.resolve("POST", path) is None:
+            self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
+            return
         if not self._remote_mutation_authorized():
             self._json(401, {"ok": False, "error": "api_token_required"})
             return
         try:
             if path == "/api/tools/pdf-to-docx":
-                filename, mime, raw = self._read_multipart_file(field_name="file")
+                filename, mime, input_path = self._read_multipart_file(field_name="file")
                 clean_name = Path(filename).name
                 if Path(clean_name).suffix.lower() != ".pdf":
+                    input_path.unlink(missing_ok=True)
                     self._json(400, {"ok": False, "error": "Solo se aceptan archivos PDF."})
                     return
-                PDF_TO_WORD_ROOT.mkdir(parents=True, exist_ok=True)
+                self.context.pdf_root.mkdir(parents=True, exist_ok=True)
                 job_id = uuid.uuid4().hex[:16]
-                input_path = PDF_TO_WORD_ROOT / f"{job_id}.pdf"
-                input_path.write_bytes(raw)
+                owned_input = self.context.pdf_root / f"{job_id}.pdf"
+                os.replace(input_path, owned_input)
+                input_path = owned_input
 
                 job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
-                with PDF_TO_DOCX_LOCK:
-                    PDF_TO_WORD_JOBS[job_id] = job
+                job.created_ts = time.time()
+                job.updated_ts = job.created_ts
+                self.context.pdf_jobs.add(job_id, job)
 
                 def _run_job(j: JobStatus, in_p: Path, original_name: str):
+                    temp_docx = self.context.pdf_root / f"{j.job_id}.docx"
                     try:
-                        temp_docx = PDF_TO_WORD_ROOT / f"{j.job_id}.docx"
                         result = convert_pdf_to_docx(in_p, temp_docx, job=j)
                         if not result.ok:
                             j.state = "error"
@@ -689,30 +913,40 @@ class Handler(BaseHTTPRequestHandler):
                             j.state = "cancelled"
                             return
 
-                        final_target = unique_download_target(j.filename)
-                        final_target.write_bytes(temp_docx.read_bytes())
-                        download_item = register_pdf_to_docx_download(final_target, final_target.name, result)
+                        final_target = unique_download_target(self.context, j.filename)
+                        os.replace(temp_docx, final_target)
+                        download_item = register_pdf_to_docx_download(
+                            self.context,
+                            final_target,
+                            final_target.name,
+                            result,
+                        )
 
                         j.state = "done"
                         j.saved_path = str(final_target)
                         j.filename = final_target.name
                         j.download_url = f"/api/tools/pdf-to-docx/download/{download_item['id']}"
                         j.warnings = list(result.warnings)
-                        temp_docx.unlink(missing_ok=True)
-                    except Exception as e:
+                    except Exception as exc:
                         j.state = "error"
-                        j.error = str(e)
+                        j.error = type(exc).__name__
                     finally:
+                        j.updated_ts = time.time()
                         in_p.unlink(missing_ok=True)
+                        if j.state != "done":
+                            temp_docx.unlink(missing_ok=True)
 
-                threading.Thread(target=_run_job, args=(job, input_path, clean_name), daemon=True).start()
+                self.context.start_thread(
+                    target=_run_job,
+                    args=(job, input_path, clean_name),
+                    name=f"fusion-pdf-to-docx-{job_id}",
+                )
                 self._json(200, {"ok": True, "job_id": job_id})
                 return
 
             if path.startswith("/api/tools/pdf-to-docx/cancel/"):
                 job_id = path.split("/")[-1]
-                with PDF_TO_DOCX_LOCK:
-                    job = PDF_TO_WORD_JOBS.get(job_id)
+                job = self.context.pdf_jobs.get(job_id)
                 if not job:
                     self._json(404, {"ok": False, "error": "Job no encontrado."})
                     return
@@ -726,14 +960,12 @@ class Handler(BaseHTTPRequestHandler):
                 mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
                 role = str((params.get("role") or ["main"])[0])
                 tmp_path = self._read_body_to_temp(filename)
-                job = new_import_job(filename, mime, tmp_path, tmp_path.stat().st_size, role=role)
-                thread = threading.Thread(
+                job = new_import_job(self.context, filename, mime, tmp_path, tmp_path.stat().st_size, role=role)
+                self.context.start_thread(
                     target=import_job_worker,
-                    args=(str(job["job_id"]), filename, tmp_path, mime, role),
+                    args=(self.context, str(job["job_id"]), filename, tmp_path, mime, role),
                     name=f"fusion-import-{job['job_id']}",
-                    daemon=True,
                 )
-                thread.start()
                 self._json(202, job)
                 return
             if path == "/api/import-file":
@@ -746,7 +978,7 @@ class Handler(BaseHTTPRequestHandler):
                     imported = import_document_path(filename, tmp_path, mime=mime)
                 finally:
                     tmp_path.unlink(missing_ok=True)
-                self._json(200, load_imported_document(imported, role=role))
+                self._json(200, load_imported_document(self.context, imported, role=role))
                 return
             if path == "/api/dialogue/turn" and "application/json" not in (self.headers.get("Content-Type", "") or ""):
                 content_type = self.headers.get("Content-Type", "") or ""
@@ -764,7 +996,7 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 tmp_path = self._read_body_to_temp(filename)
                 try:
-                    self._result(200, APP.dialogue_turn_audio(tmp_path, mime=content_type, model=str((params.get("model") or [""])[0]), chunk_index=chunk_index, audio_meta=audio_meta))
+                    self._result(200, self.app.dialogue_turn_audio(tmp_path, mime=content_type, model=str((params.get("model") or [""])[0]), chunk_index=chunk_index, audio_meta=audio_meta))
                 finally:
                     tmp_path.unlink(missing_ok=True)
                 return
@@ -773,15 +1005,15 @@ class Handler(BaseHTTPRequestHandler):
                 role = str(payload.get("role") or "main")
                 if payload.get("book_id"):
                     if role == "reference":
-                        self._json(200, APP.add_reference_file(resolve_library_path(str(payload.get("book_id")))))
+                        self._json(200, self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("book_id")))))
                     else:
-                        self._json(200, APP.load_file(resolve_library_path(str(payload.get("book_id"))), prefetch=False))
+                        self._json(200, self.app.load_file(resolve_library_path(self.context, str(payload.get("book_id"))), prefetch=False))
                     return
                 if payload.get("text"):
                     if role == "reference":
                         self._json(
                             200,
-                            APP.add_reference_text(
+                            self.app.add_reference_text(
                                 str(payload.get("doc_id") or "manual"),
                                 str(payload.get("title") or "Manual"),
                                 str(payload.get("text")),
@@ -791,7 +1023,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         self._json(
                             200,
-                            APP.load_text(
+                            self.app.load_text(
                                 str(payload.get("doc_id") or "manual"),
                                 str(payload.get("title") or "Manual"),
                                 str(payload.get("text")),
@@ -802,9 +1034,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if payload.get("path"):
                     if role == "reference":
-                        self._json(200, APP.add_reference_file(resolve_library_path(str(payload.get("path")))))
+                        self._json(200, self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("path")))))
                     else:
-                        self._json(200, APP.load_file(resolve_library_path(str(payload.get("path"))), prefetch=False))
+                        self._json(200, self.app.load_file(resolve_library_path(self.context, str(payload.get("path"))), prefetch=False))
                     return
                 self._json(400, {"ok": False, "error": "missing_text_or_book_id"})
                 return
@@ -816,41 +1048,49 @@ class Handler(BaseHTTPRequestHandler):
                 if not raw_b64:
                     self._json(400, {"ok": False, "error": "missing_file_data"})
                     return
-                imported = import_document_bytes(filename, base64.b64decode(raw_b64), mime=mime)
-                self._json(200, load_imported_document(imported, role=role))
+                if len(raw_b64) > (self.settings.limits.upload_max_bytes * 4 // 3) + 8:
+                    raise ValueError("base64_upload_too_large")
+                try:
+                    decoded = base64.b64decode(raw_b64, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise ValueError("invalid_base64") from exc
+                if len(decoded) > self.settings.limits.upload_max_bytes:
+                    raise ValueError("upload_too_large")
+                imported = import_document_bytes(filename, decoded, mime=mime)
+                self._json(200, load_imported_document(self.context, imported, role=role))
                 return
             if path == "/api/reference/promote":
-                self._json(200, APP.promote_reference_document(str(payload.get("doc_id") or ""), prefetch=False))
+                self._json(200, self.app.promote_reference_document(str(payload.get("doc_id") or ""), prefetch=False))
                 return
             if path == "/api/reference/remove":
-                self._json(200, APP.remove_reference_document(str(payload.get("doc_id") or "")))
+                self._json(200, self.app.remove_reference_document(str(payload.get("doc_id") or "")))
                 return
             if path == "/api/document/clear":
-                self._json(200, APP.clear_document())
+                self._json(200, self.app.clear_document())
                 return
             if path == "/api/read":
-                result = APP.read_current(play=bool(payload.get("play", False)))
+                result = self.app.read_current(play=bool(payload.get("play", False)))
                 self._result(409 if result.get("stale") else 200, result)
                 return
             if path == "/api/next":
-                self._json(200, APP.next())
+                self._json(200, self.app.next())
                 return
             if path == "/api/previous":
-                self._json(200, APP.previous())
+                self._json(200, self.app.previous())
                 return
             if path == "/api/jump":
-                self._json(200, APP.jump(int(payload.get("index", 1))))
+                self._json(200, self.app.jump(int(payload.get("index", 1))))
                 return
             if path == "/api/prepare/start":
-                self._json(200, APP.prepare_document(start=str(payload.get("start") or "cursor")))
+                self._json(200, self.app.prepare_document(start=str(payload.get("start") or "cursor")))
                 return
             if path == "/api/prepare/cancel":
-                self._json(200, APP.cancel_prepare())
+                self._json(200, self.app.cancel_prepare())
                 return
             if path == "/api/audio-export":
                 self._json(
                     200,
-                    APP.start_audio_export(
+                    self.app.start_audio_export(
                         str(payload.get("mode") or ""),
                         block=int(payload.get("block")) if payload.get("block") is not None else None,
                         start=int(payload.get("start")) if payload.get("start") is not None else None,
@@ -859,60 +1099,58 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if path.startswith("/api/audio-export/cancel/"):
-                self._json(200, APP.cancel_audio_export(Path(path).name))
+                self._json(200, self.app.cancel_audio_export(Path(path).name))
                 return
             if path == "/api/notes/create":
                 chunk_index = payload.get("chunk_index")
-                self._json(200, APP.create_note(str(payload.get("text") or ""), chunk_index=int(chunk_index) if chunk_index is not None else None))
+                self._json(200, self.app.create_note(str(payload.get("text") or ""), chunk_index=int(chunk_index) if chunk_index is not None else None))
                 return
             if path == "/api/notes/update":
-                self._json(200, APP.update_note(str(payload.get("note_id") or ""), str(payload.get("text") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(200, self.app.update_note(str(payload.get("note_id") or ""), str(payload.get("text") or ""), doc_id=str(payload.get("doc_id") or "")))
                 return
             if path == "/api/notes/rename":
-                self._json(200, APP.rename_note(str(payload.get("note_id") or ""), str(payload.get("label") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(200, self.app.rename_note(str(payload.get("note_id") or ""), str(payload.get("label") or ""), doc_id=str(payload.get("doc_id") or "")))
                 return
             if path == "/api/notes/delete":
-                self._json(200, APP.delete_note(str(payload.get("note_id") or ""), doc_id=str(payload.get("doc_id") or "")))
+                self._json(200, self.app.delete_note(str(payload.get("note_id") or ""), doc_id=str(payload.get("doc_id") or "")))
                 return
             if path == "/api/dialogue/reset":
-                self._json(200, APP.dialogue_reset())
+                self._json(200, self.app.dialogue_reset())
                 return
             if path == "/api/reasoning/mode":
-                self._json(200, APP.set_reasoning_mode(str(payload.get("mode") or "")))
+                self._json(200, self.app.set_reasoning_mode(str(payload.get("mode") or "")))
                 return
             if path == "/api/laboratory/mode":
-                self._json(200, APP.set_laboratory_mode(str(payload.get("mode") or "")))
+                self._json(200, self.app.set_laboratory_mode(str(payload.get("mode") or "")))
                 return
             if path == "/api/profile":
-                self._json(200, APP.set_profile(str(payload.get("mode") or "")))
+                self._json(200, self.app.set_profile(str(payload.get("mode") or "")))
                 return
             if path == "/api/veil":
-                self._json(200, APP.set_veil(str(payload.get("mode") or "")))
+                self._json(200, self.app.set_veil(str(payload.get("mode") or "")))
                 return
             if path == "/api/voice":
-                self._json(200, APP.set_voice(str(payload.get("voice") or "")))
+                self._json(200, self.app.set_voice(str(payload.get("voice") or "")))
                 return
             if path in ("/api/laboratory/reset", "/api/chat/reset"):
-                self._json(200, APP.clear_laboratory_history())
+                self._json(200, self.app.clear_laboratory_history())
                 return
             if path == "/api/dialogue/turn":
                 content_type = self.headers.get("Content-Type", "") or ""
                 if "application/json" in content_type:
                     raw_chunk_index = payload.get("chunk_index")
-                    self._result(200, APP.dialogue_turn_text(str(payload.get("text") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
+                    self._result(200, self.app.dialogue_turn_text(str(payload.get("text") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
                     return
             if path == "/api/voice/test":
-                self._result(200, APP.test_voice(str(payload.get("text") or "Prueba de voz neural del lector conversacional."), play=bool(payload.get("play", False))))
+                self._result(200, self.app.test_voice(str(payload.get("text") or "Prueba de voz neural del lector conversacional."), play=bool(payload.get("play", False))))
                 return
             if path == "/api/chat":
                 raw_chunk_index = payload.get("chunk_index")
-                self._result(200, APP.chat(str(payload.get("message") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
+                self._result(200, self.app.chat(str(payload.get("message") or ""), model=str(payload.get("model") or ""), chunk_index=int(raw_chunk_index) if raw_chunk_index is not None else None))
                 return
-        except ValueError as e:
-            self._json(400, {"ok": False, "error": str(e)})
-            return
-        except Exception as e:
-            self._json(500, {"ok": False, "error": str(e)})
+        except Exception as exc:
+            status, payload = error_response(exc, self.request_id)
+            self._json(status, payload)
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
@@ -920,15 +1158,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTPServer:
-    global APP, SETTINGS, PORT, LIBRARY_ROOT, CONVERTED_ROOT, UPLOAD_ROOT, PDF_TO_WORD_ROOT, RUNTIME_INFO
-    APP = app
-    SETTINGS = settings
-    PORT = settings.ports.api
-    LIBRARY_ROOT = settings.paths.library
-    CONVERTED_ROOT = settings.paths.runtime / "imported_texts"
-    UPLOAD_ROOT = settings.paths.runtime / "upload_jobs"
-    PDF_TO_WORD_ROOT = settings.paths.runtime / "pdf_to_word"
-    RUNTIME_INFO = {
+    runtime_info = {
         "app": "fusion_reader_v2",
         "commit": _get_git_commit(settings.paths.repository),
         "pid": os.getpid(),
@@ -939,7 +1169,10 @@ def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTP
         "python": os.sys.executable,
         "log_file": str(settings.paths.logs / "fusion_reader_v2_server.log"),
     }
-    return FusionHTTPServer((settings.security.bind_host, settings.ports.api), Handler)
+    context = WebContext(app=app, settings=settings, runtime_info=runtime_info)
+    server = FusionHTTPServer((settings.security.bind_host, settings.ports.api), Handler)
+    server.context = context
+    return server
 
 
 def main() -> None:

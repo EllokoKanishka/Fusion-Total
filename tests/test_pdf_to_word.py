@@ -161,7 +161,8 @@ class PDFToWordTests(unittest.TestCase):
 
     def test_server_pdf_to_word_limit_is_500mb(self):
         server = web_source()
-        self.assertIn('500 * 1024 * 1024', server)
+        self.assertIn("self.settings.limits.pdf_max_bytes", server)
+        self.assertIn("FUSION_READER_PDF_MAX_BYTES", Path("fusion_reader_v2/config.py").read_text(encoding="utf-8"))
 
     @mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=False)
     def test_pdf_to_word_ocr_fallback_logic(self, mock_gpu):
