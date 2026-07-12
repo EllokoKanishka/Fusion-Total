@@ -74,11 +74,9 @@ Los tests de exportación de audio deben construirse con un root temporal
 inyectado. No deben depender de `~/Descargas` real ni dejar WAVs persistentes
 en la carpeta personal del usuario.
 
-Estado histórico auditado el 2026-07-09 (no es el conteo vigente):
+Estado histórico auditado el 2026-07-09 (los conteos viven sólo como snapshot
+fechado en los documentos de auditoría):
 
-- `tests.test_fusion_reader_v2`: `240 OK`
-- `tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress`: `35 OK`
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`: `345 OK`
 - `./scripts/verify_voice_port_isolation.sh`: ahora separa `FUSION STRICT CHECKS` de `EXTERNAL BOUNDARY / DOCTORA INFO`
 - resultado local histórico: `FINAL RESULT: OK_WITH_WARNINGS`
 - si faltan bitácoras, memoria o referencias externas de Doctora, eso sale como `WARN` externo y ya no se mezcla con un fallo estricto de aislamiento de Fusion
@@ -86,8 +84,8 @@ Estado histórico auditado el 2026-07-09 (no es el conteo vigente):
 - para revisar puertos, servicios, binarios y env vars sin repartir la info entre varios archivos, usar `docs/DEPENDENCIES_V2.md`
 - para revisar defaults absolutos locales, overrides y alcance externo, usar `docs/LOCAL_DEFAULTS_V2.md`
 - `./scripts/smoke_fusion_reader_v2.sh` sirve como smoke de solo lectura: no levanta servicios, no mata procesos y usa `OK_WITH_WARNINGS` cuando hay componentes opcionales apagados
-- el conteo y resultado vigentes del cierre están en
-  `docs/CLOSURE_AND_BACKLOG_V2.md`; `345` queda solo como registro histórico
+- el resultado vigente de consolidación está en
+  `docs/CONSOLIDATION_FINAL_2026-07-12.md`
 
 ## Si 7853 no engancha
 

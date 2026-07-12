@@ -40,10 +40,11 @@ fusion_reader_v2/
 Read these first before architectural changes:
 
 1. `AGENTS.md`
-2. `FUSION_READER_V2_BLUEPRINT.md`
-3. `FUSION_READER_V2_STATE.md`
-4. `docs/ARCHITECTURE.md`
-5. `docs/OPENCLAW_SEARXNG_COEXISTENCE.md`
+2. `FUSION_READER_V2_STATE.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/OPERATIONS.md`
+5. `docs/CONTRACTS.md`
+6. Historical documents only as reference.
 
 ## Allowed Product Operations
 
@@ -141,11 +142,12 @@ fixing GPU voice. Use the isolated GPU environment documented in the blueprint.
 When resuming work:
 
 1. Read this file.
-2. Read `FUSION_READER_V2_BLUEPRINT.md`.
-3. Read `FUSION_READER_V2_STATE.md`.
-4. Run `git status --short`.
-5. Do not revert user changes.
-6. Continue v2 under `fusion_reader_v2/` unless the user explicitly asks to fix
+2. Read `FUSION_READER_V2_STATE.md`.
+3. Read `docs/ARCHITECTURE.md`.
+4. Read `docs/OPERATIONS.md` and `docs/CONTRACTS.md`.
+5. Run `git status --short`.
+6. Do not revert user changes.
+7. Continue v2 under `fusion_reader_v2/` unless the user explicitly asks to fix
    the old prototype.
 
 ## Testing

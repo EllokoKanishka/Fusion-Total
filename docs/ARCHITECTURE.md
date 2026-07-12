@@ -143,7 +143,7 @@ Fusion Reader v2 introduce un quinto eje de personalización: la **Voz**.
 Componentes:
 
 - `fusion_reader_v2/notes.py`
-- endpoints de notas en `scripts/fusion_reader_v2_server.py`
+- endpoints de notas en `fusion_reader_v2/web/server.py`
 
 Propiedades:
 
@@ -156,7 +156,7 @@ Propiedades:
 Componentes:
 
 - `fusion_reader_v2/pdf_to_docx.py`
-- endpoints auxiliares en `scripts/fusion_reader_v2_server.py`
+- endpoints auxiliares en `fusion_reader_v2/web/server.py`
 
 Propiedades:
 
@@ -186,7 +186,7 @@ Componentes:
 
 - `fusion_reader_v2/audio_export.py`
 - `fusion_reader_v2/service.py`
-- endpoints auxiliares en `scripts/fusion_reader_v2_server.py`
+- endpoints auxiliares en `fusion_reader_v2/web/server.py`
 
 Propiedades:
 
@@ -265,7 +265,8 @@ stdio fusion_memory_mcp_server.py
   - deja log persistente en `runtime/fusion_reader_v2/logs/fusion_reader_v2_server.log`;
   - guarda PID en `runtime/fusion_reader_v2/fusion_reader_v2.pid`;
   - valida health post-start de `8010`.
-- `scripts/fusion_reader_v2_server.py`
+- `fusion_reader_v2/web/server.py` (implementación)
+- `scripts/fusion_reader_v2_server.py` (wrapper compatible)
   - inyecta metadata de runtime (commit, pid, port, logs) en `/api/status` y `/api/build` para facilitar la gestión del lifecycle.
 - `scripts/start_fusion_reader_v2_stt.sh`
   - levanta el server `8021` cuando se invoca explícitamente;
