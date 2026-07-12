@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,6 +78,20 @@ class FusionCtlTests(unittest.TestCase):
     def test_source_never_uses_shell_true(self) -> None:
         source = Path(fusionctl.__file__).read_text(encoding="utf-8")
         self.assertNotIn("shell=True", source)
+
+    def test_start_uses_current_python_and_launcher_runs_importable_module(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "start_fusion_reader_v2.sh"
+            script.parent.mkdir(parents=True)
+            script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            settings = self._settings(root)
+            with mock.patch.object(fusionctl.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+                self.assertEqual(fusionctl.command_start(settings, mock.Mock()), 0)
+            self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_PYTHON"], sys.executable)
+
+        launcher = Path(fusionctl.__file__).with_name("start_fusion_reader_v2.sh").read_text(encoding="utf-8")
+        self.assertIn('"$PYTHON_BIN" -m scripts.fusion_reader_v2_server', launcher)
 
 
 if __name__ == "__main__":

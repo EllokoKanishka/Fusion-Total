@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import environment_copy, environment_value
+
 
 @dataclass(frozen=True)
 class ExternalResearchResult:
@@ -66,16 +68,18 @@ class OpenClawResearchBridge(ExternalResearchBridge):
     ) -> None:
         self.command = (
             command
-            or os.environ.get("FUSION_READER_OPENCLAW_BIN")
+            or environment_value("FUSION_READER_OPENCLAW_BIN")
             or str(Path.home() / ".openclaw" / "bin" / "openclaw")
         )
-        self.agent = agent or os.environ.get("FUSION_READER_OPENCLAW_AGENT") or "fusion-research"
+        self.agent = agent or environment_value("FUSION_READER_OPENCLAW_AGENT") or "fusion-research"
         self.timeout_seconds = float(
-            timeout_seconds if timeout_seconds is not None else os.environ.get("FUSION_READER_OPENCLAW_TIMEOUT", "90")
+            timeout_seconds
+            if timeout_seconds is not None
+            else environment_value("FUSION_READER_OPENCLAW_TIMEOUT", "90") or "90"
         )
-        self.retry_attempts = max(1, int(os.environ.get("FUSION_READER_OPENCLAW_RETRIES", "2")))
+        self.retry_attempts = max(1, int(environment_value("FUSION_READER_OPENCLAW_RETRIES", "2") or "2"))
         if enabled is None:
-            raw_enabled = os.environ.get("FUSION_READER_OPENCLAW_ENABLED", "1").strip().lower()
+            raw_enabled = (environment_value("FUSION_READER_OPENCLAW_ENABLED", "1") or "1").strip().lower()
             self.enabled = raw_enabled not in {"0", "false", "no", "off"}
         else:
             self.enabled = bool(enabled)
@@ -111,7 +115,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 query=query,
             )
         prompt = self._build_prompt(query, snapshot or {})
-        env = os.environ.copy()
+        env = environment_copy()
         env["PATH"] = f"{Path.home() / '.openclaw' / 'bin'}:{env.get('PATH', '')}"
         last_error: ExternalResearchResult | None = None
         for attempt in range(1, self.retry_attempts + 1):

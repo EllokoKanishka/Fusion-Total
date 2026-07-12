@@ -43,7 +43,9 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
     if not script.is_file():
         _json({"ok": False, "error": "start_script_missing", "path": str(script)})
         return 1
-    result = subprocess.run([str(script)], cwd=settings.paths.repository, timeout=180.0, check=False)
+    environment = dict(os.environ)
+    environment.setdefault("FUSION_READER_PYTHON", sys.executable)
+    result = subprocess.run([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)
     return int(result.returncode)
 
 

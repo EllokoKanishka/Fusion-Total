@@ -17,7 +17,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # Asegurar bus de systemd --user (útil tras reinicios/terminales raras)
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export XDG_RUNTIME_DIR
 export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 
 # Si existe la unidad systemd, delegamos ahí para evitar choques de puerto

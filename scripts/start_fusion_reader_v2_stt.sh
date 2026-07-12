@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Dedicated STT override wins; FUSION_READER_GPU_ENV remains a compatible fallback.
-STT_ENV="${FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}}"
+STT_ENV="${FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}}"
 STT_DEVICE_WAS_SET="${FUSION_READER_STT_DEVICE+x}"
 
 source "$ROOT/scripts/fusion_reader_gpu_guard.sh"

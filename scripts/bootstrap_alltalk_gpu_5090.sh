@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Machine-local external defaults remain overrideable via env vars.
-ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
+ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
 PYTHON_BIN="${FUSION_READER_GPU_PYTHON:-python3.11}"
 PYTHON_VERSION="${FUSION_READER_GPU_PYTHON_VERSION:-3.11}"
-ENV_DIR="${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}"
+ENV_DIR="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}"
 TORCH_INDEX="${FUSION_READER_GPU_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 INSTALL_ALLTALK_DEPS="${FUSION_READER_GPU_INSTALL_ALLTALK_DEPS:-1}"
 USE_CONDA="${FUSION_READER_GPU_USE_CONDA:-1}"

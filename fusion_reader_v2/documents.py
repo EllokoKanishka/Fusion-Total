@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import csv
 import functools
-import os
 import re
 import shutil
 import subprocess
@@ -17,6 +16,7 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageFilter, ImageOps
 
+from .config import environment_value
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".text", ".csv", ".log"}
 HTML_SUFFIXES = {".html", ".htm"}
@@ -30,8 +30,8 @@ SUPPORTED_SUFFIXES = (
 )
 OCR_MIN_CONF = 45.0
 OCR_WORD_MIN_CONF = 35.0
-OCR_DPI = int(os.environ.get("FUSION_READER_OCR_DPI", "170"))
-OCR_WORKERS = max(1, int(os.environ.get("FUSION_READER_OCR_WORKERS", "4")))
+OCR_DPI = int(environment_value("FUSION_READER_OCR_DPI", "170") or "170")
+OCR_WORKERS = max(1, int(environment_value("FUSION_READER_OCR_WORKERS", "4") or "4"))
 OCR_STOPWORDS = set(
     "de la el en que y a los las un una se con no por para del al es me mi su lo como le mas más o si pero esta está fue ha he este nuestro señor".split()
 )

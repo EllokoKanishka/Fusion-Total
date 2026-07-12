@@ -2480,9 +2480,7 @@ class FusionReaderV2Tests(unittest.TestCase):
 
     def legacy_academic_profile_uses_larger_token_budget(self):
         academic = Path("scripts/start_fusion_reader_v2_academic.sh").read_text(encoding="utf-8")
-        launcher = Path("/home/lucy-ubuntu/.local/bin/fusion-reader-launcher").read_text(encoding="utf-8")
         self.assertIn("FUSION_READER_CHAT_NUM_PREDICT:-1536", academic)
-        self.assertIn("FUSION_READER_CHAT_NUM_PREDICT:-1536", launcher)
 
     def legacy_ollama_thinking_default_token_budget_is_not_tiny(self):
         previous_think = os.environ.get("FUSION_READER_CHAT_THINK")

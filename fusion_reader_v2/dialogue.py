@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -12,6 +11,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+from .config import environment_value
 
 
 @dataclass(frozen=True)
@@ -99,10 +100,10 @@ class WhisperCliSTTProvider(STTProvider):
         model: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
-        self.command = command or os.environ.get("FUSION_READER_STT_COMMAND") or _default_whisper_command()
-        self.model = model or os.environ.get("FUSION_READER_STT_MODEL") or "small"
-        self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_STT_TIMEOUT", "180"))
-        self.threads = int(os.environ.get("FUSION_READER_STT_THREADS", "8"))
+        self.command = command or environment_value("FUSION_READER_STT_COMMAND") or _default_whisper_command()
+        self.model = model or environment_value("FUSION_READER_STT_MODEL") or "small"
+        self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_STT_TIMEOUT", "180") or "180")
+        self.threads = int(environment_value("FUSION_READER_STT_THREADS", "8") or "8")
 
     def health(self) -> dict:
         resolved = shutil.which(self.command)
@@ -191,8 +192,10 @@ class FasterWhisperServerSTTProvider(STTProvider):
     name = "faster_whisper_server"
 
     def __init__(self, base_url: str | None = None, timeout_seconds: float | None = None) -> None:
-        self.base_url = (base_url or os.environ.get("FUSION_READER_STT_URL") or "http://127.0.0.1:8021").rstrip("/")
-        self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_STT_SERVER_TIMEOUT", "60"))
+        self.base_url = (base_url or environment_value("FUSION_READER_STT_URL") or "http://127.0.0.1:8021").rstrip("/")
+        self.timeout_seconds = timeout_seconds or float(
+            environment_value("FUSION_READER_STT_SERVER_TIMEOUT", "60") or "60"
+        )
 
     def health(self) -> dict:
         try:
@@ -293,7 +296,7 @@ class AutoSTTProvider(STTProvider):
 
 
 def default_stt_provider() -> STTProvider:
-    selected = normalize_stt_provider(os.environ.get("FUSION_READER_STT_PROVIDER", "auto"))
+    selected = normalize_stt_provider(environment_value("FUSION_READER_STT_PROVIDER", "auto") or "auto")
     provider: STTProvider
     if selected == "cli":
         provider = WhisperCliSTTProvider()

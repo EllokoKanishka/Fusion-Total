@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Machine-local external defaults remain overrideable via env vars.
-ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
-GPU_ENV="${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}"
+ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
+GPU_ENV="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}"
 ALLTALK_HOST="${FUSION_READER_GPU_TTS_HOST:-127.0.0.1}"
 ALLTALK_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$ROOT/runtime/fusion_reader_v2/tts_owner.json}"
@@ -29,7 +29,7 @@ owner_file_matches() {
 }
 
 port_is_listening() {
-  ss -ltn 2>/dev/null | grep -q "[.:]$ALLTALK_PORT[[:space:]]"
+  ss -ltn 2>/dev/null | grep -q "[.:]${ALLTALK_PORT}[[:space:]]"
 }
 
 if curl -fsS --max-time 2 "http://$ALLTALK_HOST:$ALLTALK_PORT/api/ready" >/dev/null 2>&1; then

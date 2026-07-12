@@ -26,23 +26,23 @@ class LocalDefaultsV2Tests(unittest.TestCase):
     def test_runtime_scripts_keep_external_defaults_overrideable(self):
         checks = {
             "scripts/start_reader_neural_tts.sh": (
-                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
-                "DIRECT_CHAT_ALLTALK_PYTHON:-/home/lucy-ubuntu/ebook2audiobook/python_env/bin/python",
+                "DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "DIRECT_CHAT_ALLTALK_PYTHON:-${HOME}/ebook2audiobook/python_env/bin/python",
             ),
             "scripts/start_reader_neural_tts_gpu_5090.sh": (
-                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
-                "FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311",
+                "DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311",
             ),
             "scripts/bootstrap_alltalk_gpu_5090.sh": (
-                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
-                "FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311",
+                "DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311",
             ),
             "scripts/start_fusion_reader_v2_stt.sh": (
-                "FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311}",
+                "FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}",
             ),
             "scripts/verify_voice_port_isolation.sh": (
-                "DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy",
-                "DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
+                "DOCTORA_LUCY_ROOT:-${HOME}/Escritorio/doctora-lucy",
+                "DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts",
             ),
         }
         for relative, tokens in checks.items():
@@ -50,24 +50,14 @@ class LocalDefaultsV2Tests(unittest.TestCase):
             for token in tokens:
                 self.assertIn(token, text, f"{relative} missing {token}")
 
-    def test_doctora_absolute_path_only_lives_in_audited_files(self):
-        allowed = {
-            Path("docs/LOCAL_DEFAULTS_V2.md"),
-            Path("docs/AUDIT_CONSOLIDATION_2026-07.md"),
-            Path("scripts/verify_voice_port_isolation.sh"),
-            Path("tests/test_local_defaults_v2.py"),
-        }
-        needle = "/home/lucy-ubuntu/Escritorio/doctora-lucy"
+    def test_active_scripts_have_no_user_specific_home_path(self):
         hits = []
-        for path in Path(".").rglob("*"):
-            if not path.is_file():
-                continue
-            if ".git" in path.parts or "runtime" in path.parts or "__pycache__" in path.parts:
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, PermissionError, OSError):
-                continue
-            if needle in text:
+        for path in Path("scripts").rglob("*"):
+            if (
+                path.is_file()
+                and "__pycache__" not in path.parts
+                and path.suffix in {".py", ".sh", ".js"}
+                and "/home/lucy-ubuntu" in path.read_text(encoding="utf-8", errors="ignore")
+            ):
                 hits.append(path)
-        self.assertEqual(set(hits), allowed)
+        self.assertEqual(hits, [])

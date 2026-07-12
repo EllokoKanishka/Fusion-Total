@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import subprocess
 import threading
 import time
-import os
 import re
 import tempfile
 import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .config import environment_value
 
 from .audio_export import (
     AudioExportJob,
@@ -36,7 +38,9 @@ from .services.session_persistence import SessionPersistenceService
 
 @dataclass
 class VoiceSettings:
-    voice: str = field(default_factory=lambda: os.environ.get("FUSION_READER_VOICE", "female_03.wav"))
+    voice: str = field(
+        default_factory=lambda: environment_value("FUSION_READER_VOICE", "female_03.wav") or "female_03.wav"
+    )
     language: str = "es"
 
 
@@ -71,17 +75,21 @@ class FusionReaderV2:
         self.prefetch_wait_seconds = prefetch_wait_seconds
         self.prefetch_ahead = max(
             0,
-            int(prefetch_ahead if prefetch_ahead is not None else os.environ.get("FUSION_READER_PREFETCH_AHEAD", "3")),
+            int(
+                prefetch_ahead
+                if prefetch_ahead is not None
+                else environment_value("FUSION_READER_PREFETCH_AHEAD", "3") or "3"
+            ),
         )
         self.prefetch_workers = max(
             1,
             int(
                 prefetch_workers
                 if prefetch_workers is not None
-                else os.environ.get("FUSION_READER_PREFETCH_WORKERS", "1")
+                else environment_value("FUSION_READER_PREFETCH_WORKERS", "1") or "1"
             ),
         )
-        self.tts_segment_chars = max(240, int(os.environ.get("FUSION_READER_TTS_SEGMENT_CHARS", "900")))
+        self.tts_segment_chars = max(240, int(environment_value("FUSION_READER_TTS_SEGMENT_CHARS", "900") or "900"))
         self._executor = ThreadPoolExecutor(
             max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts"
         )
@@ -130,13 +138,15 @@ class FusionReaderV2:
         self._chat_history: list[dict] = []
         self._dialogue_lock = threading.Lock()
         self._dialogue_history: list[dict] = []
-        self.dialogue_tts_max_chars = int(os.environ.get("FUSION_READER_DIALOGUE_TTS_MAX_CHARS", "520"))
-        self.fast_note_ack = os.environ.get("FUSION_READER_FAST_NOTE_ACK", "0").strip().lower() not in {
+        self.dialogue_tts_max_chars = int(environment_value("FUSION_READER_DIALOGUE_TTS_MAX_CHARS", "520") or "520")
+        self.fast_note_ack = (environment_value("FUSION_READER_FAST_NOTE_ACK", "0") or "0").strip().lower() not in {
             "0",
             "false",
             "no",
         }
-        self.fast_dialogue_ack = os.environ.get("FUSION_READER_FAST_DIALOGUE_ACK", "0").strip().lower() not in {
+        self.fast_dialogue_ack = (
+            environment_value("FUSION_READER_FAST_DIALOGUE_ACK", "0") or "0"
+        ).strip().lower() not in {
             "0",
             "false",
             "no",
@@ -145,7 +155,9 @@ class FusionReaderV2:
         self._laboratory_focus: dict = {}
         self._main_source_path = ""
         self._main_source_type = ""
-        self.dialogue_allow_supreme = os.environ.get("FUSION_READER_DIALOGUE_ALLOW_SUPREME", "0").strip().lower() in {
+        self.dialogue_allow_supreme = (
+            environment_value("FUSION_READER_DIALOGUE_ALLOW_SUPREME", "0") or "0"
+        ).strip().lower() in {
             "1",
             "true",
             "yes",
@@ -2131,7 +2143,7 @@ class FusionReaderV2:
             history = list(self._chat_history)
         selected_model = model
         if not selected_model and self.profile == "bohemia":
-            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
+            selected_model = environment_value("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
         result = self.conversation.ask(
             message,
             snapshot=snapshot,
@@ -2836,7 +2848,7 @@ class FusionReaderV2:
         chat_started = time.perf_counter()
         selected_model = model
         if not selected_model and self.profile == "bohemia":
-            selected_model = os.environ.get("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
+            selected_model = environment_value("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
         chat_result = self.conversation.ask_dialogue(
             text,
             snapshot=snapshot,

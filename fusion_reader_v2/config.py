@@ -12,6 +12,19 @@ class ConfigurationError(ValueError):
     """Raised when local runtime configuration violates a safety boundary."""
 
 
+def environment_value(name: str, default: str | None = None) -> str | None:
+    """Read a compatibility environment value through the configuration boundary."""
+    return os.environ.get(name, default)
+
+
+def environment_has(name: str) -> bool:
+    return name in os.environ
+
+
+def environment_copy() -> dict[str, str]:
+    return dict(os.environ)
+
+
 def _truthy(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default

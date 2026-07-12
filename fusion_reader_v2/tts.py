@@ -17,6 +17,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config import environment_value
+
 
 def _truthy(value: str | None, default: bool = True) -> bool:
     if value is None:
@@ -26,14 +28,14 @@ def _truthy(value: str | None, default: bool = True) -> bool:
 
 def _configured_gpu_tts_port() -> int:
     try:
-        return int(os.environ.get("FUSION_READER_GPU_TTS_PORT", "7853"))
+        return int(environment_value("FUSION_READER_GPU_TTS_PORT", "7853") or "7853")
     except ValueError:
         return 7853
 
 
 def _configured_lucy_tts_port() -> int:
     try:
-        return int(os.environ.get("LUCY_TTS_PORT", "7854"))
+        return int(environment_value("LUCY_TTS_PORT", "7854") or "7854")
     except ValueError:
         return 7854
 
@@ -44,16 +46,18 @@ def _historic_unassigned_tts_port() -> int:
 
 def _default_owner_file() -> Path:
     return Path(
-        os.environ.get(
+        environment_value(
             "FUSION_READER_TTS_OWNER_FILE",
             str(Path(__file__).resolve().parents[1] / "runtime" / "fusion_reader_v2" / "tts_owner.json"),
         )
+        or str(Path(__file__).resolve().parents[1] / "runtime" / "fusion_reader_v2" / "tts_owner.json")
     )
 
 
 def _configured_cpu_tts_port() -> int:
     try:
-        return int(os.environ.get("FUSION_READER_CPU_TTS_PORT", os.environ.get("DIRECT_CHAT_ALLTALK_PORT", "7851")))
+        fallback = environment_value("DIRECT_CHAT_ALLTALK_PORT", "7851") or "7851"
+        return int(environment_value("FUSION_READER_CPU_TTS_PORT", fallback) or fallback)
     except ValueError:
         return 7851
 
@@ -114,11 +118,13 @@ class AllTalkProvider(TTSProvider):
         owner_file: Path | str | None = None,
     ) -> None:
         default_url = f"http://127.0.0.1:{_configured_gpu_tts_port()}"
-        configured_url = (base_url or os.environ.get("FUSION_READER_ALLTALK_URL") or default_url).rstrip("/")
-        self.default_voice = default_voice or os.environ.get("FUSION_READER_VOICE", "female_03.wav")
-        self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_TTS_TIMEOUT", "120"))
-        self.max_input_chars = int(os.environ.get("FUSION_READER_TTS_MAX_INPUT_CHARS", "0"))
-        self.require_owner = _truthy(os.environ.get("FUSION_READER_REQUIRE_TTS_OWNER"), default=True)
+        configured_url = (base_url or environment_value("FUSION_READER_ALLTALK_URL") or default_url).rstrip("/")
+        self.default_voice = (
+            default_voice or environment_value("FUSION_READER_VOICE", "female_03.wav") or "female_03.wav"
+        )
+        self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_TTS_TIMEOUT", "120") or "120")
+        self.max_input_chars = int(environment_value("FUSION_READER_TTS_MAX_INPUT_CHARS", "0") or "0")
+        self.require_owner = _truthy(environment_value("FUSION_READER_REQUIRE_TTS_OWNER"), default=True)
         self.owner_file = Path(owner_file) if owner_file is not None else _default_owner_file()
         self.base_url = self._preferred_base_url(configured_url)
 
@@ -413,7 +419,7 @@ class AudioCache:
         create_root: bool = True,
     ) -> None:
         self.root = Path(root).expanduser().resolve(strict=False)
-        self.version = version or os.environ.get("FUSION_READER_AUDIO_CACHE_VERSION", "natural-v2")
+        self.version = version or environment_value("FUSION_READER_AUDIO_CACHE_VERSION", "natural-v2") or "natural-v2"
         self.max_bytes = max(1, int(max_bytes if max_bytes is not None else 8 * 1024 * 1024 * 1024))
         self.max_age_days = max(0, int(max_age_days if max_age_days is not None else 30))
         self._lock = threading.RLock()

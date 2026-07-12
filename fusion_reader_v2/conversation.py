@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from unicodedata import normalize
+
+from .config import environment_has, environment_value
 
 
 @dataclass(frozen=True)
@@ -49,16 +50,26 @@ class OllamaChatProvider(ChatProvider):
     name = "ollama"
 
     def __init__(self, base_url: str = "", default_model: str = "", timeout_seconds: float | None = None) -> None:
-        self.base_url = (base_url or os.environ.get("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
-        self.default_model = default_model or os.environ.get("FUSION_READER_CHAT_MODEL") or "qwen3:14b-q8_0"
-        self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_CHAT_TIMEOUT", "120"))
-        self.think = os.environ.get("FUSION_READER_CHAT_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
-        self.num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT", "1024" if self.think else "384"))
-        self.normal_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_NORMAL", "384"))
+        self.base_url = (base_url or environment_value("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip(
+            "/"
+        )
+        self.default_model = default_model or environment_value("FUSION_READER_CHAT_MODEL") or "qwen3:14b-q8_0"
+        self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_CHAT_TIMEOUT", "120") or "120")
+        self.think = (environment_value("FUSION_READER_CHAT_THINK", "0") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT", "1024" if self.think else "384") or "384"
+        )
+        self.normal_num_predict = int(environment_value("FUSION_READER_CHAT_NUM_PREDICT_NORMAL", "384") or "384")
         self.thinking_num_predict = int(
-            os.environ.get(
+            environment_value(
                 "FUSION_READER_CHAT_NUM_PREDICT_THINKING", str(max(self.num_predict, 1024 if self.think else 1536))
             )
+            or str(max(self.num_predict, 1024 if self.think else 1536))
         )
 
     def health(self) -> dict:
@@ -114,8 +125,8 @@ class OllamaChatProvider(ChatProvider):
             "stream": False,
             "think": selected_think,
             "options": {
-                "temperature": float(os.environ.get("FUSION_READER_CHAT_TEMPERATURE", "0.4")),
-                "num_ctx": int(os.environ.get("FUSION_READER_CHAT_NUM_CTX", "32768")),
+                "temperature": float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4"),
+                "num_ctx": int(environment_value("FUSION_READER_CHAT_NUM_CTX", "32768") or "32768"),
                 "num_predict": selected_num_predict,
             },
         }
@@ -174,38 +185,49 @@ class ConversationCore:
     def __init__(self, provider: ChatProvider | None = None, max_document_chars: int | None = None) -> None:
         self.provider = provider or OllamaChatProvider()
         self.max_document_chars = max_document_chars or int(
-            os.environ.get("FUSION_READER_CHAT_MAX_DOCUMENT_CHARS", "60000")
+            environment_value("FUSION_READER_CHAT_MAX_DOCUMENT_CHARS", "60000") or "60000"
         )
-        self.max_reference_chars = int(os.environ.get("FUSION_READER_CHAT_MAX_REFERENCE_CHARS", "12000"))
-        self.max_document_excerpt_chars = int(os.environ.get("FUSION_READER_CHAT_MAX_DOCUMENT_EXCERPT_CHARS", "18000"))
-        self.max_chunks_per_document = max(2, int(os.environ.get("FUSION_READER_CHAT_MAX_CHUNKS_PER_DOCUMENT", "5")))
+        self.max_reference_chars = int(environment_value("FUSION_READER_CHAT_MAX_REFERENCE_CHARS", "12000") or "12000")
+        self.max_document_excerpt_chars = int(
+            environment_value("FUSION_READER_CHAT_MAX_DOCUMENT_EXCERPT_CHARS", "18000") or "18000"
+        )
+        self.max_chunks_per_document = max(
+            2, int(environment_value("FUSION_READER_CHAT_MAX_CHUNKS_PER_DOCUMENT", "5") or "5")
+        )
         self.max_intro_chunks_per_reference = max(
-            1, int(os.environ.get("FUSION_READER_CHAT_REFERENCE_INTRO_CHUNKS", "2"))
+            1, int(environment_value("FUSION_READER_CHAT_REFERENCE_INTRO_CHUNKS", "2") or "2")
         )
-        mode_from_env = str(os.environ.get("FUSION_READER_REASONING_MODE") or "").strip().lower()
+        mode_from_env = str(environment_value("FUSION_READER_REASONING_MODE") or "").strip().lower()
         if mode_from_env not in {"normal", "thinking", "supreme"}:
             mode_from_env = (
                 "thinking"
-                if getattr(self.provider, "think", False) or "FUSION_READER_CHAT_THINK" not in os.environ
+                if getattr(self.provider, "think", False) or not environment_has("FUSION_READER_CHAT_THINK")
                 else "normal"
             )
         self.default_reasoning_mode = mode_from_env
         normal_num_predict = int(
-            os.environ.get(
+            environment_value(
                 "FUSION_READER_CHAT_NUM_PREDICT_NORMAL", str(getattr(self.provider, "normal_num_predict", 384))
             )
+            or str(getattr(self.provider, "normal_num_predict", 384))
         )
         thinking_num_predict = int(
-            os.environ.get(
+            environment_value(
                 "FUSION_READER_CHAT_NUM_PREDICT_THINKING",
                 str(max(getattr(self.provider, "thinking_num_predict", 1536), 1024)),
             )
+            or str(max(getattr(self.provider, "thinking_num_predict", 1536), 1024))
         )
         supreme_num_predict = int(
-            os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME", str(max(thinking_num_predict, 2048)))
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME", str(max(thinking_num_predict, 2048)))
+            or str(max(thinking_num_predict, 2048))
         )
-        supreme_review_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_REVIEW", "1024"))
-        supreme_final_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_FINAL", "1280"))
+        supreme_review_num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_REVIEW", "1024") or "1024"
+        )
+        supreme_final_num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_FINAL", "1280") or "1280"
+        )
         self.reasoning_profiles = {
             "normal": ReasoningProfile(
                 key="normal",

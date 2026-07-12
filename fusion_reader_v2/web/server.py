@@ -18,8 +18,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from fusion_reader_v2 import FusionReaderV2, import_document_bytes, import_document_path
-from fusion_reader_v2.config import Settings, create_settings
+from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.domain.jobs import JobRegistry
+from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.version import __version__
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.routing import create_router
@@ -52,7 +53,7 @@ INDEX_HTML = _load_static_text(
 )
 RUNTIME_INFO = {
     "app": "fusion_reader_v2",
-    "commit": os.environ.get("FUSION_READER_COMMIT", "unknown"),
+    "commit": environment_value("FUSION_READER_COMMIT", "unknown") or "unknown",
     "pid": os.getpid(),
     "port": PORT,
     "cwd": "",
@@ -477,6 +478,14 @@ class Handler(BaseHTTPRequestHandler):
     @property
     def settings(self) -> Settings:
         return self.context.settings
+
+    def log_message(self, message_format: str, *args: object) -> None:
+        get_logger().info(
+            "http client=%s message=%s",
+            self.address_string(),
+            message_format % args,
+            extra={"request_id": getattr(self, "request_id", "-")},
+        )
 
     def setup(self) -> None:
         super().setup()
@@ -947,6 +956,10 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception as exc:
                         j.state = "error"
                         j.error = type(exc).__name__
+                        get_logger().exception(
+                            "pdf conversion failed",
+                            extra={"request_id": self.request_id, "job_id": j.job_id},
+                        )
                     finally:
                         j.updated_ts = time.time()
                         in_p.unlink(missing_ok=True)
@@ -1239,6 +1252,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
         except Exception as exc:
+            get_logger().warning(
+                "request failed error=%s",
+                type(exc).__name__,
+                extra={"request_id": self.request_id},
+            )
             status, payload = error_response(exc, self.request_id)
             self._json(status, payload)
             return
@@ -1246,6 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTPServer:
+    configure_logging(settings.paths.logs / "fusion_reader_v2_server.log")
     runtime_info = {
         "app": "fusion_reader_v2",
         "commit": _get_git_commit(settings.paths.repository),

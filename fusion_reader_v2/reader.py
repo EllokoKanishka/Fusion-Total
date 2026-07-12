@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 import time
-import os
 from dataclasses import dataclass, field
 
+from .config import environment_value
 
-DEFAULT_CHUNK_MIN_CHARS = int(os.environ.get("FUSION_READER_CHUNK_MIN_CHARS", "1200"))
-DEFAULT_CHUNK_TARGET_CHARS = int(os.environ.get("FUSION_READER_CHUNK_TARGET_CHARS", "2200"))
-DEFAULT_CHUNK_MAX_CHARS = int(os.environ.get("FUSION_READER_CHUNK_MAX_CHARS", "3200"))
+DEFAULT_CHUNK_MIN_CHARS = int(environment_value("FUSION_READER_CHUNK_MIN_CHARS", "1200") or "1200")
+DEFAULT_CHUNK_TARGET_CHARS = int(environment_value("FUSION_READER_CHUNK_TARGET_CHARS", "2200") or "2200")
+DEFAULT_CHUNK_MAX_CHARS = int(environment_value("FUSION_READER_CHUNK_MAX_CHARS", "3200") or "3200")
 
 
 @dataclass

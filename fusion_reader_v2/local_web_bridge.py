@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import socket
 import time
@@ -9,6 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .config import environment_value
 from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult, OpenClawResearchBridge
 
 
@@ -22,13 +22,17 @@ class SearxngResearchBridge(ExternalResearchBridge):
         max_results: int = 5,
         enabled: bool | None = None,
     ) -> None:
-        self.base_url = str(base_url or os.environ.get("FUSION_READER_SEARXNG_URL") or "http://127.0.0.1:8080").strip()
+        self.base_url = str(
+            base_url or environment_value("FUSION_READER_SEARXNG_URL") or "http://127.0.0.1:8080"
+        ).strip()
         self.timeout_seconds = float(
-            timeout_seconds if timeout_seconds is not None else os.environ.get("FUSION_READER_SEARXNG_TIMEOUT", "12")
+            timeout_seconds
+            if timeout_seconds is not None
+            else environment_value("FUSION_READER_SEARXNG_TIMEOUT", "12") or "12"
         )
         self.max_results = max(1, int(max_results))
         if enabled is None:
-            raw_enabled = os.environ.get("FUSION_READER_SEARXNG_ENABLED", "1").strip().lower()
+            raw_enabled = (environment_value("FUSION_READER_SEARXNG_ENABLED", "1") or "1").strip().lower()
             self.enabled = raw_enabled not in {"0", "false", "no", "off"}
         else:
             self.enabled = bool(enabled)
@@ -284,7 +288,7 @@ class AutoExternalResearchBridge(ExternalResearchBridge):
 
 
 def default_external_research_bridge() -> ExternalResearchBridge:
-    provider = str(os.environ.get("FUSION_READER_EXTERNAL_RESEARCH_PROVIDER") or "auto").strip().lower()
+    provider = str(environment_value("FUSION_READER_EXTERNAL_RESEARCH_PROVIDER") or "auto").strip().lower()
     if provider == "searxng":
         return SearxngResearchBridge()
     if provider == "openclaw":

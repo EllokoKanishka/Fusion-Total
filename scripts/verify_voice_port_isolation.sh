@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # External boundary defaults stay explicit here and remain overrideable via env vars.
-DOCTORA_ROOT="${DOCTORA_LUCY_ROOT:-/home/lucy-ubuntu/Escritorio/doctora-lucy}"
-ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-/home/lucy-ubuntu/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
+DOCTORA_ROOT="${DOCTORA_LUCY_ROOT:-${HOME}/Escritorio/doctora-lucy}"
+ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Taverna-legacy/alltalk_tts}"
 FUSION_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 LUCY_TTS_PORT="${LUCY_TTS_PORT:-7854}"
 LEGACY_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-7851}"
@@ -87,7 +87,7 @@ require_external_file_not_contains() {
 
 port_is_listening() {
   local port="$1"
-  ss -ltn 2>/dev/null | grep -q "[.:]$port[[:space:]]"
+  ss -ltn 2>/dev/null | grep -q "[.:]${port}[[:space:]]"
 }
 
 owner_file_matches_fusion() {
@@ -248,7 +248,7 @@ if [[ -d "$DOCTORA_ROOT" ]]; then
   require_external_file_contains "$DOCTORA_ROOT/memoria/bitacora_mantenimiento.md" "Doctora Lucy usa AllTalk/TTS exclusivamente en \`127.0.0.1:$LUCY_TTS_PORT\`"
   require_external_file_contains "$DOCTORA_ROOT/memoria/demo.py" "Fusion Reader v2 usa $FUSION_TTS_PORT"
   require_external_file_contains "$DOCTORA_ROOT/scripts/lucy_alltalk.py" "127.0.0.1:$LUCY_TTS_PORT/api/generate"
-  require_external_file_contains "$DOCTORA_ROOT/scripts/start_lucy_voice_tts.sh" 'PORT="${LUCY_TTS_PORT:-7854}"'
+  require_external_file_contains "$DOCTORA_ROOT/scripts/start_lucy_voice_tts.sh" "PORT=\"\${LUCY_TTS_PORT:-7854}\""
   require_external_file_contains "$DOCTORA_ROOT/scripts/start_lucy_voice_tts.sh" "--host 127.0.0.1"
   require_external_file_contains "$DOCTORA_ROOT/scripts/start_lucy_voice_tts.sh" "setsid"
   require_external_file_contains "$DOCTORA_ROOT/scripts/start_lucy_voice_tts.sh" ".gemini/antigravity/voice_env"
@@ -263,13 +263,13 @@ else
 fi
 
 if [[ -d "$ALLTALK_DIR" ]]; then
-  require_external_file_contains "$ALLTALK_DIR/launch.sh" 'PORT="${LUCY_TTS_PORT:-7854}"'
+  require_external_file_contains "$ALLTALK_DIR/launch.sh" "PORT=\"\${LUCY_TTS_PORT:-7854}\""
   require_external_file_contains "$ALLTALK_DIR/launch.sh" "Refusing to start on reserved/historical port"
   require_external_file_contains "$ALLTALK_DIR/launch.sh" "--host 127.0.0.1"
   require_external_file_not_contains "$ALLTALK_DIR/launch.sh" "--port $HISTORIC_PORT"
   require_external_file_not_contains "$ALLTALK_DIR/launch.sh" "fuser -k $HISTORIC_PORT"
   if [[ -f "$ALLTALK_DIR/launch.sh.bak" ]]; then
-    require_external_file_contains "$ALLTALK_DIR/launch.sh.bak" 'PORT="${LUCY_TTS_PORT:-7854}"'
+    require_external_file_contains "$ALLTALK_DIR/launch.sh.bak" "PORT=\"\${LUCY_TTS_PORT:-7854}\""
     require_external_file_contains "$ALLTALK_DIR/launch.sh.bak" "--host 127.0.0.1"
     require_external_file_not_contains "$ALLTALK_DIR/launch.sh.bak" "--port $HISTORIC_PORT"
     require_external_file_not_contains "$ALLTALK_DIR/launch.sh.bak" "fuser -k $HISTORIC_PORT"

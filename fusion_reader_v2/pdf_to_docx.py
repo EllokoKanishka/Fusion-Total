@@ -5,12 +5,13 @@ import subprocess
 import zipfile
 import tempfile
 import time
-import os
 import shutil
 from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 from typing import Iterable, Callable
+
+from .config import environment_value
 
 
 @dataclass(frozen=True)
@@ -687,7 +688,7 @@ def is_docling_gpu_available() -> bool:
 
 
 def _get_docling_gpu_env() -> Path:
-    configured = os.environ.get("FUSION_READER_DOCLING_GPU_ENV", "").strip()
+    configured = (environment_value("FUSION_READER_DOCLING_GPU_ENV", "") or "").strip()
     if configured:
         return Path(configured).expanduser()
     return (

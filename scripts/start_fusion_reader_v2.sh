@@ -14,6 +14,7 @@ LOG_DIR="${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
+PYTHON_BIN="${FUSION_READER_PYTHON:-python3}"
 
 cd "$ROOT"
 
@@ -24,7 +25,8 @@ timestamp() {
 }
 
 log_msg() {
-  local line="[$(timestamp)] $*"
+  local line
+  line="[$(timestamp)] $*"
   echo "$line" | tee -a "$LOG_FILE"
 }
 
@@ -131,7 +133,7 @@ if [[ -n "$existing_pid" ]]; then
   if [[ -n "$status_raw" ]]; then
     # Parse metadata using python inline
     runtime_data=$(python3 -c "import json, sys; data=json.load(sys.stdin); rt=data.get('runtime', {}); print('|'.join([str(rt.get(k, '')) for k in ['app', 'commit', 'pid']]))" <<< "$status_raw")
-    IFS='|' read -r rt_app rt_commit rt_pid <<< "$runtime_data"
+    IFS='|' read -r rt_app rt_commit _rt_pid <<< "$runtime_data"
     
     if [[ "$rt_app" == "fusion_reader_v2" ]]; then
       if [[ "$rt_commit" == "$current_commit" ]]; then
@@ -183,7 +185,7 @@ log_msg "Profile env: ${FUSION_READER_PROFILE:-default}"
 log_msg "PID file: ${PID_FILE}"
 log_msg "Persistent log: ${LOG_FILE}"
 
-nohup python3 scripts/fusion_reader_v2_server.py >>"$LOG_FILE" 2>&1 &
+nohup "$PYTHON_BIN" -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 &
 server_pid=$!
 
 if ! printf '%s\n' "$server_pid" >"$PID_FILE" 2>/dev/null; then
