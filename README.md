@@ -56,6 +56,7 @@ http://127.0.0.1:8010/
 - Defaults locales: [docs/LOCAL_DEFAULTS_V2.md](docs/LOCAL_DEFAULTS_V2.md)
 - Cierre y backlog vigente: [docs/CLOSURE_AND_BACKLOG_V2.md](docs/CLOSURE_AND_BACKLOG_V2.md)
 - Ciclo de vida de audio: [docs/AUDIO_LIFECYCLE_REPAIR_V2.md](docs/AUDIO_LIFECYCLE_REPAIR_V2.md)
+- Aislamiento de tests de exportación de audio: [docs/AUDIO_EXPORT_TEST_ISOLATION_V2.md](docs/AUDIO_EXPORT_TEST_ISOLATION_V2.md)
 - Convivencia Fusion/OpenClaw/SearXNG: [docs/OPENCLAW_SEARXNG_COEXISTENCE.md](docs/OPENCLAW_SEARXNG_COEXISTENCE.md)
 - Historia: [docs/HISTORY.md](docs/HISTORY.md)
 - Personalidad vigente: [docs/PERSONALITY.md](docs/PERSONALITY.md)

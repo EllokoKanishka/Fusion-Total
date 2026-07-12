@@ -10,7 +10,7 @@ import re
 import tempfile
 import uuid
 import unicodedata
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +41,17 @@ class VoiceSettings:
     language: str = "es"
 
 
+@dataclass
+class _BackgroundShutdownContext:
+    export_thread: threading.Thread | None = None
+    prepare_thread: threading.Thread | None = None
+    prefetch_futures: list[Future[AudioArtifact]] = field(default_factory=list)
+    executors: list[ThreadPoolExecutor] = field(default_factory=list)
+    shutdown_threads: list[threading.Thread] = field(default_factory=list)
+    shutdown_errors: list[tuple[str, Exception]] = field(default_factory=list)
+    started: bool = False
+
+
 class FusionReaderV2:
     def __init__(
         self,
@@ -56,6 +67,7 @@ class FusionReaderV2:
         prefetch_ahead: int | None = None,
         prefetch_workers: int | None = None,
         session_state_path: Path | str | None = "runtime/fusion_reader_v2/session_state.json",
+        audio_export_root: Path | str | None = None,
     ) -> None:
         self.session = ReaderSession()
         self.tts = tts or AllTalkProvider()
@@ -71,6 +83,7 @@ class FusionReaderV2:
         self.prefetch_workers = max(1, int(prefetch_workers if prefetch_workers is not None else os.environ.get("FUSION_READER_PREFETCH_WORKERS", "1")))
         self.tts_segment_chars = max(240, int(os.environ.get("FUSION_READER_TTS_SEGMENT_CHARS", "900")))
         self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+        self._prefetch_executors: list[ThreadPoolExecutor] = [self._executor]
         self._prefetch_lock = threading.Lock()
         self._prefetch_futures: dict[tuple, Future[AudioArtifact]] = {}
         self._prefetch_started: dict[tuple, float] = {}
@@ -95,6 +108,16 @@ class FusionReaderV2:
         self._audio_export_jobs: dict[str, AudioExportJob] = {}
         self._audio_export_active_job_id = ""
         self._audio_export_latest_job_id = ""
+        # Canonical coordination order for lifecycle-sensitive background work:
+        # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
+        # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
+        self._background_work_lock = threading.RLock()
+        self._background_work_condition = threading.Condition(self._background_work_lock)
+        self._background_work_state = "open"
+        self._background_work_active_tts = 0
+        self._background_work_shutdown_context: _BackgroundShutdownContext | None = None
+        self._background_work_closing = False
+        self._background_work_closed = False
         self._chat_lock = threading.Lock()
         self._chat_history: list[dict] = []
         self._dialogue_lock = threading.Lock()
@@ -113,9 +136,82 @@ class FusionReaderV2:
         self.veil = "lucy"
         self.session_state_path = Path(session_state_path) if session_state_path else None
         self.dialogue_trace_path = (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
+        self.audio_export_root = (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
         self._restore_session_state()
         if self.session.document:
             self._document_generation = max(1, self._document_generation)
+
+    def _set_background_work_state_locked(self, state: str) -> None:
+        normalized = str(state or "").strip().lower()
+        if normalized not in {"open", "closing", "closed"}:
+            raise ValueError(f"invalid background work state: {state!r}")
+        self._background_work_state = normalized
+        self._background_work_closing = normalized == "closing"
+        self._background_work_closed = normalized == "closed"
+        self._background_work_condition.notify_all()
+
+    def _begin_tts_operation(self) -> bool:
+        with self._background_work_condition:
+            if self._background_work_state != "open":
+                return False
+            self._background_work_active_tts += 1
+            return True
+
+    def _end_tts_operation(self) -> None:
+        with self._background_work_condition:
+            if self._background_work_active_tts > 0:
+                self._background_work_active_tts -= 1
+            if self._background_work_active_tts == 0:
+                self._background_work_condition.notify_all()
+
+    def _background_work_is_open(self) -> bool:
+        with self._background_work_condition:
+            return self._background_work_state == "open"
+
+    def _background_work_is_open_locked(self) -> bool:
+        return self._background_work_state == "open"
+
+    def _wait_for_active_tts_locked(self, deadline: float) -> None:
+        while self._background_work_active_tts > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError("timed out waiting for interactive TTS to stop")
+            self._background_work_condition.wait(timeout=remaining)
+
+    def _capture_background_shutdown_context(self, context: _BackgroundShutdownContext) -> None:
+        self._audio_export_cancel.set()
+        self._prepare_cancel.set()
+        with self._audio_export_lock:
+            context.export_thread = self._audio_export_thread
+            export_job_id = self._audio_export_active_job_id
+            if export_job_id:
+                job = self._audio_export_jobs.get(export_job_id)
+                if job and job.state in {"queued", "running"}:
+                    job.state = "canceling" if job.state == "running" else "cancelled"
+                    job.detail = "Cancelando exportación de audio..."
+        with self._prepare_lock:
+            context.prepare_thread = self._prepare_thread
+            if self._prepare_status.get("status") == "running":
+                self._prepare_status["status"] = "canceling"
+                self._prepare_status["message"] = "Cancelando preparación..."
+                self._prepare_status["updated_ts"] = time.time()
+        with self._prefetch_lock:
+            context.executors = list(dict.fromkeys(self._prefetch_executors + [self._executor]))
+            context.prefetch_futures = list(self._prefetch_futures.values())
+            self._prefetch_futures = {}
+            self._prefetch_started = {}
+            self._prefetch_future = None
+            self._prefetch_index = None
+            self._prefetch_started_ts = None
+        with self._tts_gate:
+            self._prefetch_promoted_keys.clear()
+            self._tts_gate.notify_all()
+
+    def _before_audio_export_registration(self) -> None:
+        return
+
+    def _before_prepare_registration(self) -> None:
+        return
 
     def _effective_reasoning_mode(self, *, dialogue: bool = False) -> dict:
         requested = str(self.reasoning_mode or "thinking")
@@ -817,30 +913,51 @@ class FusionReaderV2:
         return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language)
 
     def _synthesize_cached_with_settings(self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None) -> AudioArtifact:
-        cached = self.cache.get(text, voice, language)
-        if cached:
-            return cached
-        while not interactive:
-            with self._tts_gate:
-                while self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key):
-                    self._tts_gate.wait()
-            self._tts_lock.acquire()
-            with self._tts_gate:
-                if not self._interactive_tts_pending or self._prefetch_key_is_promoted_locked(prefetch_key):
-                    break
-            self._tts_lock.release()
-        if interactive:
-            self._tts_lock.acquire()
+        if not self._begin_tts_operation():
+            return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
+        tts_locked = False
         try:
             cached = self.cache.get(text, voice, language)
             if cached:
                 return cached
-            artifact = self.tts.synthesize(text, voice=voice, language=language)
-            if not artifact.ok and artifact.detail == "http_400":
-                artifact = self._synthesize_segmented_with_settings(text, voice, language)
-            return self.cache.put(text, voice, language, artifact)
+            if not interactive:
+                while True:
+                    if not self._background_work_is_open():
+                        return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
+                    with self._tts_gate:
+                        should_wait = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                        if should_wait:
+                            self._tts_gate.wait(timeout=0.1)
+                    if should_wait:
+                        continue
+                    if not self._background_work_is_open():
+                        return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
+                    self._tts_lock.acquire()
+                    tts_locked = True
+                    with self._tts_gate:
+                        should_retry = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                    if not should_retry:
+                        break
+                    self._tts_lock.release()
+                    tts_locked = False
+            else:
+                self._tts_lock.acquire()
+                tts_locked = True
+            try:
+                if not self._background_work_is_open():
+                    return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
+                cached = self.cache.get(text, voice, language)
+                if cached:
+                    return cached
+                artifact = self.tts.synthesize(text, voice=voice, language=language)
+                if not artifact.ok and artifact.detail == "http_400":
+                    artifact = self._synthesize_segmented_with_settings(text, voice, language)
+                return self.cache.put(text, voice, language, artifact)
+            finally:
+                if tts_locked:
+                    self._tts_lock.release()
         finally:
-            self._tts_lock.release()
+            self._end_tts_operation()
 
     def _synthesize_segmented_with_settings(self, text: str, voice: str, language: str) -> AudioArtifact:
         segment_limit = getattr(self.tts, "max_input_chars", 0) or self.tts_segment_chars
@@ -993,14 +1110,19 @@ class FusionReaderV2:
         voice = self.voice.voice
         language = self.voice.language
         key = self._prefetch_key(generation, index, text, voice, language)
-        with self._prefetch_lock:
-            existing = self._prefetch_futures.get(key)
-            if existing and not existing.done():
+        with self._background_work_condition:
+            if not self._background_work_is_open_locked():
                 return
-            future = self._executor.submit(self._synthesize_cached_with_settings, text, voice, language, prefetch_key=key)
-            self._prefetch_futures[key] = future
-            self._prefetch_started[key] = time.time()
-            self._set_primary_prefetch_locked()
+            with self._prefetch_lock:
+                if not self._background_work_is_open_locked():
+                    return
+                existing = self._prefetch_futures.get(key)
+                if existing and not existing.done():
+                    return
+                future = self._executor.submit(self._synthesize_cached_with_settings, text, voice, language, prefetch_key=key)
+                self._prefetch_futures[key] = future
+                self._prefetch_started[key] = time.time()
+                self._set_primary_prefetch_locked()
 
     def _forget_prefetch(self, key, future: Future[AudioArtifact]) -> None:
         with self._prefetch_lock:
@@ -1023,20 +1145,35 @@ class FusionReaderV2:
         self._prefetch_started_ts = self._prefetch_started.get(key)
 
     def _reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
-        with self._prefetch_lock:
-            stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
-            stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
-            if self._prefetch_future is not stale_future and not stale_keys:
-                return
-            old_executor = self._executor
-            self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-            for key in stale_keys:
-                self._prefetch_futures.pop(key, None)
-                self._prefetch_started.pop(key, None)
-            self._prefetch_future = None
-            self._prefetch_index = None
-            self._prefetch_started_ts = None
-            self._set_primary_prefetch_locked()
+        old_executor: ThreadPoolExecutor | None = None
+        stale_keys: list[tuple] = []
+        stale_futures: list[Future[AudioArtifact]] = []
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
+                stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
+                stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
+                if not background_open:
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
+                    if self._prefetch_future is stale_future:
+                        self._prefetch_future = None
+                        self._prefetch_index = None
+                        self._prefetch_started_ts = None
+                else:
+                    if self._prefetch_future is not stale_future and not stale_keys:
+                        return
+                    old_executor = self._executor
+                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+                    self._prefetch_executors.append(self._executor)
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
+                    self._prefetch_future = None
+                    self._prefetch_index = None
+                    self._prefetch_started_ts = None
+                    self._set_primary_prefetch_locked()
         for future in stale_futures:
             future.cancel()
         if stale_keys:
@@ -1048,7 +1185,8 @@ class FusionReaderV2:
                         removed = True
                 if removed:
                     self._tts_gate.notify_all()
-        old_executor.shutdown(wait=False, cancel_futures=True)
+        if old_executor is not None:
+            old_executor.shutdown(wait=False, cancel_futures=True)
 
     def read_current(self, play: bool = True) -> dict:
         document = self.session.document
@@ -1140,33 +1278,39 @@ class FusionReaderV2:
         document = self.session.document
         if not document or not document.chunks:
             return {"ok": False, "error": "no_document_loaded"}
-        with self._prepare_lock:
-            if self._prepare_thread and self._prepare_thread.is_alive():
+        self._before_prepare_registration()
+        with self._background_work_condition:
+            if not self._background_work_is_open_locked():
+                return {"ok": False, "error": "service_shutting_down"}
+            with self._prepare_lock:
+                if not self._background_work_is_open_locked():
+                    return {"ok": False, "error": "service_shutting_down"}
+                if self._prepare_thread and self._prepare_thread.is_alive():
+                    return dict(self._prepare_status)
+                cancel_event = threading.Event()
+                self._prepare_cancel = cancel_event
+                self._prepare_generation += 1
+                generation = self._prepare_generation
+                now = time.time()
+                self._prepare_status = {
+                    **self._new_prepare_status(),
+                    "status": "running",
+                    "doc_id": document.doc_id,
+                    "document_generation": self._document_generation,
+                    "title": document.title,
+                    "total": len(document.chunks),
+                    "message": "Preparando audio del documento...",
+                    "started_ts": now,
+                    "updated_ts": now,
+                }
+                self._prepare_thread = threading.Thread(
+                    target=self._prepare_worker,
+                    args=(document.doc_id, start, generation, self._document_generation, cancel_event),
+                    name="fusion-reader-v2-prepare",
+                    daemon=True,
+                )
+                self._prepare_thread.start()
                 return dict(self._prepare_status)
-            cancel_event = threading.Event()
-            self._prepare_cancel = cancel_event
-            self._prepare_generation += 1
-            generation = self._prepare_generation
-            now = time.time()
-            self._prepare_status = {
-                **self._new_prepare_status(),
-                "status": "running",
-                "doc_id": document.doc_id,
-                "document_generation": self._document_generation,
-                "title": document.title,
-                "total": len(document.chunks),
-                "message": "Preparando audio del documento...",
-                "started_ts": now,
-                "updated_ts": now,
-            }
-            self._prepare_thread = threading.Thread(
-                target=self._prepare_worker,
-                args=(document.doc_id, start, generation, self._document_generation, cancel_event),
-                name="fusion-reader-v2-prepare",
-                daemon=True,
-            )
-            self._prepare_thread.start()
-            return dict(self._prepare_status)
 
     def cancel_prepare(self) -> dict:
         self._prepare_cancel.set()
@@ -1264,8 +1408,12 @@ class FusionReaderV2:
 
     def _wait_for_interactive_tts(self, cancel_event: threading.Event | None = None) -> None:
         event = cancel_event or self._prepare_cancel
-        with self._tts_gate:
-            while self._interactive_tts_pending and not event.is_set():
+        while True:
+            if event.is_set() or not self._background_work_is_open():
+                return
+            with self._tts_gate:
+                if not self._interactive_tts_pending or event.is_set():
+                    return
                 self._tts_gate.wait(timeout=0.1)
 
     def _begin_document_lifecycle(self) -> None:
@@ -1289,6 +1437,8 @@ class FusionReaderV2:
             return "La voz rechazó este bloque tal como llegó. Probá con otro bloque o con una voz distinta."
         if clean.startswith("http_") or "Connection refused" in clean or "refused" in clean:
             return "El servicio de voz no respondió desde Fusion. Iniciá TTS o seleccioná otro motor."
+        if clean == "shutdown_in_progress":
+            return "La lectura se detuvo porque el servicio se está cerrando."
         if action == "prepare":
             return "No pude preparar el audio porque la voz no está disponible en este momento."
         return "No pude leer este bloque porque la voz no está disponible en este momento."
@@ -1390,23 +1540,29 @@ class FusionReaderV2:
                     "error": "tts_unavailable_for_audio_export",
                     "detail": str(tts_health.get("detail") or ""),
                 }
-        with self._audio_export_lock:
-            if self._audio_export_thread and self._audio_export_thread.is_alive():
-                return {"ok": False, "error": "audio_export_busy", "detail": "Ya hay una exportación de audio en curso."}
-            self._audio_export_cancel.clear()
-            job = self._new_audio_export_job(snapshot)
-            job.download_url = f"/api/audio-export/download/{job.job_id}"
-            self._audio_export_jobs[job.job_id] = job
-            self._audio_export_active_job_id = job.job_id
-            self._audio_export_latest_job_id = job.job_id
-            self._audio_export_thread = threading.Thread(
-                target=self._audio_export_worker,
-                args=(job.job_id,),
-                name="fusion-reader-v2-audio-export",
-                daemon=True,
-            )
-            self._audio_export_thread.start()
-            return job.to_dict()
+        self._before_audio_export_registration()
+        with self._background_work_condition:
+            if not self._background_work_is_open_locked():
+                return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
+            with self._audio_export_lock:
+                if not self._background_work_is_open_locked():
+                    return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
+                if self._audio_export_thread and self._audio_export_thread.is_alive():
+                    return {"ok": False, "error": "audio_export_busy", "detail": "Ya hay una exportación de audio en curso."}
+                self._audio_export_cancel.clear()
+                job = self._new_audio_export_job(snapshot)
+                job.download_url = f"/api/audio-export/download/{job.job_id}"
+                self._audio_export_jobs[job.job_id] = job
+                self._audio_export_active_job_id = job.job_id
+                self._audio_export_latest_job_id = job.job_id
+                self._audio_export_thread = threading.Thread(
+                    target=self._audio_export_worker,
+                    args=(job.job_id,),
+                    name="fusion-reader-v2-audio-export",
+                    daemon=True,
+                )
+                self._audio_export_thread.start()
+                return job.to_dict()
 
     def cancel_audio_export(self, job_id: str) -> dict:
         clean = str(job_id or "").strip()
@@ -1432,7 +1588,7 @@ class FusionReaderV2:
                 return {"ok": False, "error": "audio_export_not_ready"}
             path = Path(job.output_path).resolve()
             filename = job.filename
-        downloads_dir = find_downloads_dir().resolve()
+        downloads_dir = self.audio_export_root.resolve()
         try:
             path.relative_to(downloads_dir)
         except ValueError:
@@ -1516,7 +1672,7 @@ class FusionReaderV2:
             if not inputs:
                 self._finish_audio_export_job(job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs")
                 return
-            target = unique_audio_download_target(job.filename)
+            target = unique_audio_download_target(job.filename, self.audio_export_root)
             if len(inputs) == 1:
                 target.write_bytes(inputs[0].read_bytes())
                 concat_method = "copy"
@@ -2974,15 +3130,19 @@ class FusionReaderV2:
         self._clear_prefetch_queue()
 
     def _clear_prefetch_queue(self) -> None:
-        with self._prefetch_lock:
-            tracked_futures = list(self._prefetch_futures.values())
-            old_executor = self._executor
-            self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-            self._prefetch_futures = {}
-            self._prefetch_started = {}
-            self._prefetch_future = None
-            self._prefetch_index = None
-            self._prefetch_started_ts = None
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
+                tracked_futures = list(self._prefetch_futures.values())
+                old_executor = self._executor
+                if background_open:
+                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+                    self._prefetch_executors.append(self._executor)
+                self._prefetch_futures = {}
+                self._prefetch_started = {}
+                self._prefetch_future = None
+                self._prefetch_index = None
+                self._prefetch_started_ts = None
         for future in tracked_futures:
             future.cancel()
         with self._tts_gate:
@@ -2990,6 +3150,90 @@ class FusionReaderV2:
                 self._prefetch_promoted_keys.clear()
             self._tts_gate.notify_all()
         old_executor.shutdown(wait=False, cancel_futures=True)
+
+    def _wait_for_thread(self, thread: threading.Thread | None, *, label: str, deadline: float) -> None:
+        if thread is None:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"timed out waiting for {label} thread to stop")
+        thread.join(timeout=remaining)
+        if thread.is_alive():
+            raise AssertionError(f"timed out waiting for {label} thread to stop: {thread.name}")
+
+    def shutdown_background_work(self, timeout: float = 10.0) -> dict:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._background_work_condition:
+            if self._background_work_state == "closed":
+                return {"ok": True, "state": "closed", "detail": "already_closed"}
+            context = self._background_work_shutdown_context
+            if context is None:
+                context = _BackgroundShutdownContext()
+                self._background_work_shutdown_context = context
+            if self._background_work_state == "open":
+                self._set_background_work_state_locked("closing")
+            if not context.started:
+                self._capture_background_shutdown_context(context)
+                shutdown_errors_lock = threading.Lock()
+
+                def _shutdown_executor(executor: ThreadPoolExecutor, label: str) -> None:
+                    try:
+                        executor.shutdown(wait=True, cancel_futures=True)
+                    except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                        with shutdown_errors_lock:
+                            context.shutdown_errors.append((label, exc))
+
+                context.shutdown_threads = []
+                for index, executor in enumerate(context.executors):
+                    thread = threading.Thread(
+                        target=_shutdown_executor,
+                        args=(executor, f"executor-{index}"),
+                        name=f"fusion-reader-v2-shutdown-{index}",
+                        daemon=True,
+                    )
+                    thread.start()
+                    context.shutdown_threads.append(thread)
+                context.started = True
+            export_thread = context.export_thread
+            prepare_thread = context.prepare_thread
+            prefetch_futures = list(context.prefetch_futures)
+            shutdown_threads = list(context.shutdown_threads)
+            shutdown_errors = context.shutdown_errors
+        self._wait_for_thread(export_thread, label="audio export", deadline=deadline)
+        self._wait_for_thread(prepare_thread, label="prepare", deadline=deadline)
+        for future in prefetch_futures:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError("timed out waiting for prefetch future to stop")
+            if future.done():
+                continue
+            if future.cancel():
+                continue
+            try:
+                future.result(timeout=max(0.0, deadline - time.monotonic()))
+            except CancelledError:
+                pass
+            except TimeoutError as exc:
+                raise AssertionError("timed out waiting for prefetch future to stop") from exc
+        for thread in shutdown_threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(f"timed out waiting for prefetch executor shutdown to stop: {thread.name}")
+            thread.join(timeout=remaining)
+            if thread.is_alive():
+                raise AssertionError(f"timed out waiting for prefetch executor shutdown to stop: {thread.name}")
+        if shutdown_errors:
+            label, exc = shutdown_errors[0]
+            raise AssertionError(f"prefetch executor shutdown failed for {label}: {exc}") from exc
+        with self._background_work_condition:
+            self._wait_for_active_tts_locked(deadline)
+            self._set_background_work_state_locked("closed")
+        return {
+            "ok": True,
+            "state": "closed",
+            "prefetch_futures": len(prefetch_futures),
+            "executors": len(context.executors),
+        }
 
     def _shorten_dialogue_answer(self, answer: str) -> str:
         text = " ".join(str(answer or "").split()).strip()

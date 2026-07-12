@@ -1,8 +1,12 @@
+from contextlib import contextmanager
+import inspect
 import json
 import os
 import tempfile
 import time
 import wave
+import threading
+import unittest
 from pathlib import Path
 from fusion_reader_v2 import (
     AudioArtifact,
@@ -20,10 +24,73 @@ from fusion_reader_v2 import (
     VoiceMetricsStore,
 )
 
-def test_app(tts=None, stt=None, root: Path | None = None, external_research=None) -> FusionReaderV2:
-    root = root or Path(tempfile.mkdtemp())
-    return FusionReaderV2(
-        tts=tts or NullTTSProvider(),
+_DEFAULT_AUDIO_EXPORT_ROOT = object()
+
+
+def _register_test_cleanup(app) -> bool:
+    # `test_app()` can be called from a unittest method without passing the
+    # TestCase explicitly, so we walk upward just enough to register the
+    # cleanup on the nearest active case.
+    frame = inspect.currentframe()
+    try:
+        frame = frame.f_back
+        while frame:
+            owner = frame.f_locals.get("self")
+            if isinstance(owner, unittest.TestCase):
+                owner.addCleanup(close_test_app, app)
+                return True
+            frame = frame.f_back
+    finally:
+        del frame
+    return False
+
+
+def close_test_app(app, timeout: float = 10.0) -> None:
+    if getattr(app, "_test_cleanup_done", False):
+        return
+    if getattr(app, "_test_cleanup_started", False):
+        return
+    app._test_cleanup_started = True
+    try:
+        shutdown = getattr(app, "shutdown_background_work", None)
+        if callable(shutdown):
+            shutdown(timeout=timeout)
+        else:
+            raise AssertionError("app does not expose shutdown_background_work()")
+        tempdir = getattr(app, "_test_tempdir", None)
+        if tempdir is not None:
+            tempdir.cleanup()
+            app._test_tempdir = None
+        app._test_cleanup_done = True
+    finally:
+        app._test_cleanup_started = False
+
+
+@contextmanager
+def managed_test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT):
+    app = test_app(tts=tts, stt=stt, root=root, external_research=external_research, audio_export_root=audio_export_root, register_cleanup=False)
+    try:
+        yield app
+    finally:
+        close_test_app(app)
+
+
+def test_app(tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT, register_cleanup: bool = True) -> FusionReaderV2:
+    tempdir = None
+    if root is None:
+        tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_v2_test_")
+        root = Path(tempdir.name)
+    else:
+        root = Path(root)
+    tts_provider = tts or NullTTSProvider()
+    if hasattr(tts_provider, "set_output_root"):
+        try:
+            tts_provider.set_output_root(root / "tts_outputs")
+        except Exception:
+            pass
+    effective_audio_export_root = root / "Descargas" if audio_export_root is _DEFAULT_AUDIO_EXPORT_ROOT else audio_export_root
+    app = FusionReaderV2(
+        tts=tts_provider,
         stt=stt or NullSTTProvider(),
         cache=AudioCache(root / "audio_cache"),
         metrics=VoiceMetricsStore(root / "voice_metrics.jsonl"),
@@ -31,6 +98,35 @@ def test_app(tts=None, stt=None, root: Path | None = None, external_research=Non
         conversation=ConversationCore(NullChatProvider("Entendido.")),
         external_research=external_research or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
         session_state_path=root / "session_state.json",
+        audio_export_root=effective_audio_export_root,
+    )
+    app._test_root = root
+    app._test_tempdir = tempdir
+    app._test_cleanup_started = False
+    app._test_cleanup_done = False
+    app._test_cleanup_registered = False
+    if register_cleanup:
+        app._test_cleanup_registered = _register_test_cleanup(app)
+    return app
+
+
+def wait_for_audio_export(app, job_id: str, timeout: float = 5.0, terminal_states: tuple[str, ...] = ("done", "cancelled", "error")) -> dict:
+    deadline = time.monotonic() + float(timeout)
+    last_status: dict = {}
+    while time.monotonic() < deadline:
+        last_status = app.audio_export_status(job_id)
+        state = str(last_status.get("state") or "")
+        thread = getattr(app, "_audio_export_thread", None)
+        alive = bool(thread and thread.is_alive() and thread is not threading.current_thread())
+        if state in terminal_states and not alive:
+            return last_status
+        if state in terminal_states and alive:
+            thread.join(timeout=0.05)
+            continue
+        time.sleep(0.01)
+    raise AssertionError(
+        f"audio export job {job_id} did not finish within {timeout}s; "
+        f"last_state={last_status.get('state')!r}; last_detail={last_status.get('detail')!r}"
     )
 
 class FailingTTSProvider(NullTTSProvider):
@@ -40,32 +136,61 @@ class FailingTTSProvider(NullTTSProvider):
         self.calls.append((text, voice, language))
         return AudioArtifact(False, provider=self.name, detail="tts_down")
 
+def _write_synthetic_wav(text: str, output_root: Path | None) -> Path:
+    if output_root is not None:
+        output_root.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav", dir=str(output_root))
+    else:
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
+    os.close(fd)
+    path = Path(name)
+    sample_rate = 16000
+    frames = (max(1, len(text)) * 160)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\0\0" * frames)
+    return path
+
 class SyntheticWavTTSProvider(NullTTSProvider):
     name = "synthetic_wav_tts"
 
-    def __init__(self, delay_seconds: float = 0.0) -> None:
+    def __init__(self, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
         super().__init__()
         self.delay_seconds = delay_seconds
+        self.output_root = Path(output_root) if output_root is not None else None
+
+    def set_output_root(self, output_root: Path | str) -> None:
+        self.output_root = Path(output_root)
 
     def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
         self.calls.append((text, voice, language))
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
-        fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_synthetic_", suffix=".wav")
-        os.close(fd)
-        path = Path(name)
-        sample_rate = 16000
-        frames = (max(1, len(text)) * 160)
-        with wave.open(str(path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(b"\0\0" * frames)
+        path = _write_synthetic_wav(text, self.output_root)
+        return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
+
+class BlockingSyntheticWavTTSProvider(SyntheticWavTTSProvider):
+    name = "blocking_synthetic_wav_tts"
+
+    def __init__(self, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
+        super().__init__(delay_seconds=delay_seconds, output_root=output_root)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
+        self.calls.append((text, voice, language))
+        self.started.set()
+        self.release.wait()
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
+        path = _write_synthetic_wav(text, self.output_root)
         return AudioArtifact(True, path=path, provider=self.name, duration_ms=max(1, len(text)))
 
 class LengthLimitedSyntheticWavTTSProvider(SyntheticWavTTSProvider):
-    def __init__(self, max_chars: int, delay_seconds: float = 0.0) -> None:
-        super().__init__(delay_seconds=delay_seconds)
+    def __init__(self, max_chars: int, delay_seconds: float = 0.0, output_root: Path | None = None) -> None:
+        super().__init__(delay_seconds=delay_seconds, output_root=output_root)
         self.max_chars = max_chars
 
     def synthesize(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
