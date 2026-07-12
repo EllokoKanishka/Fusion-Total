@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
-import tempfile
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from .services.persistence import AtomicJSONStore
 
 
 NOTE_LABEL_STOPWORDS = {
@@ -249,25 +249,23 @@ class ReaderNotesStore:
     def _path(self, doc_id: str) -> Path:
         return self.root / f"{safe_doc_id(doc_id)}.json"
 
+    def _store(self, doc_id: str) -> AtomicJSONStore:
+        return AtomicJSONStore(self._path(doc_id), schema_version=1, max_bytes=8 * 1024 * 1024)
+
     def _read_notes(self, doc_id: str) -> list[ReaderNote]:
-        path = self._path(doc_id)
-        if not path.exists():
-            return []
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return []
-        items = raw.get("notes", raw) if isinstance(raw, dict) else raw
+        def normalize_legacy(raw: object) -> dict:
+            if isinstance(raw, list):
+                return {"doc_id": str(doc_id or ""), "notes": raw}
+            if isinstance(raw, dict):
+                return raw
+            raise ValueError("notes state must be an object or legacy list")
+
+        raw = self._store(doc_id).read(legacy_transform=normalize_legacy)
+        items = raw.get("notes", [])
         if not isinstance(items, list):
             return []
         return [ReaderNote.from_dict(item) for item in items if isinstance(item, dict)]
 
     def _write_notes(self, doc_id: str, notes: list[ReaderNote]) -> None:
-        path = self._path(doc_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"doc_id": str(doc_id or ""), "notes": [note.to_dict() for note in notes]}
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as tmp:
-            json.dump(payload, tmp, ensure_ascii=False, indent=2)
-            tmp.write("\n")
-            tmp_path = Path(tmp.name)
-        tmp_path.replace(path)
+        self._store(doc_id).write(payload)

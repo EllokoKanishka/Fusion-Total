@@ -8,18 +8,15 @@ import time
 import os
 import re
 import tempfile
-import uuid
 import unicodedata
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .audio_export import (
     AudioExportJob,
     AudioExportSnapshot,
-    build_audio_export_filename,
     concat_wav_files,
-    unique_audio_download_target,
 )
 from .conversation import ConversationCore
 from .dialogue import STTProvider, default_stt_provider
@@ -30,26 +27,16 @@ from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
 from .reader import Document, ReaderSession
 from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider
 from .pdf_to_docx import find_downloads_dir
-
-LABORATORY_NOTES_DOC_ID = "__laboratory__"
-LABORATORY_NOTES_TITLE = "Laboratorio"
-
+from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
+from .services.notes import LABORATORY_NOTES_DOC_ID, LABORATORY_NOTES_TITLE, NotesService
+from .services.audio_export import AudioExportService
+from .services.persistence import AtomicJSONStore
+from .services.session_persistence import SessionPersistenceService
 
 @dataclass
 class VoiceSettings:
     voice: str = field(default_factory=lambda: os.environ.get("FUSION_READER_VOICE", "female_03.wav"))
     language: str = "es"
-
-
-@dataclass
-class _BackgroundShutdownContext:
-    export_thread: threading.Thread | None = None
-    prepare_thread: threading.Thread | None = None
-    prefetch_futures: list[Future[AudioArtifact]] = field(default_factory=list)
-    executors: list[ThreadPoolExecutor] = field(default_factory=list)
-    shutdown_threads: list[threading.Thread] = field(default_factory=list)
-    shutdown_errors: list[tuple[str, Exception]] = field(default_factory=list)
-    started: bool = False
 
 
 class FusionReaderV2:
@@ -68,6 +55,8 @@ class FusionReaderV2:
         prefetch_workers: int | None = None,
         session_state_path: Path | str | None = "runtime/fusion_reader_v2/session_state.json",
         audio_export_root: Path | str | None = None,
+        job_max_items: int = 256,
+        job_ttl_seconds: float = 6 * 60 * 60,
     ) -> None:
         self.session = ReaderSession()
         self.tts = tts or AllTalkProvider()
@@ -106,6 +95,12 @@ class FusionReaderV2:
         self._audio_export_cancel = threading.Event()
         self._audio_export_thread: threading.Thread | None = None
         self._audio_export_jobs: dict[str, AudioExportJob] = {}
+        self._audio_export_service = AudioExportService(
+            self,
+            jobs=self._audio_export_jobs,
+            max_items=job_max_items,
+            ttl_seconds=job_ttl_seconds,
+        )
         self._audio_export_active_job_id = ""
         self._audio_export_latest_job_id = ""
         # Canonical coordination order for lifecycle-sensitive background work:
@@ -115,7 +110,7 @@ class FusionReaderV2:
         self._background_work_condition = threading.Condition(self._background_work_lock)
         self._background_work_state = "open"
         self._background_work_active_tts = 0
-        self._background_work_shutdown_context: _BackgroundShutdownContext | None = None
+        self._background_work_shutdown_context: BackgroundShutdownContext | None = None
         self._background_work_closing = False
         self._background_work_closed = False
         self._chat_lock = threading.Lock()
@@ -135,6 +130,14 @@ class FusionReaderV2:
         self.profile = "academica"
         self.veil = "lucy"
         self.session_state_path = Path(session_state_path) if session_state_path else None
+        self._session_store = (
+            AtomicJSONStore(self.session_state_path, schema_version=1, max_bytes=32 * 1024 * 1024)
+            if self.session_state_path is not None
+            else None
+        )
+        self._persistence_service = SessionPersistenceService(self)
+        self._lifecycle_service = BackgroundLifecycleService(self)
+        self._notes_service = NotesService(self)
         self.dialogue_trace_path = (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         self.audio_export_root = (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
         self._restore_session_state()
@@ -142,70 +145,25 @@ class FusionReaderV2:
             self._document_generation = max(1, self._document_generation)
 
     def _set_background_work_state_locked(self, state: str) -> None:
-        normalized = str(state or "").strip().lower()
-        if normalized not in {"open", "closing", "closed"}:
-            raise ValueError(f"invalid background work state: {state!r}")
-        self._background_work_state = normalized
-        self._background_work_closing = normalized == "closing"
-        self._background_work_closed = normalized == "closed"
-        self._background_work_condition.notify_all()
+        self._lifecycle_service.set_state_locked(state)
 
     def _begin_tts_operation(self) -> bool:
-        with self._background_work_condition:
-            if self._background_work_state != "open":
-                return False
-            self._background_work_active_tts += 1
-            return True
+        return self._lifecycle_service.begin_tts_operation()
 
     def _end_tts_operation(self) -> None:
-        with self._background_work_condition:
-            if self._background_work_active_tts > 0:
-                self._background_work_active_tts -= 1
-            if self._background_work_active_tts == 0:
-                self._background_work_condition.notify_all()
+        self._lifecycle_service.end_tts_operation()
 
     def _background_work_is_open(self) -> bool:
-        with self._background_work_condition:
-            return self._background_work_state == "open"
+        return self._lifecycle_service.is_open()
 
     def _background_work_is_open_locked(self) -> bool:
-        return self._background_work_state == "open"
+        return self._lifecycle_service.is_open_locked()
 
     def _wait_for_active_tts_locked(self, deadline: float) -> None:
-        while self._background_work_active_tts > 0:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AssertionError("timed out waiting for interactive TTS to stop")
-            self._background_work_condition.wait(timeout=remaining)
+        self._lifecycle_service.wait_for_active_tts_locked(deadline)
 
-    def _capture_background_shutdown_context(self, context: _BackgroundShutdownContext) -> None:
-        self._audio_export_cancel.set()
-        self._prepare_cancel.set()
-        with self._audio_export_lock:
-            context.export_thread = self._audio_export_thread
-            export_job_id = self._audio_export_active_job_id
-            if export_job_id:
-                job = self._audio_export_jobs.get(export_job_id)
-                if job and job.state in {"queued", "running"}:
-                    job.state = "canceling" if job.state == "running" else "cancelled"
-                    job.detail = "Cancelando exportación de audio..."
-        with self._prepare_lock:
-            context.prepare_thread = self._prepare_thread
-            if self._prepare_status.get("status") == "running":
-                self._prepare_status["status"] = "canceling"
-                self._prepare_status["message"] = "Cancelando preparación..."
-                self._prepare_status["updated_ts"] = time.time()
-        with self._prefetch_lock:
-            context.executors = list(dict.fromkeys(self._prefetch_executors + [self._executor]))
-            context.prefetch_futures = list(self._prefetch_futures.values())
-            self._prefetch_futures = {}
-            self._prefetch_started = {}
-            self._prefetch_future = None
-            self._prefetch_index = None
-            self._prefetch_started_ts = None
-        with self._tts_gate:
-            self._prefetch_promoted_keys.clear()
-            self._tts_gate.notify_all()
+    def _capture_background_shutdown_context(self, context: BackgroundShutdownContext) -> None:
+        self._lifecycle_service.capture_shutdown_context(context)
 
     def _before_audio_export_registration(self) -> None:
         return
@@ -539,25 +497,7 @@ class FusionReaderV2:
         }
 
     def _new_audio_export_job(self, snapshot: AudioExportSnapshot) -> AudioExportJob:
-        start_block = snapshot.blocks[0][0]
-        end_block = snapshot.blocks[-1][0]
-        job_id = uuid.uuid4().hex[:16]
-        filename = build_audio_export_filename(snapshot.title, start_block, end_block, snapshot.total_blocks)
-        return AudioExportJob(
-            job_id=job_id,
-            state="queued",
-            title=snapshot.title,
-            start_block=start_block,
-            end_block=end_block,
-            total_blocks=len(snapshot.blocks),
-            filename=filename,
-            detail="En cola para exportar audio.",
-            started_at=time.time(),
-            doc_id=snapshot.doc_id,
-            voice=snapshot.voice,
-            language=snapshot.language,
-            snapshot=snapshot,
-        )
+        return self._audio_export_service.new_job(snapshot)
 
     def _resolve_audio_export_snapshot(
         self,
@@ -566,40 +506,7 @@ class FusionReaderV2:
         start: int | None = None,
         end: int | None = None,
     ) -> AudioExportSnapshot:
-        document = self.session.document
-        if not document or not document.chunks:
-            raise ValueError("no_document_loaded")
-        total = len(document.chunks)
-        current_block = self.session.cursor + 1
-        normalized_mode = str(mode or "").strip().lower()
-        if normalized_mode == "current":
-            start_block = current_block
-            end_block = current_block
-        elif normalized_mode == "block":
-            chosen = int(block or 0)
-            if chosen < 1 or chosen > total:
-                raise ValueError("audio_export_block_out_of_range")
-            start_block = chosen
-            end_block = chosen
-        elif normalized_mode == "range":
-            start_block = int(start or 0)
-            end_block = int(end or 0)
-            if start_block < 1 or end_block < 1 or start_block > end_block or end_block > total:
-                raise ValueError("audio_export_range_invalid")
-        elif normalized_mode == "full":
-            start_block = 1
-            end_block = total
-        else:
-            raise ValueError("audio_export_mode_invalid")
-        blocks = [(index + 1, document.chunks[index]) for index in range(start_block - 1, end_block)]
-        return AudioExportSnapshot(
-            doc_id=document.doc_id,
-            title=document.title,
-            voice=self.voice.voice,
-            language=self.voice.language,
-            total_blocks=total,
-            blocks=blocks,
-        )
+        return self._audio_export_service.resolve_snapshot(mode, block, start, end)
 
     def load_text(
         self,
@@ -1145,48 +1052,7 @@ class FusionReaderV2:
         self._prefetch_started_ts = self._prefetch_started.get(key)
 
     def _reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
-        old_executor: ThreadPoolExecutor | None = None
-        stale_keys: list[tuple] = []
-        stale_futures: list[Future[AudioArtifact]] = []
-        with self._background_work_condition:
-            background_open = self._background_work_is_open_locked()
-            with self._prefetch_lock:
-                stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
-                stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
-                if not background_open:
-                    for key in stale_keys:
-                        self._prefetch_futures.pop(key, None)
-                        self._prefetch_started.pop(key, None)
-                    if self._prefetch_future is stale_future:
-                        self._prefetch_future = None
-                        self._prefetch_index = None
-                        self._prefetch_started_ts = None
-                else:
-                    if self._prefetch_future is not stale_future and not stale_keys:
-                        return
-                    old_executor = self._executor
-                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-                    self._prefetch_executors.append(self._executor)
-                    for key in stale_keys:
-                        self._prefetch_futures.pop(key, None)
-                        self._prefetch_started.pop(key, None)
-                    self._prefetch_future = None
-                    self._prefetch_index = None
-                    self._prefetch_started_ts = None
-                    self._set_primary_prefetch_locked()
-        for future in stale_futures:
-            future.cancel()
-        if stale_keys:
-            with self._tts_gate:
-                removed = False
-                for key in stale_keys:
-                    if key in self._prefetch_promoted_keys:
-                        self._prefetch_promoted_keys.discard(key)
-                        removed = True
-                if removed:
-                    self._tts_gate.notify_all()
-        if old_executor is not None:
-            old_executor.shutdown(wait=False, cancel_futures=True)
+        self._lifecycle_service.reset_prefetch_queue(stale_future)
 
     def read_current(self, play: bool = True) -> dict:
         document = self.session.document
@@ -1493,109 +1359,19 @@ class FusionReaderV2:
             self._prepare_status["done_ts"] = time.time()
 
     def audio_export_overview(self) -> dict:
-        with self._audio_export_lock:
-            job_id = self._audio_export_active_job_id or self._audio_export_latest_job_id
-            if not job_id or job_id not in self._audio_export_jobs:
-                return {
-                    "ok": True,
-                    "job_id": "",
-                    "state": "idle",
-                    "detail": "Sin exportación de audio activa.",
-                    "title": "",
-                    "start_block": 0,
-                    "end_block": 0,
-                    "total_blocks": 0,
-                    "completed_blocks": 0,
-                    "cached_blocks": 0,
-                    "generated_blocks": 0,
-                    "current_block": 0,
-                    "output_path": "",
-                    "filename": "",
-                    "download_url": "",
-                    "concat_method": "",
-                    "error": "",
-                }
-            return self._audio_export_jobs[job_id].to_dict()
+        return self._audio_export_service.overview()
 
     def audio_export_status(self, job_id: str) -> dict:
-        clean = str(job_id or "").strip()
-        if not clean:
-            return self.audio_export_overview()
-        with self._audio_export_lock:
-            job = self._audio_export_jobs.get(clean)
-            if not job:
-                return {"ok": False, "error": "audio_export_job_not_found"}
-            return job.to_dict()
+        return self._audio_export_service.status(job_id)
 
     def start_audio_export(self, mode: str, block: int | None = None, start: int | None = None, end: int | None = None) -> dict:
-        try:
-            snapshot = self._resolve_audio_export_snapshot(mode, block=block, start=start, end=end)
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        if any(not self.cache.get(text, snapshot.voice, snapshot.language) for _, text in snapshot.blocks):
-            tts_health = self.tts.health()
-            if not bool(tts_health.get("ok")):
-                return {
-                    "ok": False,
-                    "error": "tts_unavailable_for_audio_export",
-                    "detail": str(tts_health.get("detail") or ""),
-                }
-        self._before_audio_export_registration()
-        with self._background_work_condition:
-            if not self._background_work_is_open_locked():
-                return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
-            with self._audio_export_lock:
-                if not self._background_work_is_open_locked():
-                    return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
-                if self._audio_export_thread and self._audio_export_thread.is_alive():
-                    return {"ok": False, "error": "audio_export_busy", "detail": "Ya hay una exportación de audio en curso."}
-                self._audio_export_cancel.clear()
-                job = self._new_audio_export_job(snapshot)
-                job.download_url = f"/api/audio-export/download/{job.job_id}"
-                self._audio_export_jobs[job.job_id] = job
-                self._audio_export_active_job_id = job.job_id
-                self._audio_export_latest_job_id = job.job_id
-                self._audio_export_thread = threading.Thread(
-                    target=self._audio_export_worker,
-                    args=(job.job_id,),
-                    name="fusion-reader-v2-audio-export",
-                    daemon=True,
-                )
-                self._audio_export_thread.start()
-                return job.to_dict()
+        return self._audio_export_service.start(mode, block, start, end)
 
     def cancel_audio_export(self, job_id: str) -> dict:
-        clean = str(job_id or "").strip()
-        with self._audio_export_lock:
-            target_id = clean or self._audio_export_active_job_id
-            job = self._audio_export_jobs.get(target_id)
-            if not job:
-                return {"ok": False, "error": "audio_export_job_not_found"}
-            if job.state not in {"queued", "running"}:
-                return job.to_dict()
-            job.state = "canceling" if job.state == "running" else "cancelled"
-            job.detail = "Cancelando exportación de audio..."
-            self._audio_export_cancel.set()
-            return job.to_dict()
+        return self._audio_export_service.cancel(job_id)
 
     def get_audio_export_download(self, job_id: str) -> dict:
-        clean = str(job_id or "").strip()
-        with self._audio_export_lock:
-            job = self._audio_export_jobs.get(clean)
-            if not job:
-                return {"ok": False, "error": "audio_export_job_not_found"}
-            if job.state != "done" or not job.output_path:
-                return {"ok": False, "error": "audio_export_not_ready"}
-            path = Path(job.output_path).resolve()
-            filename = job.filename
-        downloads_dir = self.audio_export_root.resolve()
-        try:
-            path.relative_to(downloads_dir)
-        except ValueError:
-            return {"ok": False, "error": "audio_export_path_invalid"}
-        if not path.exists():
-            return {"ok": False, "error": "audio_export_file_missing"}
-        return {"ok": True, "path": str(path), "filename": filename}
+        return self._audio_export_service.download(job_id)
 
     def _finish_audio_export_job(
         self,
@@ -1607,88 +1383,17 @@ class FusionReaderV2:
         concat_method: str = "",
         error: str = "",
     ) -> None:
-        with self._audio_export_lock:
-            job = self._audio_export_jobs.get(job_id)
-            if not job:
-                return
-            job.state = state
-            job.detail = detail
-            job.concat_method = concat_method
-            job.error = error
-            job.finished_at = time.time()
-            if output_path:
-                job.output_path = str(output_path)
-                job.filename = output_path.name
-            if self._audio_export_active_job_id == job_id:
-                self._audio_export_active_job_id = ""
+        self._audio_export_service.finish(
+            job_id,
+            state,
+            detail,
+            output_path=output_path,
+            concat_method=concat_method,
+            error=error,
+        )
 
     def _audio_export_worker(self, job_id: str) -> None:
-        with self._audio_export_lock:
-            job = self._audio_export_jobs.get(job_id)
-            if not job or not job.snapshot:
-                return
-            snapshot = job.snapshot
-            job.state = "running"
-            job.detail = "Preparando exportación de audio..."
-        inputs: list[Path] = []
-        target: Path | None = None
-        try:
-            for chunk_number, text in snapshot.blocks:
-                if self._audio_export_cancel.is_set():
-                    self._finish_audio_export_job(job_id, "cancelled", "Exportación cancelada.")
-                    return
-                self._wait_for_interactive_tts()
-                with self._audio_export_lock:
-                    job = self._audio_export_jobs.get(job_id)
-                    if not job:
-                        return
-                    job.current_block = chunk_number
-                    job.detail = f"Generando bloque {job.completed_blocks + 1} de {job.total_blocks}..."
-                cached_artifact = self.cache.get(text, snapshot.voice, snapshot.language)
-                if cached_artifact:
-                    artifact = cached_artifact
-                    with self._audio_export_lock:
-                        current_job = self._audio_export_jobs.get(job_id)
-                        if current_job:
-                            current_job.cached_blocks += 1
-                else:
-                    artifact = self._synthesize_cached_with_settings(text, snapshot.voice, snapshot.language)
-                    if not artifact.ok:
-                        self._finish_audio_export_job(job_id, "error", "No pude generar audio para exportar.", error=artifact.detail or "tts_failed")
-                        return
-                    with self._audio_export_lock:
-                        current_job = self._audio_export_jobs.get(job_id)
-                        if current_job:
-                            current_job.generated_blocks += 1
-                if not artifact.ok or not artifact.path or not artifact.path.exists():
-                    self._finish_audio_export_job(job_id, "error", "No encontré el WAV de un bloque exportado.", error="audio_export_missing_artifact")
-                    return
-                inputs.append(Path(artifact.path))
-                with self._audio_export_lock:
-                    current_job = self._audio_export_jobs.get(job_id)
-                    if current_job:
-                        current_job.completed_blocks += 1
-                        current_job.detail = f"Bloque {chunk_number} listo."
-            if not inputs:
-                self._finish_audio_export_job(job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs")
-                return
-            target = unique_audio_download_target(job.filename, self.audio_export_root)
-            if len(inputs) == 1:
-                target.write_bytes(inputs[0].read_bytes())
-                concat_method = "copy"
-            else:
-                concat_method = concat_wav_files(inputs, target)
-            if self._audio_export_cancel.is_set():
-                target.unlink(missing_ok=True)
-                self._finish_audio_export_job(job_id, "cancelled", "Exportación cancelada.")
-                return
-            self._finish_audio_export_job(job_id, "done", "Listo: guardado en Descargas.", output_path=target, concat_method=concat_method)
-        except Exception as exc:
-            if target:
-                target.unlink(missing_ok=True)
-            self._finish_audio_export_job(job_id, "error", "Falló la exportación de audio.", error=str(exc))
-        finally:
-            self._audio_export_cancel.clear()
+        self._audio_export_service.worker(job_id)
 
     def test_voice(self, text: str = "Prueba de voz neural del lector conversacional.", play: bool = True) -> dict:
         started = time.perf_counter()
@@ -3121,119 +2826,16 @@ class FusionReaderV2:
         return out
 
     def _prioritize_dialogue(self) -> None:
-        self._prepare_cancel.set()
-        with self._prepare_lock:
-            if self._prepare_status.get("status") == "running":
-                self._prepare_status["status"] = "canceling"
-                self._prepare_status["message"] = "Cancelando preparación para priorizar diálogo..."
-                self._prepare_status["updated_ts"] = time.time()
-        self._clear_prefetch_queue()
+        self._lifecycle_service.prioritize_dialogue()
 
     def _clear_prefetch_queue(self) -> None:
-        with self._background_work_condition:
-            background_open = self._background_work_is_open_locked()
-            with self._prefetch_lock:
-                tracked_futures = list(self._prefetch_futures.values())
-                old_executor = self._executor
-                if background_open:
-                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-                    self._prefetch_executors.append(self._executor)
-                self._prefetch_futures = {}
-                self._prefetch_started = {}
-                self._prefetch_future = None
-                self._prefetch_index = None
-                self._prefetch_started_ts = None
-        for future in tracked_futures:
-            future.cancel()
-        with self._tts_gate:
-            if self._prefetch_promoted_keys:
-                self._prefetch_promoted_keys.clear()
-            self._tts_gate.notify_all()
-        old_executor.shutdown(wait=False, cancel_futures=True)
+        self._lifecycle_service.clear_prefetch_queue()
 
     def _wait_for_thread(self, thread: threading.Thread | None, *, label: str, deadline: float) -> None:
-        if thread is None:
-            return
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise AssertionError(f"timed out waiting for {label} thread to stop")
-        thread.join(timeout=remaining)
-        if thread.is_alive():
-            raise AssertionError(f"timed out waiting for {label} thread to stop: {thread.name}")
+        self._lifecycle_service.wait_for_thread(thread, label=label, deadline=deadline)
 
     def shutdown_background_work(self, timeout: float = 10.0) -> dict:
-        deadline = time.monotonic() + max(0.0, float(timeout))
-        with self._background_work_condition:
-            if self._background_work_state == "closed":
-                return {"ok": True, "state": "closed", "detail": "already_closed"}
-            context = self._background_work_shutdown_context
-            if context is None:
-                context = _BackgroundShutdownContext()
-                self._background_work_shutdown_context = context
-            if self._background_work_state == "open":
-                self._set_background_work_state_locked("closing")
-            if not context.started:
-                self._capture_background_shutdown_context(context)
-                shutdown_errors_lock = threading.Lock()
-
-                def _shutdown_executor(executor: ThreadPoolExecutor, label: str) -> None:
-                    try:
-                        executor.shutdown(wait=True, cancel_futures=True)
-                    except Exception as exc:  # pragma: no cover - surfaced by assertions below
-                        with shutdown_errors_lock:
-                            context.shutdown_errors.append((label, exc))
-
-                context.shutdown_threads = []
-                for index, executor in enumerate(context.executors):
-                    thread = threading.Thread(
-                        target=_shutdown_executor,
-                        args=(executor, f"executor-{index}"),
-                        name=f"fusion-reader-v2-shutdown-{index}",
-                        daemon=True,
-                    )
-                    thread.start()
-                    context.shutdown_threads.append(thread)
-                context.started = True
-            export_thread = context.export_thread
-            prepare_thread = context.prepare_thread
-            prefetch_futures = list(context.prefetch_futures)
-            shutdown_threads = list(context.shutdown_threads)
-            shutdown_errors = context.shutdown_errors
-        self._wait_for_thread(export_thread, label="audio export", deadline=deadline)
-        self._wait_for_thread(prepare_thread, label="prepare", deadline=deadline)
-        for future in prefetch_futures:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AssertionError("timed out waiting for prefetch future to stop")
-            if future.done():
-                continue
-            if future.cancel():
-                continue
-            try:
-                future.result(timeout=max(0.0, deadline - time.monotonic()))
-            except CancelledError:
-                pass
-            except TimeoutError as exc:
-                raise AssertionError("timed out waiting for prefetch future to stop") from exc
-        for thread in shutdown_threads:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AssertionError(f"timed out waiting for prefetch executor shutdown to stop: {thread.name}")
-            thread.join(timeout=remaining)
-            if thread.is_alive():
-                raise AssertionError(f"timed out waiting for prefetch executor shutdown to stop: {thread.name}")
-        if shutdown_errors:
-            label, exc = shutdown_errors[0]
-            raise AssertionError(f"prefetch executor shutdown failed for {label}: {exc}") from exc
-        with self._background_work_condition:
-            self._wait_for_active_tts_locked(deadline)
-            self._set_background_work_state_locked("closed")
-        return {
-            "ok": True,
-            "state": "closed",
-            "prefetch_futures": len(prefetch_futures),
-            "executors": len(context.executors),
-        }
+        return self._lifecycle_service.shutdown(timeout)
 
     def _shorten_dialogue_answer(self, answer: str) -> str:
         text = " ".join(str(answer or "").split()).strip()
@@ -3250,376 +2852,70 @@ class FusionReaderV2:
         return clipped.rstrip(",;:") + "."
 
     def notes_summary(self) -> dict:
-        status = self.session.status()
-        doc_id = str(status.get("doc_id") or "")
-        if not doc_id:
-            return {"ok": True, "count": 0, "current_count": 0}
-        notes = self.notes.list(doc_id)
-        current_index = max(0, int(status.get("current") or 1) - 1)
-        current_count = sum(1 for note in notes if int(note.get("chunk_index") or 0) == current_index)
-        return {"ok": True, "count": len(notes), "current_count": current_count}
+        return self._notes_service.summary()
 
     def list_notes(self, doc_id: str = "", chunk_index: int | None = None, current_only: bool = False) -> dict:
-        status = self.session.status()
-        selected_doc = str(doc_id or status.get("doc_id") or "")
-        if not selected_doc:
-            return {"ok": True, "doc_id": "", "items": []}
-        if current_only:
-            chunk_index = max(0, int(status.get("current") or 1) - 1)
-        return {"ok": True, "doc_id": selected_doc, "items": self.notes.list(selected_doc, chunk_index=chunk_index)}
+        return self._notes_service.list(doc_id, chunk_index, current_only)
 
     def create_note(self, text: str, chunk_index: int | None = None) -> dict:
-        document = self.session.document
-        if not document:
-            return {"ok": False, "error": "no_document_loaded"}
-        selected_index = self.session.cursor if chunk_index is None else int(chunk_index)
-        if selected_index < 0 or selected_index >= len(document.chunks):
-            return {"ok": False, "error": "chunk_out_of_bounds"}
-        try:
-            note = self.notes.add(
-                document.doc_id,
-                document.title,
-                selected_index,
-                text,
-                quote=document.chunks[selected_index],
-            )
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(document.doc_id)}
+        return self._notes_service.create(text, chunk_index)
 
     def create_laboratory_note(self, text: str) -> dict:
-        clean_text = self._resolve_laboratory_note_text(text)
-        if not clean_text:
-            return {"ok": False, "error": "empty_note"}
-        try:
-            note = self.notes.add(
-                LABORATORY_NOTES_DOC_ID,
-                LABORATORY_NOTES_TITLE,
-                0,
-                clean_text,
-                quote=self._recent_laboratory_quote(),
-                source_kind="laboratory",
-            )
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(LABORATORY_NOTES_DOC_ID)}
+        return self._notes_service.create_laboratory(text)
 
     def _resolve_note_chunk_index(self, chunk_index: int | None = None) -> int | None:
-        document = self.session.document
-        if document is None or chunk_index is None:
-            return None
-        try:
-            selected = int(chunk_index)
-        except (TypeError, ValueError):
-            return None
-        if selected < 0 or selected >= len(document.chunks):
-            return None
-        return selected
+        return self._notes_service.resolve_chunk_index(chunk_index)
 
     def update_note(self, note_id: str, text: str, doc_id: str = "") -> dict:
-        selected_doc = str(doc_id or self.session.status().get("doc_id") or "")
-        if not selected_doc:
-            return {"ok": False, "error": "no_document_loaded"}
-        try:
-            note = self.notes.update(selected_doc, str(note_id or ""), text)
-        except KeyError as exc:
-            return {"ok": False, "error": str(exc)}
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(selected_doc)}
+        return self._notes_service.update(note_id, text, doc_id)
 
     def rename_note(self, note_id: str, label: str, doc_id: str = "") -> dict:
-        selected_doc = str(doc_id or self.session.status().get("doc_id") or "")
-        if not selected_doc:
-            return {"ok": False, "error": "no_document_loaded"}
-        try:
-            note = self.notes.update_label(selected_doc, str(note_id or ""), label)
-        except KeyError as exc:
-            return {"ok": False, "error": str(exc)}
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(selected_doc)}
+        return self._notes_service.rename(note_id, label, doc_id)
 
     def delete_note(self, note_id: str, doc_id: str = "") -> dict:
-        selected_doc = str(doc_id or self.session.status().get("doc_id") or "")
-        if not selected_doc:
-            return {"ok": False, "error": "no_document_loaded"}
-        try:
-            out = self.notes.delete(selected_doc, str(note_id or ""))
-        except KeyError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {**out, "items": self.notes.list(selected_doc)}
+        return self._notes_service.delete(note_id, doc_id)
 
     def _note_reference(self, note: dict) -> str:
-        kind = str(note.get("source_kind") or "document").strip().lower()
-        if kind == "laboratory":
-            return f"L{int(note.get('anchor_number') or 1)}"
-        return f"B{int(note.get('chunk_number') or note.get('anchor_number') or 1)}"
+        return self._notes_service.reference(note)
 
     def _note_saved_answer(self, note: dict, spoken: bool = False) -> str:
-        ref = self._note_reference(note)
-        if str(note.get("source_kind") or "").strip().lower() == "laboratory":
-            return f"Listo, guardé esa nota como {ref}." if spoken else f"Nota guardada como {ref}."
-        return f"Listo, guardé esa nota en el bloque {note.get('chunk_number') or 1}." if spoken else f"Nota guardada en el bloque {note.get('chunk_number') or 1}."
+        return self._notes_service.saved_answer(note, spoken)
 
     def _recent_laboratory_quote(self) -> str:
-        with self._dialogue_lock:
-            dialogue_history = list(self._dialogue_history[-4:])
-        with self._chat_lock:
-            chat_history = list(self._chat_history[-4:])
-        history = dialogue_history or chat_history
-        lines: list[str] = []
-        for item in history:
-            role = str(item.get("role") or "").strip().lower()
-            content = " ".join(str(item.get("content") or "").split())
-            if not content:
-                continue
-            prefix = "Vos" if role == "user" else "Laboratorio" if role == "assistant" else "Sistema"
-            lines.append(f"{prefix}: {content}")
-        return "\n".join(lines[:4]).strip()
+        return self._notes_service.recent_laboratory_quote()
 
     def _resolve_laboratory_note_text(self, text: str) -> str:
-        clean = str(text or "").strip()
-        if not clean:
-            return ""
-        if self._is_generic_laboratory_note_text(clean):
-            resolved = self._recent_laboratory_note_target()
-            if resolved:
-                return resolved
-        return clean
+        return self._notes_service.resolve_laboratory_text(text)
 
     def _recent_laboratory_note_target(self) -> str:
-        with self._dialogue_lock:
-            dialogue_history = list(self._dialogue_history)
-        with self._chat_lock:
-            chat_history = list(self._chat_history)
-        for history in (dialogue_history, chat_history):
-            if not history:
-                continue
-            for item in reversed(history):
-                role = str(item.get("role") or "").strip().lower()
-                content = " ".join(str(item.get("content") or "").split()).strip()
-                if role != "assistant" or not content:
-                    continue
-                if self._looks_like_note_request(content):
-                    continue
-                return content
-            for item in reversed(history):
-                role = str(item.get("role") or "").strip().lower()
-                content = " ".join(str(item.get("content") or "").split()).strip()
-                if role != "user" or not content:
-                    continue
-                if self._looks_like_note_request(content):
-                    continue
-                return content
-        return ""
+        return self._notes_service.recent_laboratory_target()
 
     def _is_generic_laboratory_note_text(self, text: str) -> bool:
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if not clean:
-            return True
-        if len(clean) <= 2:
-            return True
-        return bool(
-            re.fullmatch(
-                r"(?:d|de|del|eso|esto|eso\s+mismo|esto\s+mismo|todo\s+eso|todo\s+esto|lo\s+anterior|la\s+anterior|esa\s+frase|esta\s+frase|esa\s+idea|esta\s+idea|lo\s+que\s+acabo\s+de\s+decir|esto\s+que\s+acabo\s+de\s+decir|eso\s+que\s+acabo\s+de\s+decir|lo\s+que\s+acab(?:a|á)s?\s+de\s+decir|esto\s+que\s+acab(?:a|á)s?\s+de\s+decir|eso\s+que\s+acab(?:a|á)s?\s+de\s+decir|lo\s+[úu]ltimo\s+que\s+dijiste)",
-                clean,
-                flags=re.IGNORECASE,
-            )
-        )
+        return self._notes_service.is_generic_laboratory_text(text)
 
     def _should_create_laboratory_note(self, text: str) -> bool:
-        if self.session.document is None:
-            return True
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if not clean:
-            return False
-        if not self._looks_like_recent_speech_reference(clean):
-            return False
-        with self._dialogue_lock:
-            if self._dialogue_history:
-                return True
-        with self._chat_lock:
-            return bool(self._chat_history)
+        return self._notes_service.should_create_laboratory(text)
 
     def _should_route_generic_note_to_laboratory(self, text: str, note_text: str) -> bool:
-        if self.session.document is None:
-            return True
-        if not self._is_generic_note_pointer(note_text):
-            return False
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if re.search(r"\b(?:documento|texto|pantalla|bloque|p[aá]rrafo|cap[ií]tulo|fragmento)\b", clean, flags=re.IGNORECASE):
-            return False
-        with self._dialogue_lock:
-            if self._dialogue_history:
-                return True
-        with self._chat_lock:
-            return bool(self._chat_history)
+        return self._notes_service.should_route_generic_to_laboratory(text, note_text)
 
     def _looks_like_recent_speech_reference(self, text: str) -> bool:
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if not clean:
-            return False
-        return bool(
-            re.search(
-                r"\b(?:laboratorio|chat|conversaci[oó]n|charla|saludo|mensajes?|lo\s+que\s+dijimos|lo\s+que\s+dije|lo\s+que\s+dijiste|lo\s+que\s+hablamos|nuestro\s+saludo|esta\s+charla|esta\s+conversaci[oó]n|mensaje\s+anterior|esto\s+que\s+acabo\s+de\s+decir|eso\s+que\s+acabo\s+de\s+decir|lo\s+que\s+acabo\s+de\s+decir|esto\s+que\s+acab(?:a|á)s?\s+de\s+decir|eso\s+que\s+acab(?:a|á)s?\s+de\s+decir|lo\s+que\s+acab(?:a|á)s?\s+de\s+decir|esto\s+que\s+dijiste|eso\s+que\s+dijiste|lo\s+[úu]ltimo\s+que\s+dijiste)\b",
-                clean,
-                flags=re.IGNORECASE,
-            )
-        )
+        return self._notes_service.looks_like_recent_speech_reference(text)
 
     def _looks_like_immediate_speech_reference(self, text: str) -> bool:
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if not clean:
-            return False
-        return bool(
-            re.search(
-                r"\b(?:esto\s+que\s+acabo\s+de\s+decir|eso\s+que\s+acabo\s+de\s+decir|lo\s+que\s+acabo\s+de\s+decir|esto\s+que\s+acab(?:a|á)s?\s+de\s+decir|eso\s+que\s+acab(?:a|á)s?\s+de\s+decir|lo\s+que\s+acab(?:a|á)s?\s+de\s+decir|esto\s+que\s+dijiste|eso\s+que\s+dijiste|lo\s+[úu]ltimo\s+que\s+dijiste|lo\s+que\s+dijiste|lo\s+que\s+dije)\b",
-                clean,
-                flags=re.IGNORECASE,
-            )
-        )
+        return self._notes_service.looks_like_immediate_speech_reference(text)
 
     def _is_generic_note_pointer(self, text: str) -> bool:
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
-        if not clean:
-            return False
-        if len(clean) <= 2:
-            return True
-        return bool(
-            re.fullmatch(
-                r"(?:d|de|del|eso|esto|eso\s+mismo|esto\s+mismo|todo\s+eso|todo\s+esto|lo\s+anterior|la\s+anterior|esa\s+frase|esta\s+frase|esa\s+idea|esta\s+idea)",
-                clean,
-                flags=re.IGNORECASE,
-            )
-        )
+        return self._notes_service.is_generic_pointer(text)
 
     def _persist_session_state(self, text: str | None = None, source_path: str = "", source_type: str = "") -> None:
-        if self.session_state_path is None:
-            return
-        status = self.session.status()
-        payload = {
-            "doc_id": str(status.get("doc_id") or ""),
-            "title": str(status.get("title") or ""),
-            "cursor": int(status.get("cursor") or 0),
-            "current": int(status.get("current") or 0),
-            "total": int(status.get("total") or 0),
-            "updated_ts": time.time(),
-            "reasoning_mode": self.reasoning_mode,
-            "laboratory_mode": self.laboratory_mode,
-            "profile": getattr(self, "profile", "academica"),
-            "veil": getattr(self, "veil", "lucy"),
-            "voice": self.voice.voice,
-            "reference_documents": [
-                {
-                    "doc_id": str(item.get("doc_id") or ""),
-                    "title": str(item.get("title") or ""),
-                    "text": str(item.get("text") or ""),
-                    "source_path": str(item.get("source_path") or ""),
-                    "source_type": str(item.get("source_type") or ""),
-                }
-                for item in self._reference_documents.values()
-            ],
-        }
-        selected_source_path = str(source_path or self._main_source_path or "")
-        selected_source_type = str(source_type or self._main_source_type or "")
-        if selected_source_path:
-            payload["source_path"] = selected_source_path
-        if selected_source_type:
-            payload["source_type"] = selected_source_type
-        if text is not None:
-            payload["text"] = str(text)
-        else:
-            previous = self._read_session_state()
-            if previous:
-                if previous.get("source_path"):
-                    payload["source_path"] = str(previous.get("source_path") or "")
-                if previous.get("source_type"):
-                    payload["source_type"] = str(previous.get("source_type") or "")
-                if previous.get("text"):
-                    payload["text"] = str(previous.get("text") or "")
-        self.session_state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.session_state_path.with_suffix(f"{self.session_state_path.suffix}.tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp_path.replace(self.session_state_path)
+        self._persistence_service.persist(text, source_path, source_type)
 
     def _read_session_state(self) -> dict:
-        if self.session_state_path is None or not self.session_state_path.exists():
-            return {}
-        try:
-            raw = json.loads(self.session_state_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        return raw if isinstance(raw, dict) else {}
+        return self._persistence_service.read()
 
     def _restore_session_state(self) -> None:
-        raw = self._read_session_state()
-        self.reasoning_mode = str(raw.get("reasoning_mode") or self.reasoning_mode or "thinking")
-        self.reasoning_mode = str(self.conversation.reasoning_status(self.reasoning_mode).get("mode") or "thinking")
-        self.laboratory_mode = "free" if str(raw.get("laboratory_mode") or "").strip().lower() == "free" else "document"
-        self.profile = str(raw.get("profile") or "academica").strip().lower()
-        self.veil = str(raw.get("veil") or "lucy").strip().lower()
-        saved_voice = str(raw.get("voice") or "").strip()
-        if saved_voice:
-            self.voice.voice = saved_voice
-        doc_id = str(raw.get("doc_id") or "")
-        title = str(raw.get("title") or "")
-        self._reference_documents = {}
-        if not doc_id:
-            for item in raw.get("reference_documents") or []:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    record = self._document_record(
-                        str(item.get("doc_id") or item.get("title") or "consulta"),
-                        str(item.get("title") or "Consulta"),
-                        str(item.get("text") or ""),
-                        source_path=str(item.get("source_path") or ""),
-                        source_type=str(item.get("source_type") or ""),
-                    )
-                except Exception:
-                    continue
-                if record["text"].strip():
-                    self._reference_documents[record["doc_id"]] = record
-            return
-        source_path = str(raw.get("source_path") or "")
-        text = ""
-        if source_path:
-            path = Path(source_path)
-            if path.exists() and path.is_file():
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except Exception:
-                    text = ""
-        if not text:
-            text = str(raw.get("text") or "")
-        if not text.strip():
-            return
-        self._reset_prepare_for_new_document()
-        self.session.load(Document.from_text(doc_id, title or doc_id, text))
-        self._main_source_path = source_path
-        self._main_source_type = str(raw.get("source_type") or "")
-        try:
-            cursor = int(raw.get("cursor") or 0)
-        except (TypeError, ValueError):
-            cursor = 0
-        total = len(self.session.document.chunks) if self.session.document else 0
-        self.session.cursor = max(0, min(cursor, max(0, total - 1)))
-        for item in raw.get("reference_documents") or []:
-            if not isinstance(item, dict):
-                continue
-            try:
-                record = self._document_record(
-                    str(item.get("doc_id") or item.get("title") or "consulta"),
-                    str(item.get("title") or "Consulta"),
-                    str(item.get("text") or ""),
-                    source_path=str(item.get("source_path") or ""),
-                    source_type=str(item.get("source_type") or ""),
-                )
-            except Exception:
-                continue
-            if record["text"].strip() and record["doc_id"] != doc_id:
-                self._reference_documents[record["doc_id"]] = record
+        self._persistence_service.restore()
 
     def _extract_note_command(self, text: str) -> str:
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split())

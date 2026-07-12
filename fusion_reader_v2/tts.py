@@ -4,9 +4,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -386,10 +388,22 @@ class AllTalkProvider(TTSProvider):
 
 
 class AudioCache:
-    def __init__(self, root: Path | str = "runtime/fusion_reader_v2/audio_cache") -> None:
-        self.root = Path(root)
-        self.version = os.environ.get("FUSION_READER_AUDIO_CACHE_VERSION", "natural-v2")
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self,
+        root: Path | str = "runtime/fusion_reader_v2/audio_cache",
+        *,
+        max_bytes: int | None = None,
+        max_age_days: int | None = None,
+        version: str | None = None,
+        create_root: bool = True,
+    ) -> None:
+        self.root = Path(root).expanduser().resolve(strict=False)
+        self.version = version or os.environ.get("FUSION_READER_AUDIO_CACHE_VERSION", "natural-v2")
+        self.max_bytes = max(1, int(max_bytes if max_bytes is not None else 8 * 1024 * 1024 * 1024))
+        self.max_age_days = max(0, int(max_age_days if max_age_days is not None else 30))
+        self._lock = threading.RLock()
+        if create_root:
+            self.root.mkdir(parents=True, exist_ok=True)
 
     def key(self, text: str, voice: str, language: str) -> str:
         digest = hashlib.sha256(f"{self.version}\0{language}\0{voice}\0{text}".encode("utf-8")).hexdigest()
@@ -400,13 +414,139 @@ class AudioCache:
 
     def get(self, text: str, voice: str, language: str) -> AudioArtifact | None:
         path = self.path_for(text, voice, language)
-        if path.exists() and path.stat().st_size > 0:
-            return AudioArtifact(True, path=path, provider="cache", cached=True)
+        with self._lock:
+            if self._valid_wav(path):
+                try:
+                    os.utime(path, None)
+                except OSError:
+                    pass
+                return AudioArtifact(True, path=path, provider="cache", cached=True)
         return None
 
     def put(self, text: str, voice: str, language: str, artifact: AudioArtifact) -> AudioArtifact:
-        if not artifact.ok or not artifact.path or not artifact.path.exists():
+        if not artifact.ok or not artifact.path or not self._valid_wav(artifact.path):
             return artifact
         target = self.path_for(text, voice, language)
-        target.write_bytes(artifact.path.read_bytes())
+        temporary: Path | None = None
+        with self._lock:
+            try:
+                with artifact.path.open("rb") as source, tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=self.root,
+                    prefix=f".{target.stem}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    shutil.copyfileobj(source, handle, length=1024 * 1024)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if not self._valid_wav(temporary):
+                    return artifact
+                os.replace(temporary, target)
+                temporary = None
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
         return AudioArtifact(True, path=target, provider=artifact.provider, cached=False, source_url=artifact.source_url, duration_ms=artifact.duration_ms)
+
+    def inspect(self, *, now: float | None = None) -> dict:
+        if not self.root.exists():
+            return {
+                "ok": True,
+                "root": str(self.root),
+                "items": 0,
+                "bytes": 0,
+                "max_bytes": self.max_bytes,
+                "max_age_days": self.max_age_days,
+                "prunable_items": 0,
+                "prunable_bytes": 0,
+            }
+        with self._lock:
+            entries, selected = self._cache_plan(time.time() if now is None else float(now))
+        return {
+            "ok": True,
+            "root": str(self.root),
+            "items": len(entries),
+            "bytes": sum(size for _path, size, _mtime in entries),
+            "max_bytes": self.max_bytes,
+            "max_age_days": self.max_age_days,
+            "prunable_items": len(selected),
+            "prunable_bytes": sum(size for _path, size, _mtime in selected),
+        }
+
+    def prune(self, *, apply: bool = False, now: float | None = None) -> dict:
+        if not self.root.exists():
+            return {
+                "ok": True,
+                "applied": bool(apply),
+                "items": 0,
+                "bytes": 0,
+                "selected_items": 0,
+                "selected_bytes": 0,
+                "removed_items": 0,
+                "removed_bytes": 0,
+            }
+        with self._lock:
+            entries, selected = self._cache_plan(time.time() if now is None else float(now))
+            removed_items = 0
+            removed_bytes = 0
+            if apply:
+                for path, size, _mtime in selected:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        continue
+                    removed_items += 1
+                    removed_bytes += size
+        return {
+            "ok": True,
+            "applied": bool(apply),
+            "items": len(entries),
+            "bytes": sum(size for _path, size, _mtime in entries),
+            "selected_items": len(selected),
+            "selected_bytes": sum(size for _path, size, _mtime in selected),
+            "removed_items": removed_items,
+            "removed_bytes": removed_bytes,
+        }
+
+    def _cache_plan(self, now: float) -> tuple[list[tuple[Path, int, float]], list[tuple[Path, int, float]]]:
+        entries: list[tuple[Path, int, float]] = []
+        for path in self.root.glob("*.wav"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append((path, stat.st_size, stat.st_mtime))
+        entries.sort(key=lambda item: (item[2], item[0].name))
+        selected: list[tuple[Path, int, float]] = []
+        selected_paths: set[Path] = set()
+        if self.max_age_days > 0:
+            oldest_allowed = now - self.max_age_days * 24 * 60 * 60
+            for item in entries:
+                if item[2] < oldest_allowed:
+                    selected.append(item)
+                    selected_paths.add(item[0])
+        remaining_bytes = sum(size for path, size, _mtime in entries if path not in selected_paths)
+        for item in entries:
+            if remaining_bytes <= self.max_bytes:
+                break
+            if item[0] in selected_paths:
+                continue
+            selected.append(item)
+            selected_paths.add(item[0])
+            remaining_bytes -= item[1]
+        return entries, selected
+
+    @staticmethod
+    def _valid_wav(path: Path) -> bool:
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size < 12:
+                return False
+            with path.open("rb") as handle:
+                header = handle.read(12)
+        except OSError:
+            return False
+        return header[:4] == b"RIFF" and header[8:12] == b"WAVE"

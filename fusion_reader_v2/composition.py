@@ -57,7 +57,11 @@ def create_fusion_reader(
         stt=bundle.stt,
         conversation=bundle.conversation,
         external_research=bundle.research,
-        cache=AudioCache(effective.paths.cache),
+        cache=AudioCache(
+            effective.paths.cache,
+            max_bytes=effective.limits.cache_max_bytes,
+            max_age_days=effective.limits.cache_max_age_days,
+        ),
         metrics=VoiceMetricsStore(effective.paths.metrics),
         notes=ReaderNotesStore(effective.paths.notes),
         voice=VoiceSettings(
@@ -69,6 +73,8 @@ def create_fusion_reader(
         prefetch_workers=effective.limits.prefetch_workers,
         session_state_path=effective.paths.session,
         audio_export_root=effective.paths.downloads,
+        job_max_items=effective.limits.job_max_items,
+        job_ttl_seconds=effective.limits.job_ttl_seconds,
     )
 
 
