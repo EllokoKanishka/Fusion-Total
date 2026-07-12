@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=75,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion-reader-v2"
+version = "2.0.0"
+description = "Local-first neural voice conversational reader"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "Pillow>=12.1.1,<13",
+  "python-docx>=1.2,<2",
+]
+
+[project.optional-dependencies]
+stt = ["faster-whisper>=1.2,<2", "openai-whisper>=20250625,<20270000"]
+dev = [
+  "coverage[toml]>=7.15,<8",
+  "mypy>=2.2,<3",
+  "pip-audit>=2.10,<3",
+  "ruff>=0.15.21,<0.16",
+]
+
+[project.scripts]
+fusionctl = "scripts.fusionctl:main"
+
+[tool.setuptools.packages.find]
+include = ["fusion_reader_v2*", "scripts"]
+
+[tool.setuptools.package-data]
+fusion_reader_v2 = ["web/static/*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["app", "legacy", "scripts/openclaw_direct_chat.py", "scripts/molbot_direct_chat"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_configs = true
+check_untyped_defs = true
+exclude = "^(app|legacy|scripts/openclaw_direct_chat.py|scripts/molbot_direct_chat)/"
+
+[tool.coverage.run]
+branch = true
+source = ["fusion_reader_v2"]
+omit = ["*/__main__.py", "*/web/static/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 85
+
+[tool.coverage.xml]
+output = "coverage.xml"
