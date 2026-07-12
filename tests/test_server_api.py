@@ -145,7 +145,7 @@ class ServerAPITests(unittest.TestCase):
 
     def test_server_ui_surfaces_friendly_tts_blocking_message_and_disables_read(self):
         server = _web_source()
-        helper = Path("scripts/fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
+        helper = Path("fusion_reader_v2/web/static/busy_controls.js").read_text(encoding="utf-8")
         self.assertIn("friendlyTtsMessage", server)
         self.assertIn("TTS bloqueado", server)
         self.assertIn("busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '')", server)

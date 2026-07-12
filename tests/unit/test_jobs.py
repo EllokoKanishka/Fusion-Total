@@ -54,6 +54,40 @@ class JobRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "job_registry_full"):
             registry.add("overflow", Item(False, 4.0))
 
+    def test_registry_validates_configuration_and_ids(self) -> None:
+        with self.assertRaises(ValueError):
+            self._registry(max_items=0)
+        with self.assertRaises(ValueError):
+            self._registry(ttl_seconds=0)
+        registry = self._registry()
+        with self.assertRaises(ValueError):
+            registry.add("", Item(False, 1.0))
+
+    def test_update_remove_snapshot_len_and_cleanup_contract(self) -> None:
+        cleaned: list[Item] = []
+        backing: dict[str, Item] = {}
+        registry = self._registry(cleanup=cleaned.append, backing=backing)
+        first = Item(False, time.time())
+        registry.add("first", first)
+        self.assertEqual(len(registry), 1)
+        self.assertEqual(registry.snapshot(), {"first": first})
+        self.assertIsNone(registry.update("missing", lambda item: setattr(item, "terminal", True)))
+        self.assertIs(registry.update("first", lambda item: setattr(item, "terminal", True)), first)
+        self.assertTrue(first.terminal)
+        self.assertIs(registry.remove("first"), first)
+        self.assertEqual(cleaned, [first])
+        self.assertIsNone(registry.remove("missing"))
+
+    def test_duplicate_key_replaces_without_eviction_and_active_full_has_no_candidate(self) -> None:
+        registry = self._registry(max_items=1)
+        first = Item(False, 1.0)
+        replacement = Item(False, 2.0)
+        registry.add("same", first)
+        registry.add("same", replacement)
+        self.assertIs(registry.get("same"), replacement)
+        with self.assertRaisesRegex(RuntimeError, "job_registry_full"):
+            registry.add("other", Item(False, 3.0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,25 @@ from tests.helpers import managed_test_app
 
 
 class AtomicJSONStoreTests(unittest.TestCase):
+    def test_constructor_and_write_reject_invalid_values(self) -> None:
+        with self.assertRaises(ValueError):
+            AtomicJSONStore("state.json", schema_version=0)
+        with self.assertRaises(ValueError):
+            AtomicJSONStore("state.json", max_bytes=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AtomicJSONStore(Path(tmp) / "state.json", max_bytes=32)
+            with self.assertRaises(TypeError):
+                store.write([])  # type: ignore[arg-type]
+            with self.assertRaises(ValueError):
+                store.write({"value": "x" * 100})
+
+    def test_missing_state_returns_isolated_callable_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = AtomicJSONStore(Path(tmp) / "missing.json")
+            loaded = store.read(lambda: {"items": []})
+            loaded["items"].append("changed")
+            self.assertEqual(store.read(lambda: {"items": []}), {"items": []})
+
     def test_write_is_versioned_and_leaves_no_partial_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -94,6 +113,68 @@ class AtomicJSONStoreTests(unittest.TestCase):
             with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
                 self.assertEqual(store.read({"safe": True}), {"safe": True})
             self.assertEqual(store.warnings[-1].code, "state_invalid_json")
+
+    def test_stat_shape_version_and_legacy_transform_failures_are_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stat_path = root / "stat.json"
+            store = AtomicJSONStore(stat_path)
+            with mock.patch.object(Path, "stat", side_effect=PermissionError("stat denied")):
+                self.assertEqual(store.read({"safe": True}), {"safe": True})
+            self.assertEqual(store.warnings[-1].code, "state_stat_failed")
+
+            cases = (
+                ("array.json", "[]", None, "state_invalid_shape"),
+                ("version.json", '{"schema_version": "bad"}', None, "state_invalid_version"),
+                ("legacy.json", "[]", lambda _value: (_ for _ in ()).throw(ValueError("bad")), "state_invalid_shape"),
+            )
+            for filename, raw, transform, warning in cases:
+                path = root / filename
+                path.write_text(raw, encoding="utf-8")
+                candidate = AtomicJSONStore(path)
+                self.assertEqual(candidate.read({"safe": True}, legacy_transform=transform), {"safe": True})
+                self.assertEqual(candidate.warnings[-1].code, warning)
+
+    def test_migration_failures_backup_warning_and_write_warning_recover(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for label, migration in (
+                ("wrong-type", lambda _value: []),
+                ("missing-key", lambda _value: {}["missing"]),
+            ):
+                path = root / f"{label}.json"
+                path.write_text('{"schema_version": 1}', encoding="utf-8")
+                store = AtomicJSONStore(path, schema_version=2, migrations={1: migration})
+                self.assertEqual(store.read({"safe": True}), {"safe": True})
+                self.assertEqual(store.warnings[-1].code, "state_migration_failed")
+
+            backup = root / "backup.json"
+            backup.write_text('{"schema_version": 1}', encoding="utf-8")
+            backup_store = AtomicJSONStore(backup, schema_version=2)
+            with mock.patch("fusion_reader_v2.services.persistence.shutil.copy2", side_effect=PermissionError("no")):
+                migrated = backup_store.read()
+            self.assertEqual(migrated["schema_version"], 2)
+            self.assertIn("state_backup_failed", {warning.code for warning in backup_store.warnings})
+
+            write_path = root / "write.json"
+            write_path.write_text('{"schema_version": 1}', encoding="utf-8")
+            write_store = AtomicJSONStore(write_path, schema_version=2)
+            with mock.patch.object(write_store, "_write_locked", side_effect=PermissionError("no")):
+                migrated = write_store.read()
+            self.assertEqual(migrated["schema_version"], 2)
+            self.assertEqual(write_store.warnings[-1].code, "state_migration_write_failed")
+
+    def test_recovery_and_parent_fsync_failures_do_not_hide_original_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("broken", encoding="utf-8")
+            store = AtomicJSONStore(path)
+            with mock.patch("fusion_reader_v2.services.persistence.os.replace", side_effect=PermissionError("no")):
+                self.assertEqual(store.read(), {})
+            self.assertIn("could not preserve original", store.warnings[-1].detail)
+
+            with mock.patch("fusion_reader_v2.services.persistence.os.open", side_effect=PermissionError("no")):
+                store._fsync_parent()
 
     def test_reader_startup_recovers_corrupt_session_without_touching_other_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

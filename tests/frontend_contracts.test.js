@@ -1,0 +1,38 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const root = path.resolve(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.js'), 'utf8');
+const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
+
+test('frontend owns abortable reads and one export poller', () => {
+  assert.match(app, /new AbortController\(\)/);
+  assert.match(app, /activeReadController\.abort\(\)/);
+  assert.match(app, /audioExportPollingJobId !== data\.job_id/);
+  assert.match(app, /audioExportPollingJobId === jobId/);
+});
+
+test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions', () => {
+  for (const endpoint of [
+    '/api/read',
+    '/api/next',
+    '/api/document/clear',
+    '/api/prepare/start',
+    '/api/prepare/cancel',
+    '/api/audio-export',
+    '/api/notes/create',
+    '/api/dialogue/turn',
+    '/api/tools/pdf-to-docx',
+  ]) {
+    assert.ok(app.includes(endpoint), `missing endpoint ${endpoint}`);
+  }
+});
+
+test('interactive controls have explicit semantics and live status regions', () => {
+  assert.match(html, /id="dropzone"[^>]+tabindex="0"[^>]+role="button"[^>]+aria-label=/);
+  assert.match(html, /id="chatLog"[^>]+aria-live="polite"/);
+  assert.match(html, /id="voiceSelect"[^>]+aria-label="Voz"/);
+  assert.match(html, /id="audioExportMode"[^>]+aria-label=/);
+});
