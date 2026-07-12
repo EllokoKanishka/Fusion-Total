@@ -1403,28 +1403,28 @@ function canConvertPdf(file) {
   els.pdfToWordInfo.textContent = 'Subiendo...';
   els.pdfToWordDownload.style.display = 'none';
   log('Iniciando conversión de PDF...');
-  
+
   const form = new FormData();
   form.append('file', file, file.name);
-  
+
   try {
     const res = await fetch('/api/tools/pdf-to-docx', { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.error || 'upload_failed');
-    
+
     const jobId = data.job_id;
     log(`Conversión en segundo plano: job ${jobId}`);
-    
+
     // Polling loop
     let attempts = 0;
     const maxAttempts = 1800; // 1 hour at 2s polling
-    
+
     while (attempts < maxAttempts) {
       const statusRes = await fetch(`/api/tools/pdf-to-docx/status/${jobId}`);
       const statusData = await statusRes.json();
-      
+
       if (!statusRes.ok || statusData.ok === false) throw new Error(statusData.error || 'status_failed');
-      
+
       const s = statusData;
       if (s.state === 'done') {
         const warningText = Array.isArray(s.warnings) && s.warnings.length ? ` Avisos: ${s.warnings.join(' | ')}` : '';
@@ -1443,7 +1443,7 @@ function canConvertPdf(file) {
       } else {
         // progress
         els.pdfToWordInfo.textContent = s.message || 'Procesando...';
-        
+
         if (!document.getElementById('pdfCancelBtn')) {
           const cancelBtn = document.createElement('a');
           cancelBtn.id = 'pdfCancelBtn';
@@ -1461,7 +1461,7 @@ function canConvertPdf(file) {
           els.pdfToWordInfo.appendChild(cancelBtn);
         }
       }
-      
+
       await new Promise(r => setTimeout(r, 2000));
       attempts++;
     }
@@ -2355,4 +2355,3 @@ els.pdfToWordTool.addEventListener('drop', event => {
 });
 
 refresh().then(() => refreshVoices()).catch(err => log(`Arranque incompleto: ${err.message}`));
-

@@ -671,11 +671,11 @@ class Handler(BaseHTTPRequestHandler):
                 job_id = uuid.uuid4().hex[:16]
                 input_path = PDF_TO_WORD_ROOT / f"{job_id}.pdf"
                 input_path.write_bytes(raw)
-                
+
                 job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
                 with PDF_TO_DOCX_LOCK:
                     PDF_TO_WORD_JOBS[job_id] = job
-                
+
                 def _run_job(j: JobStatus, in_p: Path, original_name: str):
                     try:
                         temp_docx = PDF_TO_WORD_ROOT / f"{j.job_id}.docx"
@@ -684,7 +684,7 @@ class Handler(BaseHTTPRequestHandler):
                             j.state = "error"
                             j.error = result.error or "Error desconocido en conversión."
                             return
-                        
+
                         if j.cancelled:
                             j.state = "cancelled"
                             return
@@ -692,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
                         final_target = unique_download_target(j.filename)
                         final_target.write_bytes(temp_docx.read_bytes())
                         download_item = register_pdf_to_docx_download(final_target, final_target.name, result)
-                        
+
                         j.state = "done"
                         j.saved_path = str(final_target)
                         j.filename = final_target.name
