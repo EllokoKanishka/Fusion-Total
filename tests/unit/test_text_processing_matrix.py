@@ -15,6 +15,7 @@ from fusion_reader_v2 import pdf_to_docx as pdf
 class DocumentTextProcessingMatrixTests(unittest.TestCase):
     def test_filename_mime_encoding_and_markup_boundaries(self) -> None:
         self.assertEqual(documents.safe_filename("../../ raro?.txt"), "raro?.txt")
+        self.assertEqual(documents.safe_filename(r"..\\..\\escape.txt"), "escape.txt")
         self.assertEqual(documents.doc_id_for_filename("Libro.txt"), "Libro")
         for mime, suffix in (
             ("text/plain", ".txt"),

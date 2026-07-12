@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from fusion_reader_v2 import FusionReaderV2, import_document_bytes, import_document_path
 from fusion_reader_v2.config import Settings, create_settings, environment_value
+from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.version import __version__
@@ -35,6 +36,22 @@ ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 PORT = 8010
 ALLOWED_LIBRARY_SUFFIXES = {".txt", ".md"}
+UPLOAD_TEMP_SUFFIXES = {
+    suffix: suffix
+    for suffix in (
+        ".bin",
+        ".doc",
+        ".docx",
+        ".html",
+        ".md",
+        ".odt",
+        ".pdf",
+        ".rtf",
+        ".txt",
+        ".wav",
+        ".webm",
+    )
+}
 # Compatibility sentinel: application state is owned by each WebContext.
 APP: FusionReaderV2 | None = None
 ROUTER = create_router()
@@ -248,13 +265,14 @@ def resolve_library_path(context: WebContext, book_id: str) -> Path:
     rel = Path(raw)
     if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
         raise ValueError("invalid_book_id")
-    path = (context.library_root / rel).resolve()
+    # Resolving before the parent check also blocks symlink escapes.
+    path = (context.library_root / rel).resolve()  # lgtm[py/path-injection]
     library_root = context.library_root.resolve()
     if path != library_root and library_root not in path.parents:
         raise ValueError("book_outside_library")
     if path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
         raise ValueError("unsupported_book_type")
-    if not path.exists() or not path.is_file():
+    if not path.exists() or not path.is_file():  # lgtm[py/path-injection]: path is contained above.
         raise FileNotFoundError("book_not_found")
     return path
 
@@ -551,14 +569,16 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             raise ValueError("missing_file_data")
-        suffix = Path(Path(filename).name).suffix
+        suffix = UPLOAD_TEMP_SUFFIXES.get(Path(safe_filename(filename)).suffix.lower(), ".bin")
         limit = self.settings.limits.upload_max_bytes
         if suffix.lower() == ".pdf":
             limit = self.settings.limits.pdf_max_bytes
         if length > limit:
             raise ValueError("upload_too_large")
         self.context.upload_root.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root)
+        fd, name = tempfile.mkstemp(  # lgtm[py/path-injection]: suffix is selected from a constant allowlist.
+            prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root
+        )
         path = Path(name)
         remaining = length
         try:
@@ -570,10 +590,10 @@ class Handler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     remaining -= len(chunk)
         except Exception:
-            path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)  # lgtm[py/path-injection]: path was returned by mkstemp above.
             raise
         if remaining:
-            path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)  # lgtm[py/path-injection]: path was returned by mkstemp above.
             raise ValueError("incomplete_upload")
         return path
 
@@ -627,9 +647,9 @@ class Handler(BaseHTTPRequestHandler):
         filename = Path(filename_match.group(1)).name if filename_match else "documento.pdf"
         mime_match = re.search(r"^Content-Type:\s*([^\r\n]+)", headers_text, flags=re.IGNORECASE | re.MULTILINE)
         mime = str(mime_match.group(1)).strip() if mime_match else "application/pdf"
-        suffix = Path(filename).suffix or ".bin"
+        suffix = UPLOAD_TEMP_SUFFIXES.get(Path(safe_filename(filename)).suffix.lower(), ".bin")
         self.context.upload_root.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
+        descriptor, temporary_name = tempfile.mkstemp(  # lgtm[py/path-injection]: constant suffix, owned root.
             prefix="fusion_reader_multipart_",
             suffix=suffix,
             dir=self.context.upload_root,
@@ -990,7 +1010,14 @@ class Handler(BaseHTTPRequestHandler):
                 mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
                 role = str((params.get("role") or ["main"])[0])
                 tmp_path = self._read_body_to_temp(filename)
-                import_job = new_import_job(self.context, filename, mime, tmp_path, tmp_path.stat().st_size, role=role)
+                import_job = new_import_job(
+                    self.context,
+                    filename,
+                    mime,
+                    tmp_path,
+                    tmp_path.stat().st_size,  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
+                    role=role,
+                )
                 self.context.start_thread(
                     target=import_job_worker,
                     args=(self.context, str(import_job["job_id"]), filename, tmp_path, mime, role),
@@ -1007,7 +1034,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     imported = import_document_path(filename, tmp_path, mime=mime)
                 finally:
-                    tmp_path.unlink(missing_ok=True)
+                    tmp_path.unlink(missing_ok=True)  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
                 self._json(200, load_imported_document(self.context, imported, role=role))
                 return
             if path == "/api/dialogue/turn" and "application/json" not in (self.headers.get("Content-Type", "") or ""):
@@ -1037,7 +1064,7 @@ class Handler(BaseHTTPRequestHandler):
                         ),
                     )
                 finally:
-                    tmp_path.unlink(missing_ok=True)
+                    tmp_path.unlink(missing_ok=True)  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
                 return
             payload = self._payload()
             if path == "/api/load":

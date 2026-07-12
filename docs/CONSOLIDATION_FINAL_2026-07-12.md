@@ -23,9 +23,9 @@ Executed from `/tmp/fusion-reader-v2-py312`, Python 3.12.3, editable
 
 | Gate | Result |
 |---|---|
-| Python suite | 500 passed in 29.471 s under final Python 3.12 coverage run |
-| Stress | 3 passed in 6.528 s; required 100/100/50/50/20 repetition matrix |
-| Line coverage | 91.32% (`6,769 / 7,412`) |
+| Python suite | 500 passed in 28.713 s under final Python 3.12 coverage run |
+| Stress | 3 passed in 6.954 s; required 100/100/50/50/20 repetition matrix |
+| Line coverage | 91.33% (`6,773 / 7,416`) |
 | Branch coverage | 80.17% (`1,969 / 2,456`, independently thresholded) |
 | Ruff check/format | pass |
 | mypy | pass, 31 active modules |
