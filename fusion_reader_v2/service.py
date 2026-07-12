@@ -108,6 +108,9 @@ class FusionReaderV2:
         self._audio_export_jobs: dict[str, AudioExportJob] = {}
         self._audio_export_active_job_id = ""
         self._audio_export_latest_job_id = ""
+        # Canonical coordination order for lifecycle-sensitive background work:
+        # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
+        # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
         self._background_work_lock = threading.RLock()
         self._background_work_condition = threading.Condition(self._background_work_lock)
         self._background_work_state = "open"
@@ -165,6 +168,9 @@ class FusionReaderV2:
         with self._background_work_condition:
             return self._background_work_state == "open"
 
+    def _background_work_is_open_locked(self) -> bool:
+        return self._background_work_state == "open"
+
     def _wait_for_active_tts_locked(self, deadline: float) -> None:
         while self._background_work_active_tts > 0:
             remaining = deadline - time.monotonic()
@@ -197,8 +203,8 @@ class FusionReaderV2:
             self._prefetch_future = None
             self._prefetch_index = None
             self._prefetch_started_ts = None
-            self._prefetch_promoted_keys.clear()
         with self._tts_gate:
+            self._prefetch_promoted_keys.clear()
             self._tts_gate.notify_all()
 
     def _before_audio_export_registration(self) -> None:
@@ -916,22 +922,22 @@ class FusionReaderV2:
                 return cached
             if not interactive:
                 while True:
+                    if not self._background_work_is_open():
+                        return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
                     with self._tts_gate:
-                        while (
-                            self._interactive_tts_pending
-                            and not self._prefetch_key_is_promoted_locked(prefetch_key)
-                            and self._background_work_is_open()
-                        ):
-                            self._tts_gate.wait()
+                        should_wait = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                        if should_wait:
+                            self._tts_gate.wait(timeout=0.1)
+                    if should_wait:
+                        continue
                     if not self._background_work_is_open():
                         return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
                     self._tts_lock.acquire()
                     tts_locked = True
                     with self._tts_gate:
-                        if not self._background_work_is_open():
-                            return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
-                        if not self._interactive_tts_pending or self._prefetch_key_is_promoted_locked(prefetch_key):
-                            break
+                        should_retry = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(prefetch_key)
+                    if not should_retry:
+                        break
                     self._tts_lock.release()
                     tts_locked = False
             else:
@@ -1105,10 +1111,10 @@ class FusionReaderV2:
         language = self.voice.language
         key = self._prefetch_key(generation, index, text, voice, language)
         with self._background_work_condition:
-            if not self._background_work_is_open():
+            if not self._background_work_is_open_locked():
                 return
             with self._prefetch_lock:
-                if not self._background_work_is_open():
+                if not self._background_work_is_open_locked():
                     return
                 existing = self._prefetch_futures.get(key)
                 if existing and not existing.done():
@@ -1139,43 +1145,35 @@ class FusionReaderV2:
         self._prefetch_started_ts = self._prefetch_started.get(key)
 
     def _reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
-        with self._prefetch_lock:
-            if not self._background_work_is_open():
+        old_executor: ThreadPoolExecutor | None = None
+        stale_keys: list[tuple] = []
+        stale_futures: list[Future[AudioArtifact]] = []
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
                 stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
                 stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
-                for key in stale_keys:
-                    self._prefetch_futures.pop(key, None)
-                    self._prefetch_started.pop(key, None)
-                if self._prefetch_future is stale_future:
+                if not background_open:
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
+                    if self._prefetch_future is stale_future:
+                        self._prefetch_future = None
+                        self._prefetch_index = None
+                        self._prefetch_started_ts = None
+                else:
+                    if self._prefetch_future is not stale_future and not stale_keys:
+                        return
+                    old_executor = self._executor
+                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+                    self._prefetch_executors.append(self._executor)
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
                     self._prefetch_future = None
                     self._prefetch_index = None
                     self._prefetch_started_ts = None
-                if stale_keys:
-                    with self._tts_gate:
-                        removed = False
-                        for key in stale_keys:
-                            if key in self._prefetch_promoted_keys:
-                                self._prefetch_promoted_keys.discard(key)
-                                removed = True
-                        if removed:
-                            self._tts_gate.notify_all()
-                for future in stale_futures:
-                    future.cancel()
-                return
-            stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
-            stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
-            if self._prefetch_future is not stale_future and not stale_keys:
-                return
-            old_executor = self._executor
-            self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-            self._prefetch_executors.append(self._executor)
-            for key in stale_keys:
-                self._prefetch_futures.pop(key, None)
-                self._prefetch_started.pop(key, None)
-            self._prefetch_future = None
-            self._prefetch_index = None
-            self._prefetch_started_ts = None
-            self._set_primary_prefetch_locked()
+                    self._set_primary_prefetch_locked()
         for future in stale_futures:
             future.cancel()
         if stale_keys:
@@ -1187,7 +1185,8 @@ class FusionReaderV2:
                         removed = True
                 if removed:
                     self._tts_gate.notify_all()
-        old_executor.shutdown(wait=False, cancel_futures=True)
+        if old_executor is not None:
+            old_executor.shutdown(wait=False, cancel_futures=True)
 
     def read_current(self, play: bool = True) -> dict:
         document = self.session.document
@@ -1281,10 +1280,10 @@ class FusionReaderV2:
             return {"ok": False, "error": "no_document_loaded"}
         self._before_prepare_registration()
         with self._background_work_condition:
-            if not self._background_work_is_open():
+            if not self._background_work_is_open_locked():
                 return {"ok": False, "error": "service_shutting_down"}
             with self._prepare_lock:
-                if not self._background_work_is_open():
+                if not self._background_work_is_open_locked():
                     return {"ok": False, "error": "service_shutting_down"}
                 if self._prepare_thread and self._prepare_thread.is_alive():
                     return dict(self._prepare_status)
@@ -1409,8 +1408,12 @@ class FusionReaderV2:
 
     def _wait_for_interactive_tts(self, cancel_event: threading.Event | None = None) -> None:
         event = cancel_event or self._prepare_cancel
-        with self._tts_gate:
-            while self._interactive_tts_pending and not event.is_set() and self._background_work_is_open():
+        while True:
+            if event.is_set() or not self._background_work_is_open():
+                return
+            with self._tts_gate:
+                if not self._interactive_tts_pending or event.is_set():
+                    return
                 self._tts_gate.wait(timeout=0.1)
 
     def _begin_document_lifecycle(self) -> None:
@@ -1539,10 +1542,10 @@ class FusionReaderV2:
                 }
         self._before_audio_export_registration()
         with self._background_work_condition:
-            if not self._background_work_is_open():
+            if not self._background_work_is_open_locked():
                 return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
             with self._audio_export_lock:
-                if not self._background_work_is_open():
+                if not self._background_work_is_open_locked():
                     return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
                 if self._audio_export_thread and self._audio_export_thread.is_alive():
                     return {"ok": False, "error": "audio_export_busy", "detail": "Ya hay una exportación de audio en curso."}
@@ -3127,31 +3130,19 @@ class FusionReaderV2:
         self._clear_prefetch_queue()
 
     def _clear_prefetch_queue(self) -> None:
-        with self._prefetch_lock:
-            if not self._background_work_is_open():
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
                 tracked_futures = list(self._prefetch_futures.values())
                 old_executor = self._executor
+                if background_open:
+                    self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
+                    self._prefetch_executors.append(self._executor)
                 self._prefetch_futures = {}
                 self._prefetch_started = {}
                 self._prefetch_future = None
                 self._prefetch_index = None
                 self._prefetch_started_ts = None
-                self._prefetch_promoted_keys.clear()
-                for future in tracked_futures:
-                    future.cancel()
-                with self._tts_gate:
-                    self._tts_gate.notify_all()
-                old_executor.shutdown(wait=False, cancel_futures=True)
-                return
-            tracked_futures = list(self._prefetch_futures.values())
-            old_executor = self._executor
-            self._executor = ThreadPoolExecutor(max_workers=self.prefetch_workers, thread_name_prefix="fusion-reader-v2-tts")
-            self._prefetch_executors.append(self._executor)
-            self._prefetch_futures = {}
-            self._prefetch_started = {}
-            self._prefetch_future = None
-            self._prefetch_index = None
-            self._prefetch_started_ts = None
         for future in tracked_futures:
             future.cancel()
         with self._tts_gate:

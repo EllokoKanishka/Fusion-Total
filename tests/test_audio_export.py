@@ -3,6 +3,8 @@ import tempfile
 import wave
 import threading
 import time
+from concurrent.futures import Future
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 from fusion_reader_v2.audio_export import concat_wav_files, sanitize_audio_title
@@ -26,6 +28,57 @@ def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01) -> bool:
             return True
         time.sleep(interval)
     return bool(predicate())
+
+class TrackingLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._owner: int | None = None
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if timeout == -1:
+            acquired = self._lock.acquire(blocking)
+        else:
+            acquired = self._lock.acquire(blocking, timeout)
+        if acquired:
+            self._owner = threading.get_ident()
+        return acquired
+
+    def release(self) -> None:
+        self._owner = None
+        self._lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.release()
+        return False
+
+    def held_by_current_thread(self) -> bool:
+        return self._owner == threading.get_ident()
+
+
+@contextmanager
+def guard_background_work_queries(app, *, query_seen: threading.Event | None = None):
+    original = app._background_work_is_open
+
+    def guarded():
+        if query_seen is not None:
+            query_seen.set()
+        if getattr(app._tts_gate, "_is_owned", lambda: False)():
+            raise AssertionError("_background_work_is_open() called while holding _tts_gate")
+        held_by_current_thread = getattr(app._prefetch_lock, "held_by_current_thread", None)
+        if callable(held_by_current_thread) and held_by_current_thread():
+            raise AssertionError("_background_work_is_open() called while holding _prefetch_lock")
+        return original()
+
+    app._background_work_is_open = guarded
+    try:
+        yield
+    finally:
+        app._background_work_is_open = original
+
 
 class AudioExportTests(unittest.TestCase):
     def test_audio_export_test_app_uses_temporary_export_root(self):
@@ -554,6 +607,200 @@ class AudioExportTests(unittest.TestCase):
             self.assertEqual(shutdown_result["out"]["state"], "closed")
             close_test_app(app)
             self.assertFalse(root.exists())
+
+    def test_shutdown_releases_background_tts_wait_without_querying_lifecycle_under_tts_gate(self):
+        provider = SyntheticWavTTSProvider()
+        synth_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_synth(app) -> None:
+            try:
+                synth_result["out"] = app._synthesize_cached_with_settings(
+                    "Texto de prueba para prefetch bloqueado.",
+                    app.voice.voice,
+                    app.voice.language,
+                    prefetch_key=(app._document_generation, 0, app.voice.voice, app.voice.language, "blocked-prefetch"),
+                )
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                synth_result["exc"] = exc
+
+        def run_shutdown(app) -> None:
+            try:
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=provider) as app:
+            with app._tts_gate:
+                app._interactive_tts_pending = 1
+            with guard_background_work_queries(app):
+                synth_thread = threading.Thread(target=run_synth, args=(app,), name="blocked-prefetch-thread")
+                synth_thread.start()
+                self.assertTrue(wait_until(lambda: app._background_work_active_tts > 0, timeout=5))
+
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
+                shutdown_thread.start()
+                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+
+                synth_thread.join(5)
+                shutdown_thread.join(5)
+
+            self.assertFalse(synth_thread.is_alive())
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertNotIn("exc", synth_result, synth_result.get("exc"))
+            self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+            self.assertFalse(synth_result["out"].ok)
+            self.assertEqual(synth_result["out"].detail, "shutdown_in_progress")
+            self.assertEqual(provider.calls, [])
+            self.assertEqual(shutdown_result["out"]["state"], "closed")
+
+    def test_shutdown_releases_wait_for_interactive_tts_without_querying_lifecycle_under_tts_gate(self):
+        wait_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+        query_seen = threading.Event()
+
+        def run_wait(app) -> None:
+            try:
+                app._wait_for_interactive_tts()
+                wait_result["done"] = True
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                wait_result["exc"] = exc
+
+        def run_shutdown(app) -> None:
+            try:
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            with app._tts_gate:
+                app._interactive_tts_pending = 1
+            with guard_background_work_queries(app, query_seen=query_seen):
+                wait_thread = threading.Thread(target=run_wait, args=(app,), name="wait-for-interactive-thread")
+                wait_thread.start()
+                self.assertTrue(query_seen.wait(5))
+                wait_thread.join(0.05)
+                self.assertTrue(wait_thread.is_alive())
+
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
+                shutdown_thread.start()
+                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
+
+                wait_thread.join(5)
+                shutdown_thread.join(5)
+
+            self.assertFalse(wait_thread.is_alive())
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertNotIn("exc", wait_result, wait_result.get("exc"))
+            self.assertTrue(wait_result.get("done"))
+            self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+            self.assertEqual(shutdown_result["out"]["state"], "closed")
+
+    def test_shutdown_and_clear_prefetch_queue_do_not_query_lifecycle_under_prefetch_lock(self):
+        clear_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_clear(app, barrier: threading.Barrier) -> None:
+            try:
+                barrier.wait()
+                app._clear_prefetch_queue()
+                clear_result["done"] = True
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                clear_result["exc"] = exc
+
+        def run_shutdown(app, barrier: threading.Barrier) -> None:
+            try:
+                barrier.wait()
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            app._prefetch_lock = TrackingLock()
+            future = Future()
+            key = (app._document_generation, 0, app.voice.voice, app.voice.language, "prefetch-clear")
+            with app._prefetch_lock:
+                app._prefetch_futures[key] = future
+                app._prefetch_started[key] = time.time()
+                app._prefetch_future = future
+                app._prefetch_index = 0
+                app._prefetch_started_ts = time.time()
+            with app._tts_gate:
+                app._prefetch_promoted_keys.add(key)
+
+            barrier = threading.Barrier(3)
+            with guard_background_work_queries(app):
+                clear_thread = threading.Thread(target=run_clear, args=(app, barrier), name="clear-prefetch-thread")
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app, barrier), name="shutdown-thread")
+                clear_thread.start()
+                shutdown_thread.start()
+                barrier.wait()
+                clear_thread.join(5)
+                shutdown_thread.join(5)
+
+            self.assertFalse(clear_thread.is_alive())
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertNotIn("exc", clear_result, clear_result.get("exc"))
+            self.assertTrue(clear_result.get("done"))
+            self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+            self.assertEqual(shutdown_result["out"]["state"], "closed")
+            self.assertFalse(app._prefetch_futures)
+            self.assertIsNone(app._prefetch_future)
+            self.assertTrue(future.cancelled())
+            self.assertFalse(app._prefetch_promoted_keys)
+
+    def test_shutdown_and_reset_prefetch_queue_do_not_query_lifecycle_under_prefetch_lock(self):
+        reset_result: dict[str, object] = {}
+        shutdown_result: dict[str, object] = {}
+
+        def run_reset(app, barrier: threading.Barrier, stale_future: Future) -> None:
+            try:
+                barrier.wait()
+                app._reset_prefetch_queue(stale_future)
+                reset_result["done"] = True
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                reset_result["exc"] = exc
+
+        def run_shutdown(app, barrier: threading.Barrier) -> None:
+            try:
+                barrier.wait()
+                shutdown_result["out"] = app.shutdown_background_work(timeout=5)
+            except Exception as exc:  # pragma: no cover - surfaced by assertions below
+                shutdown_result["exc"] = exc
+
+        with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
+            app._prefetch_lock = TrackingLock()
+            stale_future = Future()
+            key = (app._document_generation, 0, app.voice.voice, app.voice.language, "prefetch-reset")
+            with app._prefetch_lock:
+                app._prefetch_futures[key] = stale_future
+                app._prefetch_started[key] = time.time()
+                app._prefetch_future = stale_future
+                app._prefetch_index = 0
+                app._prefetch_started_ts = time.time()
+            with app._tts_gate:
+                app._prefetch_promoted_keys.add(key)
+
+            barrier = threading.Barrier(3)
+            with guard_background_work_queries(app):
+                reset_thread = threading.Thread(target=run_reset, args=(app, barrier, stale_future), name="reset-prefetch-thread")
+                shutdown_thread = threading.Thread(target=run_shutdown, args=(app, barrier), name="shutdown-thread")
+                reset_thread.start()
+                shutdown_thread.start()
+                barrier.wait()
+                reset_thread.join(5)
+                shutdown_thread.join(5)
+
+            self.assertFalse(reset_thread.is_alive())
+            self.assertFalse(shutdown_thread.is_alive())
+            self.assertNotIn("exc", reset_result, reset_result.get("exc"))
+            self.assertTrue(reset_result.get("done"))
+            self.assertNotIn("exc", shutdown_result, shutdown_result.get("exc"))
+            self.assertEqual(shutdown_result["out"]["state"], "closed")
+            self.assertTrue(stale_future.cancelled())
+            self.assertFalse(app._prefetch_futures)
+            self.assertIsNone(app._prefetch_future)
+            self.assertFalse(app._prefetch_promoted_keys)
 
     def test_shutdown_timeout_can_be_retried_to_completion(self):
         provider = BlockingSyntheticWavTTSProvider()
