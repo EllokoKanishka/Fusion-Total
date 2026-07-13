@@ -177,7 +177,15 @@ class FusionReaderV2:
         )
         self._persistence_service = SessionPersistenceService(self)
         self._lifecycle_service = BackgroundLifecycleService(self)
-        self._notes_service = NotesService(self)
+        self._notes_service = NotesService(
+            session=self.session,
+            notes=self.notes,
+            dialogue_history=self._dialogue_history,
+            dialogue_lock=self._dialogue_lock,
+            chat_history=self._chat_history,
+            chat_lock=self._chat_lock,
+            looks_like_note_request=self._looks_like_note_request,
+        )
         self.dialogue_trace_path = (
             (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         )
