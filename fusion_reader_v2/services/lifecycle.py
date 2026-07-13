@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from fusion_reader_v2.tts import AudioArtifact
 
-if TYPE_CHECKING:
-    from fusion_reader_v2.service import FusionReaderV2
+
+class StoppableBackgroundService(Protocol):
+    def begin_shutdown(self) -> threading.Thread | None: ...
 
 
 @dataclass
@@ -24,165 +26,93 @@ class BackgroundShutdownContext:
 
 
 class BackgroundLifecycleService:
-    """Owns state transitions and deterministic shutdown of background work."""
+    """Owns lifecycle state and deterministic shutdown coordination."""
 
-    def __init__(self, owner: FusionReaderV2) -> None:
-        self.owner = owner
+    def __init__(
+        self,
+        *,
+        capture_prefetch: Callable[[], tuple[list[ThreadPoolExecutor], list[Future[AudioArtifact]]]],
+        clear_prefetch: Callable[[], None],
+        reset_prefetch: Callable[[Future[AudioArtifact]], None],
+    ) -> None:
+        self.condition = threading.Condition(threading.RLock())
+        self.state = "open"
+        self.active_tts = 0
+        self.shutdown_context: BackgroundShutdownContext | None = None
+        self.audio_export: StoppableBackgroundService | None = None
+        self.preparation: StoppableBackgroundService | None = None
+        self.capture_prefetch = capture_prefetch
+        self.clear_prefetch_callback = clear_prefetch
+        self.reset_prefetch_callback = reset_prefetch
+
+    def bind_background_services(
+        self,
+        *,
+        audio_export: StoppableBackgroundService,
+        preparation: StoppableBackgroundService,
+    ) -> None:
+        if self.audio_export is not None or self.preparation is not None:
+            raise RuntimeError("background_services_already_bound")
+        self.audio_export = audio_export
+        self.preparation = preparation
 
     def set_state_locked(self, state: str) -> None:
-        owner = self.owner
         normalized = str(state or "").strip().lower()
         if normalized not in {"open", "closing", "closed"}:
             raise ValueError(f"invalid background work state: {state!r}")
-        owner._background_work_state = normalized
-        owner._background_work_closing = normalized == "closing"
-        owner._background_work_closed = normalized == "closed"
-        owner._background_work_condition.notify_all()
+        self.state = normalized
+        self.condition.notify_all()
 
     def begin_tts_operation(self) -> bool:
-        owner = self.owner
-        with owner._background_work_condition:
-            if owner._background_work_state != "open":
+        with self.condition:
+            if self.state != "open":
                 return False
-            owner._background_work_active_tts += 1
+            self.active_tts += 1
             return True
 
     def end_tts_operation(self) -> None:
-        owner = self.owner
-        with owner._background_work_condition:
-            if owner._background_work_active_tts > 0:
-                owner._background_work_active_tts -= 1
-            if owner._background_work_active_tts == 0:
-                owner._background_work_condition.notify_all()
+        with self.condition:
+            if self.active_tts > 0:
+                self.active_tts -= 1
+            if self.active_tts == 0:
+                self.condition.notify_all()
 
     def is_open(self) -> bool:
-        owner = self.owner
-        with owner._background_work_condition:
-            return owner._background_work_state == "open"
+        with self.condition:
+            return self.state == "open"
 
     def is_open_locked(self) -> bool:
-        return self.owner._background_work_state == "open"
+        return self.state == "open"
 
     def wait_for_active_tts_locked(self, deadline: float) -> None:
-        owner = self.owner
-        while owner._background_work_active_tts > 0:
+        while self.active_tts > 0:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise AssertionError("timed out waiting for interactive TTS to stop")
-            owner._background_work_condition.wait(timeout=remaining)
+            self.condition.wait(timeout=remaining)
 
     def capture_shutdown_context(self, context: BackgroundShutdownContext) -> None:
-        owner = self.owner
-        owner._audio_export_cancel.set()
-        owner._prepare_cancel.set()
-        with owner._audio_export_lock:
-            context.export_thread = owner._audio_export_thread
-            export_job_id = owner._audio_export_active_job_id
-            if export_job_id:
-                job = owner._audio_export_jobs.get(export_job_id)
-                if job and job.state in {"queued", "running"}:
-                    job.state = "canceling" if job.state == "running" else "cancelled"
-                    job.detail = "Cancelando exportación de audio..."
-        with owner._prepare_lock:
-            context.prepare_thread = owner._prepare_thread
-            if owner._prepare_status.get("status") == "running":
-                owner._prepare_status["status"] = "canceling"
-                owner._prepare_status["message"] = "Cancelando preparación..."
-                owner._prepare_status["updated_ts"] = time.time()
-        with owner._prefetch_lock:
-            context.executors = list(dict.fromkeys(owner._prefetch_executors + [owner._executor]))
-            context.prefetch_futures = list(owner._prefetch_futures.values())
-            owner._prefetch_futures = {}
-            owner._prefetch_started = {}
-            owner._prefetch_future = None
-            owner._prefetch_index = None
-            owner._prefetch_started_ts = None
-        with owner._tts_gate:
-            owner._prefetch_promoted_keys.clear()
-            owner._tts_gate.notify_all()
+        if self.audio_export is None or self.preparation is None:
+            raise RuntimeError("background_services_not_bound")
+        context.export_thread = self.audio_export.begin_shutdown()
+        context.prepare_thread = self.preparation.begin_shutdown()
+        context.executors, context.prefetch_futures = self.capture_prefetch()
 
     def prioritize_dialogue(self) -> None:
-        owner = self.owner
-        owner._prepare_cancel.set()
-        with owner._prepare_lock:
-            if owner._prepare_status.get("status") == "running":
-                owner._prepare_status["status"] = "canceling"
-                owner._prepare_status["message"] = "Cancelando preparación para priorizar diálogo..."
-                owner._prepare_status["updated_ts"] = time.time()
-        owner._clear_prefetch_queue()
+        if self.preparation is None:
+            raise RuntimeError("background_services_not_bound")
+        cancel = getattr(self.preparation, "cancel", None)
+        if callable(cancel):
+            cancel("Cancelando preparación para priorizar diálogo...")
+        else:
+            self.preparation.begin_shutdown()
+        self.clear_prefetch_callback()
 
     def clear_prefetch_queue(self) -> None:
-        owner = self.owner
-        with owner._background_work_condition:
-            background_open = owner._background_work_is_open_locked()
-            with owner._prefetch_lock:
-                tracked_futures = list(owner._prefetch_futures.values())
-                old_executor = owner._executor
-                if background_open:
-                    owner._executor = ThreadPoolExecutor(
-                        max_workers=owner.prefetch_workers,
-                        thread_name_prefix="fusion-reader-v2-tts",
-                    )
-                    owner._prefetch_executors.append(owner._executor)
-                owner._prefetch_futures = {}
-                owner._prefetch_started = {}
-                owner._prefetch_future = None
-                owner._prefetch_index = None
-                owner._prefetch_started_ts = None
-        for future in tracked_futures:
-            future.cancel()
-        with owner._tts_gate:
-            owner._prefetch_promoted_keys.clear()
-            owner._tts_gate.notify_all()
-        old_executor.shutdown(wait=False, cancel_futures=True)
+        self.clear_prefetch_callback()
 
     def reset_prefetch_queue(self, stale_future: Future[AudioArtifact]) -> None:
-        owner = self.owner
-        old_executor: ThreadPoolExecutor | None = None
-        stale_keys: list[tuple] = []
-        stale_futures: list[Future[AudioArtifact]] = []
-        with owner._background_work_condition:
-            background_open = owner._background_work_is_open_locked()
-            with owner._prefetch_lock:
-                stale_keys = [key for key, future in owner._prefetch_futures.items() if future is stale_future]
-                stale_futures = [future for future in owner._prefetch_futures.values() if future is stale_future]
-                if not background_open:
-                    for key in stale_keys:
-                        owner._prefetch_futures.pop(key, None)
-                        owner._prefetch_started.pop(key, None)
-                    if owner._prefetch_future is stale_future:
-                        owner._prefetch_future = None
-                        owner._prefetch_index = None
-                        owner._prefetch_started_ts = None
-                else:
-                    if owner._prefetch_future is not stale_future and not stale_keys:
-                        return
-                    old_executor = owner._executor
-                    owner._executor = ThreadPoolExecutor(
-                        max_workers=owner.prefetch_workers,
-                        thread_name_prefix="fusion-reader-v2-tts",
-                    )
-                    owner._prefetch_executors.append(owner._executor)
-                    for key in stale_keys:
-                        owner._prefetch_futures.pop(key, None)
-                        owner._prefetch_started.pop(key, None)
-                    owner._prefetch_future = None
-                    owner._prefetch_index = None
-                    owner._prefetch_started_ts = None
-                    owner._set_primary_prefetch_locked()
-        for future in stale_futures:
-            future.cancel()
-        if stale_keys:
-            with owner._tts_gate:
-                removed = False
-                for key in stale_keys:
-                    if key in owner._prefetch_promoted_keys:
-                        owner._prefetch_promoted_keys.discard(key)
-                        removed = True
-                if removed:
-                    owner._tts_gate.notify_all()
-        if old_executor is not None:
-            old_executor.shutdown(wait=False, cancel_futures=True)
+        self.reset_prefetch_callback(stale_future)
 
     @staticmethod
     def wait_for_thread(thread: threading.Thread | None, *, label: str, deadline: float) -> None:
@@ -196,19 +126,18 @@ class BackgroundLifecycleService:
             raise AssertionError(f"timed out waiting for {label} thread to stop: {thread.name}")
 
     def shutdown(self, timeout: float = 10.0) -> dict:
-        owner = self.owner
         deadline = time.monotonic() + max(0.0, float(timeout))
-        with owner._background_work_condition:
-            if owner._background_work_state == "closed":
+        with self.condition:
+            if self.state == "closed":
                 return {"ok": True, "state": "closed", "detail": "already_closed"}
-            context = owner._background_work_shutdown_context
+            context = self.shutdown_context
             if context is None:
                 context = BackgroundShutdownContext()
-                owner._background_work_shutdown_context = context
-            if owner._background_work_state == "open":
-                owner._set_background_work_state_locked("closing")
+                self.shutdown_context = context
+            if self.state == "open":
+                self.set_state_locked("closing")
             if not context.started:
-                owner._capture_background_shutdown_context(context)
+                self.capture_shutdown_context(context)
                 shutdown_errors_lock = threading.Lock()
 
                 def shutdown_executor(executor: ThreadPoolExecutor, label: str) -> None:
@@ -218,7 +147,6 @@ class BackgroundLifecycleService:
                         with shutdown_errors_lock:
                             context.shutdown_errors.append((label, exc))
 
-                context.shutdown_threads = []
                 for index, executor in enumerate(context.executors):
                     thread = threading.Thread(
                         target=shutdown_executor,
@@ -234,8 +162,8 @@ class BackgroundLifecycleService:
             prefetch_futures = list(context.prefetch_futures)
             shutdown_threads = list(context.shutdown_threads)
             shutdown_errors = context.shutdown_errors
-        owner._wait_for_thread(export_thread, label="audio export", deadline=deadline)
-        owner._wait_for_thread(prepare_thread, label="prepare", deadline=deadline)
+        self.wait_for_thread(export_thread, label="audio export", deadline=deadline)
+        self.wait_for_thread(prepare_thread, label="prepare", deadline=deadline)
         for future in prefetch_futures:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -249,16 +177,19 @@ class BackgroundLifecycleService:
             except TimeoutError as exc:
                 raise AssertionError("timed out waiting for prefetch future to stop") from exc
         for thread in shutdown_threads:
-            owner._wait_for_thread(thread, label="prefetch executor shutdown", deadline=deadline)
+            self.wait_for_thread(thread, label="prefetch executor shutdown", deadline=deadline)
         if shutdown_errors:
             label, shutdown_error = shutdown_errors[0]
             raise AssertionError(f"prefetch executor shutdown failed for {label}: {shutdown_error}") from shutdown_error
-        with owner._background_work_condition:
-            owner._wait_for_active_tts_locked(deadline)
-            owner._set_background_work_state_locked("closed")
+        with self.condition:
+            self.wait_for_active_tts_locked(deadline)
+            self.set_state_locked("closed")
         return {
             "ok": True,
             "state": "closed",
             "prefetch_futures": len(prefetch_futures),
             "executors": len(context.executors),
         }
+
+
+__all__ = ["BackgroundLifecycleService", "BackgroundShutdownContext"]

@@ -116,13 +116,11 @@ class FusionReaderV2:
         # Canonical coordination order for lifecycle-sensitive background work:
         # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
         # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
-        self._background_work_lock = threading.RLock()
-        self._background_work_condition = threading.Condition(self._background_work_lock)
-        self._background_work_state = "open"
-        self._background_work_active_tts = 0
-        self._background_work_shutdown_context: BackgroundShutdownContext | None = None
-        self._background_work_closing = False
-        self._background_work_closed = False
+        self._lifecycle_service = BackgroundLifecycleService(
+            capture_prefetch=self._capture_prefetch_for_shutdown,
+            clear_prefetch=self._clear_prefetch_queue_impl,
+            reset_prefetch=self._reset_prefetch_queue_impl,
+        )
         self._chat_lock = threading.Lock()
         self._chat_history: list[dict] = []
         self._dialogue_lock = threading.Lock()
@@ -175,7 +173,6 @@ class FusionReaderV2:
             reset_preparation=self._reset_prepare_for_new_document,
             build_document_record=self._document_record,
         )
-        self._lifecycle_service = BackgroundLifecycleService(self)
         self._notes_service = NotesService(
             session=self.session,
             notes=self.notes,
@@ -217,6 +214,10 @@ class FusionReaderV2:
             before_registration=lambda: self._before_prepare_registration(),
             synthesize=lambda text, voice, language: self._synthesize_cached_with_settings(text, voice, language),
             human_error=lambda detail: self._human_tts_error(detail, action="prepare"),
+        )
+        self._lifecycle_service.bind_background_services(
+            audio_export=self._audio_export_service,
+            preparation=self._preparation_service,
         )
         self._audio_service = AudioService(
             tts=self.tts,
@@ -276,6 +277,42 @@ class FusionReaderV2:
     @_audio_export_latest_job_id.setter
     def _audio_export_latest_job_id(self, value):
         self._audio_export_service.latest_job_id = value
+
+    @property
+    def _background_work_condition(self):
+        return self._lifecycle_service.condition
+
+    @property
+    def _background_work_state(self):
+        return self._lifecycle_service.state
+
+    @_background_work_state.setter
+    def _background_work_state(self, value):
+        self._lifecycle_service.state = value
+
+    @property
+    def _background_work_active_tts(self):
+        return self._lifecycle_service.active_tts
+
+    @_background_work_active_tts.setter
+    def _background_work_active_tts(self, value):
+        self._lifecycle_service.active_tts = value
+
+    @property
+    def _background_work_shutdown_context(self):
+        return self._lifecycle_service.shutdown_context
+
+    @_background_work_shutdown_context.setter
+    def _background_work_shutdown_context(self, value):
+        self._lifecycle_service.shutdown_context = value
+
+    @property
+    def _background_work_closing(self):
+        return self._lifecycle_service.state == "closing"
+
+    @property
+    def _background_work_closed(self):
+        return self._lifecycle_service.state == "closed"
 
     @property
     def _prepare_lock(self):
@@ -1332,111 +1369,6 @@ class FusionReaderV2:
     def prepare_status(self) -> dict:
         return self._preparation_service.status()
 
-    def _prepare_worker(
-        self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event
-    ) -> None:
-        document = self.session.document
-        if not document or document.doc_id != doc_id or document_generation != self._document_generation:
-            self._finish_prepare("error", "El documento activo cambió antes de preparar audio.", generation=generation)
-            return
-        total = len(document.chunks)
-        voice = self.voice.voice
-        language = self.voice.language
-        start_index = self.session.cursor if start != "beginning" else 0
-        order = list(range(start_index, total)) + list(range(0, start_index))
-        uncached = [index for index in order if not self.cache.get(document.chunks[index], voice, language)]
-        if uncached:
-            tts_health = self.tts.health()
-            if not bool(tts_health.get("ok")):
-                cached_now = total - len(uncached)
-                self._finish_prepare(
-                    "error",
-                    self._human_tts_error(str(tts_health.get("detail") or ""), action="prepare"),
-                    current=cached_now,
-                    total=total,
-                    cached=cached_now,
-                    generated=0,
-                    failed=len(uncached),
-                    generation=generation,
-                )
-                return
-        cached = generated = failed = processed = 0
-        for index in order:
-            if cancel_event.is_set():
-                self._finish_prepare(
-                    "canceled",
-                    "Preparación cancelada.",
-                    processed,
-                    total,
-                    cached,
-                    generated,
-                    failed,
-                    generation=generation,
-                )
-                return
-            current_document = self.session.document
-            if (
-                not current_document
-                or current_document.doc_id != doc_id
-                or document_generation != self._document_generation
-            ):
-                self._finish_prepare(
-                    "canceled",
-                    "Preparación detenida porque cambió el documento.",
-                    processed,
-                    total,
-                    cached,
-                    generated,
-                    failed,
-                    generation=generation,
-                )
-                return
-            text = current_document.chunks[index]
-            if self.cache.get(text, voice, language):
-                cached += 1
-            else:
-                artifact = self._synthesize_cached_with_settings(text, voice, language)
-                if artifact.ok:
-                    generated += 1
-                else:
-                    failed += 1
-            processed += 1
-            self._update_prepare_status(processed, total, cached, generated, failed, generation=generation)
-        if failed and not generated and not cached:
-            self._finish_prepare(
-                "error",
-                self._human_tts_error("tts_prepare_failed", action="prepare"),
-                processed,
-                total,
-                cached,
-                generated,
-                failed,
-                generation=generation,
-            )
-            return
-        if failed:
-            self._finish_prepare(
-                "done",
-                f"Preparación completada con fallas: {failed} bloque(s) sin audio.",
-                processed,
-                total,
-                cached,
-                generated,
-                failed,
-                generation=generation,
-            )
-            return
-        self._finish_prepare(
-            "done",
-            "Documento preparado para lectura.",
-            processed,
-            total,
-            cached,
-            generated,
-            failed,
-            generation=generation,
-        )
-
     def _reset_prepare_for_new_document(self) -> None:
         self._preparation_service.reset()
 
@@ -1476,61 +1408,6 @@ class FusionReaderV2:
         if action == "prepare":
             return "No pude preparar el audio porque la voz no está disponible en este momento."
         return "No pude leer este bloque porque la voz no está disponible en este momento."
-
-    def _update_prepare_status(
-        self, current: int, total: int, cached: int, generated: int, failed: int, generation: int
-    ) -> None:
-        with self._prepare_lock:
-            if generation != self._prepare_generation:
-                return
-            self._prepare_status.update(
-                {
-                    "current": current,
-                    "total": total,
-                    "percent": int(((cached + generated + failed) * 100) / total) if total else 0,
-                    "cached": cached,
-                    "generated": generated,
-                    "failed": failed,
-                    "message": f"Preparando bloque {cached + generated + failed} de {total}.",
-                    "updated_ts": time.time(),
-                }
-            )
-
-    def _finish_prepare(
-        self,
-        status: str,
-        message: str,
-        current: int | None = None,
-        total: int | None = None,
-        cached: int | None = None,
-        generated: int | None = None,
-        failed: int | None = None,
-        generation: int | None = None,
-    ) -> None:
-        with self._prepare_lock:
-            if generation is not None and generation != self._prepare_generation:
-                return
-            if current is not None:
-                self._prepare_status["current"] = current
-            if total is not None:
-                self._prepare_status["total"] = total
-            if cached is not None:
-                self._prepare_status["cached"] = cached
-            if generated is not None:
-                self._prepare_status["generated"] = generated
-            if failed is not None:
-                self._prepare_status["failed"] = failed
-            total_count = int(self._prepare_status.get("total") or 0)
-            done_count = (
-                int(self._prepare_status.get("cached") or 0)
-                + int(self._prepare_status.get("generated") or 0)
-                + int(self._prepare_status.get("failed") or 0)
-            )
-            self._prepare_status["status"] = status
-            self._prepare_status["percent"] = int(done_count * 100 / total_count) if total_count else 0
-            self._prepare_status["message"] = message
-            self._prepare_status["updated_ts"] = time.time()
-            self._prepare_status["done_ts"] = time.time()
 
     def audio_export_overview(self) -> dict:
         return self._audio_export_service.overview()
@@ -3114,6 +2991,91 @@ class FusionReaderV2:
 
     def _prioritize_dialogue(self) -> None:
         self._lifecycle_service.prioritize_dialogue()
+
+    def _capture_prefetch_for_shutdown(self) -> tuple[list[ThreadPoolExecutor], list[Future[AudioArtifact]]]:
+        with self._prefetch_lock:
+            executors = list(dict.fromkeys(self._prefetch_executors + [self._executor]))
+            futures = list(self._prefetch_futures.values())
+            self._prefetch_futures = {}
+            self._prefetch_started = {}
+            self._prefetch_future = None
+            self._prefetch_index = None
+            self._prefetch_started_ts = None
+        with self._tts_gate:
+            self._prefetch_promoted_keys.clear()
+            self._tts_gate.notify_all()
+        return executors, futures
+
+    def _clear_prefetch_queue_impl(self) -> None:
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
+                tracked_futures = list(self._prefetch_futures.values())
+                old_executor = self._executor
+                if background_open:
+                    self._executor = ThreadPoolExecutor(
+                        max_workers=self.prefetch_workers,
+                        thread_name_prefix="fusion-reader-v2-tts",
+                    )
+                    self._prefetch_executors.append(self._executor)
+                self._prefetch_futures = {}
+                self._prefetch_started = {}
+                self._prefetch_future = None
+                self._prefetch_index = None
+                self._prefetch_started_ts = None
+        for future in tracked_futures:
+            future.cancel()
+        with self._tts_gate:
+            self._prefetch_promoted_keys.clear()
+            self._tts_gate.notify_all()
+        old_executor.shutdown(wait=False, cancel_futures=True)
+
+    def _reset_prefetch_queue_impl(self, stale_future: Future[AudioArtifact]) -> None:
+        old_executor: ThreadPoolExecutor | None = None
+        stale_keys: list[tuple] = []
+        stale_futures: list[Future[AudioArtifact]] = []
+        with self._background_work_condition:
+            background_open = self._background_work_is_open_locked()
+            with self._prefetch_lock:
+                stale_keys = [key for key, future in self._prefetch_futures.items() if future is stale_future]
+                stale_futures = [future for future in self._prefetch_futures.values() if future is stale_future]
+                if not background_open:
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
+                    if self._prefetch_future is stale_future:
+                        self._prefetch_future = None
+                        self._prefetch_index = None
+                        self._prefetch_started_ts = None
+                else:
+                    if self._prefetch_future is not stale_future and not stale_keys:
+                        return
+                    old_executor = self._executor
+                    self._executor = ThreadPoolExecutor(
+                        max_workers=self.prefetch_workers,
+                        thread_name_prefix="fusion-reader-v2-tts",
+                    )
+                    self._prefetch_executors.append(self._executor)
+                    for key in stale_keys:
+                        self._prefetch_futures.pop(key, None)
+                        self._prefetch_started.pop(key, None)
+                    self._prefetch_future = None
+                    self._prefetch_index = None
+                    self._prefetch_started_ts = None
+                    self._set_primary_prefetch_locked()
+        for future in stale_futures:
+            future.cancel()
+        if stale_keys:
+            with self._tts_gate:
+                removed = False
+                for key in stale_keys:
+                    if key in self._prefetch_promoted_keys:
+                        self._prefetch_promoted_keys.discard(key)
+                        removed = True
+                if removed:
+                    self._tts_gate.notify_all()
+        if old_executor is not None:
+            old_executor.shutdown(wait=False, cancel_futures=True)
 
     def _clear_prefetch_queue(self) -> None:
         self._lifecycle_service.clear_prefetch_queue()

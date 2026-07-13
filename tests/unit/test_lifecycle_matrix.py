@@ -6,12 +6,22 @@ import unittest
 from concurrent.futures import Future
 
 from fusion_reader_v2.audio_export import AudioExportJob
-from fusion_reader_v2.services.lifecycle import BackgroundShutdownContext
+from fusion_reader_v2.services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from fusion_reader_v2.tts import AudioArtifact
 from tests.helpers import close_test_app, test_app
 
 
 class LifecycleBranchMatrixTests(unittest.TestCase):
+    def test_lifecycle_service_is_instantiable_without_facade(self) -> None:
+        service = BackgroundLifecycleService(
+            capture_prefetch=lambda: ([], []),
+            clear_prefetch=lambda: None,
+            reset_prefetch=lambda future: None,
+        )
+        self.assertTrue(service.is_open())
+        self.assertTrue(service.begin_tts_operation())
+        service.end_tts_operation()
+
     def test_state_tts_counters_and_wait_timeout(self) -> None:
         app = test_app(register_cleanup=False)
         lifecycle = app._lifecycle_service
@@ -94,8 +104,8 @@ class LifecycleBranchMatrixTests(unittest.TestCase):
             close_test_app(app)
 
     def test_wait_for_thread_none_deadline_and_live_timeout(self) -> None:
-        lifecycle = test_app(register_cleanup=False)._lifecycle_service
-        app = lifecycle.owner
+        app = test_app(register_cleanup=False)
+        lifecycle = app._lifecycle_service
         release = threading.Event()
         thread = threading.Thread(target=release.wait, name="fusion-lifecycle-matrix")
         thread.start()
