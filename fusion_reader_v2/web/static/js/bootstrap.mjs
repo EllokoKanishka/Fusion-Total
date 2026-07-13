@@ -5,11 +5,10 @@ import { createDialogueState } from './dialogue.mjs';
 import { collectElements } from './ui.mjs';
 import { createPreparationController } from './preparation.mjs';
 import { createAudioExportController } from './audio_export.mjs';
+import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
 
 const els = collectElements();
-const LAB_NOTES_DOC_ID = '__laboratory__';
 let status = null;
-let notesState = { docId: '', current: 0, items: [] };
 let lastRenderedDocId = '';
 let lastRenderedBlockIndex = 0;
 let lastRenderedBlockText = '';
@@ -34,6 +33,12 @@ const syncAudioExportInputs = audioExport.syncInputs;
 const renderAudioExportStatus = audioExport.renderStatus;
 const startAudioExport = audioExport.start;
 const cancelAudioExport = audioExport.cancel;
+const notesController = createNotesController({
+  api, elements: els, beginBusyLease, busyControls, getStatus: () => status,
+  renderMainStatus: data => renderStatus(data), log
+});
+const refreshNotes = notesController.refresh;
+const saveCurrentNote = notesController.save;
 
 function beginBusyLease() {
   return busyControls.beginBusyLease();
@@ -353,6 +358,7 @@ function resetReaderViewport() {
 
 function renderStatus(data) {
   const selectedNotesDocId = data.doc_id || LAB_NOTES_DOC_ID;
+  const notesState = notesController.state();
   const shouldRefreshNotes = selectedNotesDocId !== notesState.docId || data.current !== notesState.current || Boolean(data.notes && data.notes.count !== notesState.items.length);
   const nextDocId = String(data.doc_id || data.document && data.document.doc_id || '');
   const nextBlockIndex = Number(data.current || data.document && data.document.current || 0);
@@ -817,242 +823,6 @@ function renderReferenceDocuments(items) {
     content.append(meta, preview, actions);
     card.append(summary, content);
     els.referenceList.appendChild(card);
-  }
-}
-
-function noteReference(note) {
-  if (String(note && note.source_kind || '').toLowerCase() === 'laboratory') {
-    return `L${Number(note && note.anchor_number || 1)}`;
-  }
-  return `B${Number(note && note.chunk_number || note && note.anchor_number || 1)}`;
-}
-
-function renderNotes(items, activeDocId = '') {
-  const notes = Array.isArray(items) ? items : [];
-  const selectedDocId = activeDocId || status && status.doc_id || '';
-  const laboratoryMode = selectedDocId === LAB_NOTES_DOC_ID;
-  const hasLabNotes = notes.some(note => String(note && note.source_kind || '').toLowerCase() === 'laboratory');
-  const hasDocumentNotes = notes.some(note => String(note && note.source_kind || '').toLowerCase() !== 'laboratory');
-  notesState = {
-    docId: selectedDocId,
-    current: status && status.current || 0,
-    items: notes
-  };
-  const currentCount = notes.filter(note => String(note && note.source_kind || '').toLowerCase() !== 'laboratory' && Number(note.chunk_number || 0) === Number(notesState.current || 0)).length;
-  els.notesSummary.textContent = `${laboratoryMode ? 'Notas del laboratorio' : (hasLabNotes && hasDocumentNotes ? 'Notas del documento y laboratorio' : 'Notas del documento')} (${notes.length})`;
-  if (!notes.length) {
-    els.notesInfo.textContent = laboratoryMode ? 'Sin notas del laboratorio todavía.' : 'Sin notas todavía.';
-  } else if (laboratoryMode) {
-    els.notesInfo.textContent = `${notes.length} nota${notes.length === 1 ? '' : 's'} en el laboratorio.`;
-  } else if (hasLabNotes && hasDocumentNotes) {
-    const labCount = notes.filter(note => String(note && note.source_kind || '').toLowerCase() === 'laboratory').length;
-    els.notesInfo.textContent = `${currentCount} nota${currentCount === 1 ? '' : 's'} en este bloque y ${labCount} de laboratorio.`;
-  } else {
-    els.notesInfo.textContent = `${currentCount} nota${currentCount === 1 ? '' : 's'} en este bloque.`;
-  }
-  els.notesList.replaceChildren();
-  if (!notes.length) {
-    return;
-  }
-  for (const note of notes) {
-    const row = document.createElement('details');
-    row.className = 'note-row';
-    if (String(note && note.source_kind || '').toLowerCase() !== 'laboratory' && Number(note.chunk_number || 0) === Number(notesState.current || 0)) {
-      row.classList.add('current');
-    }
-    const summary = document.createElement('summary');
-    const label = document.createElement('span');
-    label.className = 'note-label';
-    label.textContent = `${noteReference(note)} ${compactNoteLabel(note)}`.trim();
-    label.title = note.text || '';
-    const renameBtn = document.createElement('button');
-    renameBtn.type = 'button';
-    renameBtn.className = 'note-rename';
-    renameBtn.textContent = '+';
-    renameBtn.title = 'Editar nombre';
-    renameBtn.setAttribute('aria-label', 'Editar nombre de la nota');
-    renameBtn.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      renameNote(note);
-    });
-    summary.append(label, renameBtn);
-    const text = document.createElement('p');
-    text.className = 'note-text';
-    text.textContent = note.text || '';
-    const quote = document.createElement('p');
-    quote.className = 'note-quote';
-    quote.textContent = note.quote ? `Texto: ${note.quote}` : '';
-    const actions = document.createElement('div');
-    actions.className = 'note-actions';
-    const goBtn = document.createElement('button');
-    goBtn.type = 'button';
-    if (String(note && note.source_kind || '').toLowerCase() === 'laboratory') {
-      goBtn.textContent = 'Sin bloque';
-      goBtn.disabled = true;
-    } else {
-      goBtn.textContent = 'Ir al bloque';
-      goBtn.addEventListener('click', event => {
-        event.preventDefault();
-        goToNote(note);
-      });
-    }
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.textContent = 'Editar';
-    editBtn.addEventListener('click', event => {
-      event.preventDefault();
-      editNote(note);
-    });
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.textContent = 'Borrar';
-    deleteBtn.addEventListener('click', event => {
-      event.preventDefault();
-      deleteNote(note);
-    });
-    actions.append(goBtn, editBtn, deleteBtn);
-    row.append(summary, text);
-    if (note.quote) {
-      row.append(quote);
-    }
-    row.append(actions);
-    els.notesList.appendChild(row);
-  }
-}
-
-function compactNoteLabel(note) {
-  const saved = String(note && note.label || '').trim();
-  if (saved) {
-    return saved;
-  }
-  const raw = String(note && note.text || '').trim();
-  const words = raw.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+/g) || [];
-  const stop = new Set(['a', 'al', 'bloque', 'como', 'con', 'de', 'del', 'el', 'en', 'es', 'esa', 'ese', 'esta', 'este', 'la', 'las', 'lo', 'los', 'nota', 'notas', 'para', 'por', 'que', 'se', 'sobre', 'toma', 'tomar', 'tomá', 'tome', 'un', 'una', 'y']);
-  const selected = [];
-  for (const word of words) {
-    if (/^\\d+$/.test(word)) {
-      continue;
-    }
-    if (stop.has(word.toLowerCase())) {
-      continue;
-    }
-    selected.push(word);
-    if (selected.length >= 3) {
-      break;
-    }
-  }
-  return (selected.length ? selected : words.slice(0, 3)).join(' ');
-}
-
-async function refreshNotes() {
-  if (!status) {
-    notesState = { docId: '', current: 0, items: [] };
-    els.notesSummary.textContent = 'Notas del documento';
-    els.notesInfo.textContent = 'Cargá un documento para tomar notas.';
-    els.notesList.replaceChildren();
-    return;
-  }
-  if (!status.doc_id) {
-    const data = await api(`/api/notes?doc_id=${encodeURIComponent(LAB_NOTES_DOC_ID)}`);
-    renderNotes(data.items || [], data.doc_id || LAB_NOTES_DOC_ID);
-    return;
-  }
-  const [docData, labData] = await Promise.all([
-    api(`/api/notes?doc_id=${encodeURIComponent(status.doc_id)}`),
-    api(`/api/notes?doc_id=${encodeURIComponent(LAB_NOTES_DOC_ID)}`).catch(() => ({ items: [] }))
-  ]);
-  const merged = [...(docData.items || []), ...(labData.items || [])];
-  renderNotes(merged, status.doc_id);
-}
-
-async function saveCurrentNote() {
-  const text = els.noteInput.value.trim();
-  if (!text) {
-    log('Escribí una nota antes de guardarla.');
-    return;
-  }
-  if (!status || !status.doc_id) {
-    log('Cargá un documento antes de guardar notas.');
-    return;
-  }
-  const releaseBusy = beginBusyLease();
-  try {
-    const data = await api('/api/notes/create', { text });
-    els.noteInput.value = '';
-    busyControls.setNoteText(els.noteInput.value);
-    renderNotes(data.items || [], data.note && data.note.doc_id || status.doc_id);
-    log(`Nota guardada como ${noteReference(data.note || {})}.`);
-  } catch (err) {
-    log(`No pude guardar la nota: ${err.message}`);
-  } finally {
-    releaseBusy();
-  }
-}
-
-async function goToNote(note) {
-  if (String(note && note.source_kind || '').toLowerCase() === 'laboratory') {
-    log(`La nota ${noteReference(note)} pertenece al laboratorio y no tiene bloque.`);
-    return;
-  }
-  try {
-    const data = await api('/api/jump', { index: Number(note.chunk_number || 1) });
-    renderStatus(data);
-    log(`Salté al bloque ${note.chunk_number || 1}.`);
-  } catch (err) {
-    log(`No pude ir a la nota: ${err.message}`);
-  }
-}
-
-async function renameNote(note) {
-  const currentLabel = compactNoteLabel(note);
-  const nextLabel = window.prompt('Nombre corto de la nota', currentLabel);
-  if (nextLabel === null) {
-    return;
-  }
-  const label = nextLabel.trim();
-  if (!label) {
-    log('El nombre de la nota no puede quedar vacío.');
-    return;
-  }
-  try {
-    const data = await api('/api/notes/rename', { note_id: note.note_id, doc_id: note.doc_id, label });
-    renderNotes(data.items || []);
-    log('Nombre de nota actualizado.');
-  } catch (err) {
-    log(`No pude renombrar la nota: ${err.message}`);
-  }
-}
-
-async function editNote(note) {
-  const nextText = window.prompt('Editar nota', note.text || '');
-  if (nextText === null) {
-    return;
-  }
-  const text = nextText.trim();
-  if (!text) {
-    log('La nota no puede quedar vacía.');
-    return;
-  }
-  try {
-    const data = await api('/api/notes/update', { note_id: note.note_id, doc_id: note.doc_id, text });
-    renderNotes(data.items || []);
-    log('Nota actualizada.');
-  } catch (err) {
-    log(`No pude editar la nota: ${err.message}`);
-  }
-}
-
-async function deleteNote(note) {
-  if (!window.confirm('Borrar esta nota?')) {
-    return;
-  }
-  try {
-    const data = await api('/api/notes/delete', { note_id: note.note_id, doc_id: note.doc_id });
-    renderNotes(data.items || []);
-    log('Nota borrada.');
-  } catch (err) {
-    log(`No pude borrar la nota: ${err.message}`);
   }
 }
 

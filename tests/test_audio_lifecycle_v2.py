@@ -437,11 +437,6 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
                 "function dialogueMimeType()",
                 "const data = await api('/api/laboratory/reset', {});",
             ),
-            "saveCurrentNote()": (
-                "async function saveCurrentNote()",
-                "async function goToNote(note)",
-                "const data = await api('/api/notes/create', { text });",
-            ),
         }
         for name, (start_marker, end_marker, first_action) in blocks.items():
             block = server_text[server_text.index(start_marker) : server_text.index(end_marker)]
@@ -465,6 +460,13 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         self.assertIn("const releaseBusy = beginBusyLease();", export_start)
         self.assertIn("const data = await api('/api/audio-export', payload);", export_start)
         self.assertIn("releaseBusy();", export_start)
+        notes_module = server_text[server_text.index("export function createNotesController") :]
+        notes_save = notes_module[
+            notes_module.index("async function save()") : notes_module.index("async function goTo(")
+        ]
+        self.assertIn("const releaseBusy = beginBusyLease();", notes_save)
+        self.assertIn("const data = await api('/api/notes/create', { text });", notes_save)
+        self.assertIn("releaseBusy();", notes_save)
         read_block = server_text[
             server_text.index("async function readCurrent()") : server_text.index(
                 "async function readNextWhenAudioEnds()"

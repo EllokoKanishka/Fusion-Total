@@ -8,7 +8,8 @@ const entry = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.j
 const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/bootstrap.mjs'), 'utf8');
 const preparation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/preparation.mjs'), 'utf8');
 const audioExport = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/audio_export.mjs'), 'utf8');
-const frontend = `${app}\n${preparation}\n${audioExport}`;
+const notes = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/notes.mjs'), 'utf8');
+const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
