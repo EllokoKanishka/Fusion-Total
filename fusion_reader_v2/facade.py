@@ -110,10 +110,7 @@ class FusionReaderV2:
         self._prefetch_promoted_keys: set[tuple] = set()
         self._tts_lock = threading.Lock()
         self._tts_gate = threading.Condition()
-        self._interactive_tts_pending = 0
         self._document_generation = 0
-        self._read_request_sequence = 0
-        self._read_lock = threading.Lock()
         # Canonical coordination order for lifecycle-sensitive background work:
         # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
         # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
@@ -235,9 +232,18 @@ class FusionReaderV2:
         )
         self._reader_service = ReaderService(
             self.session,
+            voice=self.voice,
+            cache=self.cache,
             persist=self._persist_session_state,
             prefetch_current=self.prefetch_current,
+            prefetch_next=self.prefetch_next,
             status=self.status,
+            document_generation=lambda: self._document_generation,
+            artifact_for_index=self._artifact_for_index,
+            play=self._play,
+            record_metric=self._record_voice_metric,
+            human_tts_error=lambda detail: self._human_tts_error(detail, action="read"),
+            tts_gate=self._tts_gate,
         )
         self._restore_session_state()
         if self.session.document:
@@ -385,6 +391,27 @@ class FusionReaderV2:
             service.dialogue_allow_supreme = bool(value)
         else:
             self.__dict__["_dialogue_allow_supreme_bootstrap"] = bool(value)
+
+    @property
+    def _interactive_tts_pending(self):
+        service = self.__dict__.get("_reader_service")
+        return service.interactive_tts_pending if service is not None else 0
+
+    @_interactive_tts_pending.setter
+    def _interactive_tts_pending(self, value):
+        self._reader_service.interactive_tts_pending = value
+
+    @property
+    def _read_request_sequence(self):
+        return self._reader_service.read_request_sequence
+
+    @_read_request_sequence.setter
+    def _read_request_sequence(self, value):
+        self._reader_service.read_request_sequence = value
+
+    @property
+    def _read_lock(self):
+        return self._reader_service.read_lock
 
     @property
     def _prepare_lock(self):
@@ -1326,87 +1353,7 @@ class FusionReaderV2:
         self._lifecycle_service.reset_prefetch_queue(stale_future)
 
     def read_current(self, play: bool = True) -> dict:
-        document = self.session.document
-        text = self.session.current_chunk()
-        if not text:
-            return {**self.session.status(), "ok": False, "error": "no_current_chunk"}
-        generation = self._document_generation
-        doc_id = str(document.doc_id if document else "")
-        index = self.session.cursor
-        voice = self.voice.voice
-        language = self.voice.language
-        with self._read_lock:
-            self._read_request_sequence += 1
-            request_id = self._read_request_sequence
-        started = time.perf_counter()
-        cached_before = bool(self.cache.get(text, voice, language))
-        with self._tts_gate:
-            self._interactive_tts_pending += 1
-            self._tts_gate.notify_all()
-        try:
-            artifact = self._artifact_for_index(generation, index, text, voice, language)
-        finally:
-            with self._tts_gate:
-                self._interactive_tts_pending -= 1
-                self._tts_gate.notify_all()
-        ready_ms = int((time.perf_counter() - started) * 1000)
-        current = self.session.document
-        stale = (
-            generation != self._document_generation
-            or not current
-            or current.doc_id != doc_id
-            or self.session.cursor != index
-            or self.session.current_chunk() != text
-            or self.voice.voice != voice
-            or self.voice.language != language
-        )
-        if stale:
-            return {
-                **self.session.status(),
-                "ok": False,
-                "stale": True,
-                "cancelled": True,
-                "detail": "audio_identity_changed",
-                "error": "Lectura cancelada porque cambió el documento, el bloque o la voz.",
-                "document_generation": generation,
-                "requested_doc_id": doc_id,
-                "requested_chunk_index": index,
-                "read_request_id": request_id,
-                "ready_ms": ready_ms,
-                "audio_state": "cancelled",
-            }
-        if play and artifact.ok:
-            self._play(artifact.path)
-        self.prefetch_next()
-        status = self.session.status()
-        out = {
-            **status,
-            "ok": artifact.ok,
-            "audio": str(artifact.path or ""),
-            "cached": artifact.cached,
-            "detail": artifact.detail,
-            "provider": artifact.provider,
-            "synthesis_ms": artifact.duration_ms,
-            "ready_ms": ready_ms,
-            "queue_wait_ms": max(0, ready_ms - int(artifact.duration_ms or 0)),
-            "generation_ms": int(artifact.duration_ms or 0),
-            "cache_hit": bool(cached_before or artifact.cached),
-            "document_generation": generation,
-            "requested_doc_id": doc_id,
-            "requested_chunk_index": index,
-            "read_request_id": request_id,
-            "voice": voice,
-            "language": language,
-            "audio_state": "ready" if artifact.ok else "error",
-            "audio_ready": bool(artifact.ok),
-            "audio_cached": bool(artifact.cached),
-            "stale": False,
-            "cancelled": False,
-        }
-        if not artifact.ok:
-            out["error"] = self._human_tts_error(artifact.detail, action="read")
-        self._record_voice_metric("read", out, text)
-        return out
+        return self._reader_service.read_current(play)
 
     def next(self) -> dict:
         return self._reader_service.next()
