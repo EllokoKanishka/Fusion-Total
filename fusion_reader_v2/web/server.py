@@ -538,8 +538,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; media-src 'self' blob:; "
+            "default-src 'self'; script-src 'self'; "
+            "style-src 'self'; media-src 'self' blob:; "
             "connect-src 'self'; img-src 'self' data:",
         )
         self.end_headers()

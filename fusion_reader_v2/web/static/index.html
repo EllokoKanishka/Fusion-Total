@@ -23,19 +23,19 @@
         <button id="pdfToWordTool" class="compact-btn" type="button" title="Convertir PDF a DOCX y guardar en Descargas">PDF → Word</button>
         <input id="pdfToWordInput" class="file-input" type="file" accept=".pdf,application/pdf">
       </div>
-      <div class="row" style="margin-top: -2px; margin-bottom: 4px;">
-        <p id="pdfToWordInfo" class="upload-info" style="margin: 0;"></p>
-        <a id="pdfToWordDownload" href="#" class="upload-info" style="display:none; font-weight: bold;" download>Descargar</a>
+      <div class="row pdf-download-row">
+        <p id="pdfToWordInfo" class="upload-info no-margin"></p>
+        <a id="pdfToWordDownload" href="#" class="upload-info download-link is-hidden" download>Descargar</a>
       </div>
       <label class="toggle upload-toggle"><input id="referenceModeToggle" type="checkbox"> Cargar este archivo como consulta</label>
-      <p class="upload-info" style="margin: 2px 0 0;">Por defecto, el archivo entra como documento principal. La consulta se agrega sólo si activás esta opción para esa carga.</p>
+      <p class="upload-info upload-hint">Por defecto, el archivo entra como documento principal. La consulta se agrega sólo si activás esta opción para esa carga.</p>
       <p id="uploadInfo" class="upload-info">Todavía no cargaste ningún texto.</p>
-      <div class="progress-wrap" aria-hidden="true"><div id="importProgress" class="progress-bar"></div></div>
+      <progress id="importProgress" class="progress-native" max="100" value="0" aria-label="Progreso de importación"></progress>
       <button id="prepareBtn" class="compact-btn" type="button">Preparar documento</button>
       <button id="cancelPrepareBtn" class="compact-btn" type="button">Cancelar preparación</button>
-      <button id="clearDocBtn" class="compact-btn danger-btn" type="button" onclick="clearDocument()" style="margin-top:4px">Limpiar documento</button>
+      <button id="clearDocBtn" class="compact-btn danger-btn clear-document-btn" type="button">Limpiar documento</button>
       <p id="prepareInfo" class="upload-info">Audio sin preparar.</p>
-      <div class="progress-wrap" aria-hidden="true"><div id="prepareProgress" class="progress-bar"></div></div>
+      <progress id="prepareProgress" class="progress-native" max="100" value="0" aria-label="Progreso de preparación"></progress>
       <details class="audio-export-panel" open>
         <summary>Exportar audio</summary>
         <div class="audio-export-grid">
@@ -57,7 +57,7 @@
             <button id="audioExportCancelBtn" class="compact-btn" type="button">Cancelar</button>
           </div>
           <p id="audioExportInfo" class="upload-info">Sin exportación de audio activa.</p>
-          <a id="audioExportDownload" href="#" class="upload-info" style="display:none; font-weight: bold;" download>Descargar WAV</a>
+          <a id="audioExportDownload" href="#" class="upload-info download-link is-hidden" download>Descargar WAV</a>
         </div>
       </details>
       <details class="notes-panel" open>

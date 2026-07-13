@@ -778,3 +778,12 @@ textarea {
     white-space: normal;
   }
 }
+
+.pdf-download-row { margin-top: -2px; margin-bottom: 4px; }
+.no-margin { margin: 0; }
+.download-link { font-weight: bold; }
+.is-hidden { display: none; }
+.upload-hint { margin: 2px 0 0; }
+.clear-document-btn { margin-top: 4px; }
+.progress-native { width: 100%; height: 8px; accent-color: var(--accent-2); }
+.pdf-cancel-link { margin-left: 8px; font-size: .8em; color: var(--danger); text-decoration: none; }

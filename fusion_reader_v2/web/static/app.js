@@ -330,12 +330,12 @@ function speakLocal(text, onDone) {
 
 function setImportProgress(percent) {
   const value = Math.max(0, Math.min(100, Number(percent || 0)));
-  els.importProgress.style.width = `${value}%`;
+  els.importProgress.value = value;
 }
 
 function setPrepareProgress(percent) {
   const value = Math.max(0, Math.min(100, Number(percent || 0)));
-  els.prepareProgress.style.width = `${value}%`;
+  els.prepareProgress.value = value;
 }
 
 function renderPrepareStatus(prepare) {
@@ -384,10 +384,10 @@ function renderAudioExportStatus(item) {
   }
   if (data.download_url && state === 'done') {
     els.audioExportDownload.href = data.download_url;
-    els.audioExportDownload.style.display = 'inline';
+    els.audioExportDownload.classList.remove('is-hidden');
   } else {
     els.audioExportDownload.removeAttribute('href');
-    els.audioExportDownload.style.display = 'none';
+    els.audioExportDownload.classList.add('is-hidden');
   }
   if ((state === 'running' || state === 'queued' || state === 'canceling') && data.job_id && audioExportPollingJobId !== data.job_id) {
     audioExportPollingJobId = data.job_id;
@@ -494,7 +494,7 @@ function renderVoices(data) {
       opt.value = v;
       opt.textContent = `● ${voiceLabel(v)}`;
       opt.title = v;
-      opt.style.color = voiceColor(v);
+      opt.dataset.voiceColor = voiceColor(v);
       if (v === data.current) opt.selected = true;
       g.appendChild(opt);
     });
@@ -1396,12 +1396,12 @@ function canConvertPdf(file) {
   if (!file) return;
   if (!canConvertPdf(file)) {
     els.pdfToWordInfo.textContent = `${file.name}: solo PDF.`;
-    els.pdfToWordDownload.style.display = 'none';
+    els.pdfToWordDownload.classList.add('is-hidden');
     log('La herramienta PDF → Word solo acepta archivos PDF.');
     return;
   }
   els.pdfToWordInfo.textContent = 'Subiendo...';
-  els.pdfToWordDownload.style.display = 'none';
+  els.pdfToWordDownload.classList.add('is-hidden');
   log('Iniciando conversión de PDF...');
 
   const form = new FormData();
@@ -1431,7 +1431,7 @@ function canConvertPdf(file) {
         els.pdfToWordInfo.textContent = `Listo: guardado en Descargas. ${s.filename}.${warningText}`.trim();
         els.pdfToWordDownload.href = s.download_url;
         els.pdfToWordDownload.textContent = 'Descargar';
-        els.pdfToWordDownload.style.display = 'inline';
+        els.pdfToWordDownload.classList.remove('is-hidden');
         log(`Conversión finalizada: ${s.filename}`);
         break;
       } else if (s.state === 'error') {
@@ -1449,10 +1449,7 @@ function canConvertPdf(file) {
           cancelBtn.id = 'pdfCancelBtn';
           cancelBtn.href = '#';
           cancelBtn.textContent = ' [Cancelar]';
-          cancelBtn.style.marginLeft = '8px';
-          cancelBtn.style.fontSize = '0.8em';
-          cancelBtn.style.color = 'var(--danger)';
-          cancelBtn.style.textDecoration = 'none';
+          cancelBtn.className = 'pdf-cancel-link';
           cancelBtn.onclick = async (e) => {
             e.preventDefault();
             cancelBtn.textContent = ' [Cancelando...]';
@@ -1468,7 +1465,7 @@ function canConvertPdf(file) {
   } catch (err) {
     const msg = String(err && err.message || 'conversion_failed');
     els.pdfToWordInfo.textContent = `Error: ${msg}`;
-    els.pdfToWordDownload.style.display = 'none';
+    els.pdfToWordDownload.classList.add('is-hidden');
     log(`No pude convertir el PDF: ${msg}`);
   }
 }
@@ -2261,6 +2258,7 @@ els.cancelPrepareBtn.addEventListener('click', cancelPrepare);
 els.audioExportMode.addEventListener('change', syncAudioExportInputs);
 els.audioExportBtn.addEventListener('click', startAudioExport);
 els.audioExportCancelBtn.addEventListener('click', cancelAudioExport);
+els.clearDocBtn.addEventListener('click', clearDocument);
 els.saveNoteBtn.addEventListener('click', saveCurrentNote);
 els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));
 els.sendChatBtn.addEventListener('click', sendChat);
