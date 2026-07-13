@@ -755,7 +755,7 @@ class FusionReaderV2Tests(unittest.TestCase):
     def test_dialogue_microphone_capture_diagnostics_are_exposed(self):
         root = Path(__file__).resolve().parents[1]
         server = web_source()
-        service = (root / "fusion_reader_v2" / "service.py").read_text(encoding="utf-8")
+        service = (root / "fusion_reader_v2" / "facade.py").read_text(encoding="utf-8")
         for token in (
             "dialoguePcmStats",
             "mic_rms",
