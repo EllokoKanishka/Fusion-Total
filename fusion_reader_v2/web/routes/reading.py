@@ -111,12 +111,6 @@ def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -
     if path == "/api/jump":
         responder._json(200, responder.app.jump(int(payload.get("index", 1))))
         return True
-    if path == "/api/prepare/start":
-        responder._json(200, responder.app.prepare_document(start=str(payload.get("start") or "cursor")))
-        return True
-    if path == "/api/prepare/cancel":
-        responder._json(200, responder.app.cancel_prepare())
-        return True
     return False
 
 

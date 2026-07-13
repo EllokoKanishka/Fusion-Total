@@ -5,6 +5,7 @@ import unittest
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
+from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
@@ -44,6 +45,15 @@ class App:
 
     def set_profile(self, mode: str) -> dict:
         return {"ok": True, "mode": mode}
+
+    def prepare_status(self) -> dict:
+        return {"ok": True, "state": "idle"}
+
+    def prepare_document(self, start: str) -> dict:
+        return {"ok": True, "start": start}
+
+    def cancel_prepare(self) -> dict:
+        return {"ok": True, "state": "cancelled"}
 
 
 class DomainResponder(Responder):
@@ -91,6 +101,15 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["text"], "nota")
         self.assertTrue(handle_dialogue_post(responder, "/api/profile", {"mode": "bohemia"}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["mode"], "bohemia")
+
+    def test_preparation_module_owns_status_start_and_cancel(self) -> None:
+        responder = DomainResponder()
+        self.assertTrue(handle_preparation_get(responder, "/api/prepare/status"))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["state"], "idle")
+        self.assertTrue(handle_preparation_post(responder, "/api/prepare/start", {"start": "beginning"}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["start"], "beginning")
+        self.assertTrue(handle_preparation_post(responder, "/api/prepare/cancel", {}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["state"], "cancelled")
 
 
 if __name__ == "__main__":

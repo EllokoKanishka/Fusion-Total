@@ -29,6 +29,7 @@ from fusion_reader_v2.web.routes.documents import (
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
+from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
@@ -351,8 +352,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if handle_audio_get(self, path, self.path):
             return
-        if path == "/api/prepare/status":
-            self._json(200, self.app.prepare_status())
+        if handle_preparation_get(self, path):
             return
         if path == "/api/references":
             self._json(200, self.app.list_reference_documents())
@@ -575,6 +575,8 @@ class Handler(BaseHTTPRequestHandler):
             if handle_audio_post(self, path, payload):
                 return
             if handle_dialogue_post(self, path, payload):
+                return
+            if handle_preparation_post(self, path, payload):
                 return
             if handle_reading_post(self, path, payload):
                 return

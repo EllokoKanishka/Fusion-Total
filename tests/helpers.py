@@ -277,6 +277,7 @@ def web_source() -> str:
         Path("fusion_reader_v2/web/routes/audio.py"),
         Path("fusion_reader_v2/web/routes/dialogue.py"),
         Path("fusion_reader_v2/web/routes/notes.py"),
+        Path("fusion_reader_v2/web/routes/preparation.py"),
         Path("fusion_reader_v2/web/routes/reading.py"),
         Path("fusion_reader_v2/web/routes/tools.py"),
         Path("fusion_reader_v2/web/static/index.html"),
