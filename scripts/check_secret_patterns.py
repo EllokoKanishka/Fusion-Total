@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fusion_reader_v2.owned_subprocess import run_owned  # noqa: E402
+
 PATTERNS = {
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "GitHub token": re.compile(r"gh[opurs]_[A-Za-z0-9]{30,}"),
@@ -15,11 +19,11 @@ PATTERNS = {
 
 
 def main() -> None:
-    tracked = subprocess.run(
+    tracked = run_owned(
         ["git", "ls-files", "-z"],
         cwd=ROOT,
         check=True,
-        stdout=subprocess.PIPE,
+        timeout=30.0,
     ).stdout.split(b"\0")
     findings: list[str] = []
     for raw_path in tracked:

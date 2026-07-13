@@ -86,7 +86,7 @@ class FusionCtlTests(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             settings = self._settings(root)
-            with mock.patch.object(fusionctl.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+            with mock.patch.object(fusionctl, "run_owned", return_value=mock.Mock(returncode=0)) as run:
                 self.assertEqual(fusionctl.command_start(settings, mock.Mock()), 0)
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_PYTHON"], sys.executable)
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_RUNTIME_ROOT"], str(settings.paths.runtime))

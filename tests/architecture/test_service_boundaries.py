@@ -70,6 +70,30 @@ class ServiceBoundaryTests(unittest.TestCase):
         self.assertIs(package_class, facade_class)
         self.assertIs(compatibility_class, facade_class)
 
+    def test_active_python_paths_use_owned_subprocess_helper(self) -> None:
+        allowed = ROOT / "fusion_reader_v2" / "owned_subprocess.py"
+        paths = list((ROOT / "fusion_reader_v2").rglob("*.py"))
+        paths.extend(
+            ROOT / relative
+            for relative in (
+                "scripts/check_secret_patterns.py",
+                "scripts/fusion_reader_v2_stt_server.py",
+                "scripts/fusionctl.py",
+            )
+        )
+        failures: list[str] = []
+        for path in paths:
+            if path == allowed:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess":
+                    if node.func.attr in {"run", "Popen", "call", "check_call", "check_output"}:
+                        failures.append(f"{path.relative_to(ROOT)}:{node.lineno} uses subprocess.{node.func.attr}")
+        self.assertEqual(failures, [])
+
 
 if __name__ == "__main__":
     unittest.main()

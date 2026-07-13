@@ -7,14 +7,15 @@ import os
 import shutil
 import signal
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from subprocess import TimeoutExpired
 
 from fusion_reader_v2.config import Settings, create_settings
+from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.tts import AudioCache
 from fusion_reader_v2.version import __version__
 
@@ -56,7 +57,7 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
             "FUSION_READER_LOG_DIR": str(settings.paths.logs),
         }
     )
-    result = subprocess.run([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)
+    result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)
     return int(result.returncode)
 
 
@@ -128,7 +129,7 @@ def _port_open(port: int) -> bool:
 
 def _git_commit(repository: Path) -> str:
     try:
-        result = subprocess.run(
+        result = run_owned(
             ["git", "rev-parse", "--short", "HEAD"],
             cwd=repository,
             capture_output=True,
@@ -212,7 +213,7 @@ def _run_script(settings: Settings, relative: str, timeout: float) -> int:
     if not script.is_file():
         _json({"ok": False, "error": "script_missing", "path": str(script)})
         return 1
-    return subprocess.run([str(script)], cwd=settings.paths.repository, timeout=timeout, check=False).returncode
+    return run_owned([str(script)], cwd=settings.paths.repository, timeout=timeout, check=False).returncode
 
 
 def command_smoke(settings: Settings, _args: argparse.Namespace) -> int:
@@ -220,7 +221,7 @@ def command_smoke(settings: Settings, _args: argparse.Namespace) -> int:
 
 
 def command_test(settings: Settings, _args: argparse.Namespace) -> int:
-    return subprocess.run(
+    return run_owned(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
         cwd=settings.paths.repository,
         timeout=600.0,
@@ -300,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = create_settings()
         return int(args.handler(settings, args))
-    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (OSError, RuntimeError, ValueError, TimeoutExpired) as exc:
         _json({"ok": False, "error": type(exc).__name__, "detail": str(exc)})
         return 1
 

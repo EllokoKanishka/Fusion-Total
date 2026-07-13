@@ -3,12 +3,19 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import tempfile
 import time
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
 from urllib.parse import parse_qs, urlparse
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fusion_reader_v2.owned_subprocess import run_owned  # noqa: E402
 
 
 HOST = os.environ.get("FUSION_READER_STT_HOST", "127.0.0.1")
@@ -72,7 +79,7 @@ def convert_to_wav(source: Path, target: Path) -> tuple[bool, str, int]:
         "wav",
         str(target),
     ]
-    proc = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=30)
+    proc = run_owned(cmd, check=False, text=True, timeout=30)
     elapsed = int((time.perf_counter() - started) * 1000)
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "ffmpeg_failed").strip(), elapsed
