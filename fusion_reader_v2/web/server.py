@@ -714,11 +714,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", INDEX_HTML.encode("utf-8"))
             return
         if path.startswith("/static/"):
-            filename = Path(unquote(path.removeprefix("/static/"))).name
+            filename = unquote(path.removeprefix("/static/"))
             allowed = {
                 "styles.css": "text/css; charset=utf-8",
                 "app.js": "text/javascript; charset=utf-8",
                 "busy_controls.js": "text/javascript; charset=utf-8",
+                "js/bootstrap.mjs": "text/javascript; charset=utf-8",
+                "js/api.mjs": "text/javascript; charset=utf-8",
+                "js/audio.mjs": "text/javascript; charset=utf-8",
             }
             content_type = allowed.get(filename)
             asset = STATIC_ROOT / filename
@@ -902,9 +905,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path.startswith("/static/"):
-            filename = Path(unquote(path.removeprefix("/static/"))).name
+            filename = unquote(path.removeprefix("/static/"))
             asset = STATIC_ROOT / filename
-            if filename not in {"styles.css", "app.js", "busy_controls.js"} or not asset.is_file():
+            if (
+                filename
+                not in {
+                    "styles.css",
+                    "app.js",
+                    "busy_controls.js",
+                    "js/bootstrap.mjs",
+                    "js/api.mjs",
+                    "js/audio.mjs",
+                }
+                or not asset.is_file()
+            ):
                 self.send_response(404)
                 self.end_headers()
                 return

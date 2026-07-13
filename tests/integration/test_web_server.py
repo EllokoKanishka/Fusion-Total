@@ -143,7 +143,8 @@ class WebServerIntegrationTests(unittest.TestCase):
             for path, marker in (
                 ("/", b"Fusion Reader v2"),
                 ("/static/styles.css", b"--accent"),
-                ("/static/app.js", b"readCurrent"),
+                ("/static/app.js", b"bootstrap.mjs"),
+                ("/static/js/bootstrap.mjs", b"readCurrent"),
                 ("/health/live", b'"status": "live"'),
                 ("/health/ready", b'"reader_ready": true'),
             ):

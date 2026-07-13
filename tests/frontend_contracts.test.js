@@ -4,10 +4,12 @@ const path = require('node:path');
 const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
-const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.js'), 'utf8');
+const entry = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.js'), 'utf8');
+const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/bootstrap.mjs'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
+  assert.match(entry, /import\('\.\/js\/bootstrap\.mjs'\)/);
   assert.match(app, /new AbortController\(\)/);
   assert.match(app, /activeReadController\.abort\(\)/);
   assert.match(app, /audioExportPollingJobId !== data\.job_id/);

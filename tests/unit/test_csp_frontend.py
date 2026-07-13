@@ -9,7 +9,13 @@ class CSPFrontendTests(unittest.TestCase):
     def test_static_ui_has_no_inline_script_style_or_event_handlers(self) -> None:
         root = Path(__file__).resolve().parents[2]
         html = (root / "fusion_reader_v2/web/static/index.html").read_text(encoding="utf-8")
-        javascript = (root / "fusion_reader_v2/web/static/app.js").read_text(encoding="utf-8")
+        javascript = (
+            "\n".join(path.read_text(encoding="utf-8") for path in (root / "fusion_reader_v2/web/static").rglob("*.js"))
+            + "\n"
+            + "\n".join(
+                path.read_text(encoding="utf-8") for path in (root / "fusion_reader_v2/web/static").rglob("*.mjs")
+            )
+        )
         self.assertNotIn("unsafe-inline", html)
         self.assertNotRegex(html, r"\sstyle\s*=")
         self.assertNotRegex(html, r"\son(?:click|change|input|load|error|keydown)\s*=")
