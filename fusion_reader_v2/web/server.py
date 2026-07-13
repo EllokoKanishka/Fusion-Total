@@ -37,20 +37,17 @@ STATIC_ROOT = Path(__file__).resolve().parent / "static"
 PORT = 8010
 ALLOWED_LIBRARY_SUFFIXES = {".txt", ".md"}
 UPLOAD_TEMP_SUFFIXES = {
-    suffix: suffix
-    for suffix in (
-        ".bin",
-        ".doc",
-        ".docx",
-        ".html",
-        ".md",
-        ".odt",
-        ".pdf",
-        ".rtf",
-        ".txt",
-        ".wav",
-        ".webm",
-    )
+    ".bin": ".bin",
+    ".doc": ".doc",
+    ".docx": ".docx",
+    ".html": ".html",
+    ".md": ".md",
+    ".odt": ".odt",
+    ".pdf": ".pdf",
+    ".rtf": ".rtf",
+    ".txt": ".txt",
+    ".wav": ".wav",
+    ".webm": ".webm",
 }
 # Compatibility sentinel: application state is owned by each WebContext.
 APP: FusionReaderV2 | None = None
