@@ -34,6 +34,7 @@ from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownCo
 from .services.notes import NotesService
 from .services.research import ResearchService
 from .services.reader import ReaderService
+from .services.preparation import PreparationService, new_prepare_status
 from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
@@ -112,11 +113,6 @@ class FusionReaderV2:
         self._document_generation = 0
         self._read_request_sequence = 0
         self._read_lock = threading.Lock()
-        self._prepare_lock = threading.Lock()
-        self._prepare_cancel = threading.Event()
-        self._prepare_thread: threading.Thread | None = None
-        self._prepare_generation = 0
-        self._prepare_status: dict = self._new_prepare_status()
         # Canonical coordination order for lifecycle-sensitive background work:
         # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
         # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
@@ -210,6 +206,18 @@ class FusionReaderV2:
             max_items=job_max_items,
             ttl_seconds=job_ttl_seconds,
         )
+        self._preparation_service = PreparationService(
+            session=self.session,
+            voice=self.voice,
+            cache=self.cache,
+            tts=self.tts,
+            background_condition=self._background_work_condition,
+            background_is_open_locked=lambda: self._background_work_is_open_locked(),
+            document_generation=lambda: self._document_generation,
+            before_registration=lambda: self._before_prepare_registration(),
+            synthesize=lambda text, voice, language: self._synthesize_cached_with_settings(text, voice, language),
+            human_error=lambda detail: self._human_tts_error(detail, action="prepare"),
+        )
         self._audio_service = AudioService(
             tts=self.tts,
             voice=self.voice,
@@ -268,6 +276,42 @@ class FusionReaderV2:
     @_audio_export_latest_job_id.setter
     def _audio_export_latest_job_id(self, value):
         self._audio_export_service.latest_job_id = value
+
+    @property
+    def _prepare_lock(self):
+        return self._preparation_service.lock
+
+    @property
+    def _prepare_cancel(self):
+        return self._preparation_service.cancel_event
+
+    @_prepare_cancel.setter
+    def _prepare_cancel(self, value):
+        self._preparation_service.cancel_event = value
+
+    @property
+    def _prepare_thread(self):
+        return self._preparation_service.thread
+
+    @_prepare_thread.setter
+    def _prepare_thread(self, value):
+        self._preparation_service.thread = value
+
+    @property
+    def _prepare_generation(self):
+        return self._preparation_service.generation
+
+    @_prepare_generation.setter
+    def _prepare_generation(self, value):
+        self._preparation_service.generation = value
+
+    @property
+    def _prepare_status(self):
+        return self._preparation_service.state
+
+    @_prepare_status.setter
+    def _prepare_status(self, value):
+        self._preparation_service.state = value
 
     def _set_background_work_state_locked(self, state: str) -> None:
         self._lifecycle_service.set_state_locked(state)
@@ -588,22 +632,7 @@ class FusionReaderV2:
         return record
 
     def _new_prepare_status(self) -> dict:
-        return {
-            "ok": True,
-            "status": "idle",
-            "doc_id": "",
-            "title": "",
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-            "cached": 0,
-            "generated": 0,
-            "failed": 0,
-            "message": "Sin preparación activa.",
-            "started_ts": 0.0,
-            "updated_ts": 0.0,
-            "done_ts": 0.0,
-        }
+        return new_prepare_status()
 
     def _new_audio_export_job(self, snapshot: AudioExportSnapshot) -> AudioExportJob:
         return self._audio_export_service.new_job(snapshot)
@@ -1295,55 +1324,13 @@ class FusionReaderV2:
         return self._reader_service.jump(one_based_index)
 
     def prepare_document(self, start: str = "cursor") -> dict:
-        document = self.session.document
-        if not document or not document.chunks:
-            return {"ok": False, "error": "no_document_loaded"}
-        self._before_prepare_registration()
-        with self._background_work_condition:
-            if not self._background_work_is_open_locked():
-                return {"ok": False, "error": "service_shutting_down"}
-            with self._prepare_lock:
-                if not self._background_work_is_open_locked():
-                    return {"ok": False, "error": "service_shutting_down"}
-                if self._prepare_thread and self._prepare_thread.is_alive():
-                    return dict(self._prepare_status)
-                cancel_event = threading.Event()
-                self._prepare_cancel = cancel_event
-                self._prepare_generation += 1
-                generation = self._prepare_generation
-                now = time.time()
-                self._prepare_status = {
-                    **self._new_prepare_status(),
-                    "status": "running",
-                    "doc_id": document.doc_id,
-                    "document_generation": self._document_generation,
-                    "title": document.title,
-                    "total": len(document.chunks),
-                    "message": "Preparando audio del documento...",
-                    "started_ts": now,
-                    "updated_ts": now,
-                }
-                self._prepare_thread = threading.Thread(
-                    target=self._prepare_worker,
-                    args=(document.doc_id, start, generation, self._document_generation, cancel_event),
-                    name="fusion-reader-v2-prepare",
-                    daemon=True,
-                )
-                self._prepare_thread.start()
-                return dict(self._prepare_status)
+        return self._preparation_service.start(start)
 
     def cancel_prepare(self) -> dict:
-        self._prepare_cancel.set()
-        with self._prepare_lock:
-            if self._prepare_status.get("status") == "running":
-                self._prepare_status["status"] = "canceling"
-                self._prepare_status["message"] = "Cancelando preparación..."
-                self._prepare_status["updated_ts"] = time.time()
-            return dict(self._prepare_status)
+        return self._preparation_service.cancel()
 
     def prepare_status(self) -> dict:
-        with self._prepare_lock:
-            return dict(self._prepare_status)
+        return self._preparation_service.status()
 
     def _prepare_worker(
         self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event
@@ -1451,13 +1438,7 @@ class FusionReaderV2:
         )
 
     def _reset_prepare_for_new_document(self) -> None:
-        old_cancel = self._prepare_cancel
-        old_cancel.set()
-        with self._prepare_lock:
-            self._prepare_generation += 1
-            self._prepare_status = self._new_prepare_status()
-            self._prepare_cancel = threading.Event()
-            self._prepare_thread = None
+        self._preparation_service.reset()
 
     def _wait_for_interactive_tts(self, cancel_event: threading.Event | None = None) -> None:
         event = cancel_event or self._prepare_cancel
