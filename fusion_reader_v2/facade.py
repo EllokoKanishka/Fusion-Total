@@ -33,6 +33,7 @@ from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from .services.notes import NotesService
 from .services.research import ResearchService
+from .services.reader import ReaderService
 from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
@@ -218,6 +219,12 @@ class FusionReaderV2:
             clear_prefetch=self._clear_prefetch_queue,
             prepare_status=self.prepare_status,
             cancel_prepare=self.cancel_prepare,
+            status=self.status,
+        )
+        self._reader_service = ReaderService(
+            self.session,
+            persist=self._persist_session_state,
+            prefetch_current=self.prefetch_current,
             status=self.status,
         )
         self._restore_session_state()
@@ -1241,22 +1248,13 @@ class FusionReaderV2:
         return out
 
     def next(self) -> dict:
-        self.session.next_chunk()
-        self._persist_session_state()
-        self.prefetch_current()
-        return self.status()
+        return self._reader_service.next()
 
     def previous(self) -> dict:
-        self.session.previous_chunk()
-        self._persist_session_state()
-        self.prefetch_current()
-        return self.status()
+        return self._reader_service.previous()
 
     def jump(self, one_based_index: int) -> dict:
-        self.session.jump(one_based_index)
-        self._persist_session_state()
-        self.prefetch_current()
-        return self.status()
+        return self._reader_service.jump(one_based_index)
 
     def prepare_document(self, start: str = "cursor") -> dict:
         document = self.session.document
