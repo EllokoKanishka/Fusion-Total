@@ -262,19 +262,20 @@ def resolve_library_path(context: WebContext, book_id: str) -> Path:
     rel = Path(raw)
     if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
         raise ValueError("invalid_book_id")
-    # Resolving before the parent check also blocks symlink escapes.
-    # codeql[py/path-injection]
-    path = (context.library_root / rel).resolve()
-    library_root = context.library_root.resolve()
-    if path != library_root and library_root not in path.parents:
-        raise ValueError("book_outside_library")
-    if path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
+    if rel.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
         raise ValueError("unsupported_book_type")
-    # The resolved path is contained within library_root above.
-    # codeql[py/path-injection]
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError("book_not_found")
-    return path
+    library_root = context.library_root.resolve()
+    if context.library_root.exists():
+        for candidate in context.library_root.rglob("*"):
+            if candidate.relative_to(context.library_root).as_posix() != raw:
+                continue
+            path = candidate.resolve()
+            if path != library_root and library_root not in path.parents:
+                raise ValueError("book_outside_library")
+            if path.is_file():
+                return path
+            break
+    raise FileNotFoundError("book_not_found")
 
 
 def audio_url_for(context: WebContext, path_value: str) -> str:
@@ -569,14 +570,13 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             raise ValueError("missing_file_data")
-        suffix = UPLOAD_TEMP_SUFFIXES.get(Path(safe_filename(filename)).suffix.lower(), ".bin")
         limit = self.settings.limits.upload_max_bytes
-        if suffix.lower() == ".pdf":
+        if Path(safe_filename(filename)).suffix.lower() == ".pdf":
             limit = self.settings.limits.pdf_max_bytes
         if length > limit:
             raise ValueError("upload_too_large")
         self.context.upload_root.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root)
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=".upload", dir=self.context.upload_root)
         path = Path(name)
         remaining = length
         try:

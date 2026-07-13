@@ -63,6 +63,19 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     documents.import_document_bytes("bad.bin", b"\x00\x01")
 
+    def test_byte_import_uses_a_caller_independent_temporary_path(self) -> None:
+        observed: list[Path] = []
+
+        def capture(filename, path, **_kwargs):
+            observed.append(Path(path))
+            return documents.imported(filename, "Texto seguro", "text", "capturado")
+
+        with mock.patch.object(documents, "import_document_path", side_effect=capture):
+            imported = documents.import_document_bytes("../../nombre controlado.txt", b"Texto seguro")
+
+        self.assertEqual(imported.title, "nombre controlado.txt")
+        self.assertEqual(observed[0].name, "document.upload")
+
     def test_pdf_cleanup_ocr_signal_and_heading_matrix(self) -> None:
         marked = documents.mark_pdf_pages("uno\f\f tres", clean=False)
         self.assertIn("[Pagina 1]", marked)

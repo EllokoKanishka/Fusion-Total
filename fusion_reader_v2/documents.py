@@ -26,6 +26,16 @@ PDF_SUFFIXES = {".pdf"}
 DOCX_SUFFIXES = {".docx"}
 ODT_SUFFIXES = {".odt", ".ott"}
 OFFICE_SUFFIXES = {".doc", ".docm", ".dot", ".dotx", ".odt", ".ott", ".sxw", ".pages"}
+OFFICE_TEMP_SUFFIXES = {
+    ".doc": ".doc",
+    ".docm": ".docm",
+    ".dot": ".dot",
+    ".dotx": ".dotx",
+    ".odt": ".odt",
+    ".ott": ".ott",
+    ".pages": ".pages",
+    ".sxw": ".sxw",
+}
 SUPPORTED_SUFFIXES = (
     TEXT_SUFFIXES | HTML_SUFFIXES | RTF_SUFFIXES | PDF_SUFFIXES | DOCX_SUFFIXES | ODT_SUFFIXES | OFFICE_SUFFIXES
 )
@@ -117,9 +127,9 @@ def import_document_bytes(
 ) -> ImportedDocument:
     with tempfile.TemporaryDirectory(prefix="fusion_import_bytes_") as tmp:
         safe_name = safe_filename(filename)
-        path = Path(tmp) / safe_name
-        # The sanitized basename is confined to the owned temporary root.
-        # codeql[py/path-injection]
+        # The original name is metadata only. Keeping it out of the temporary
+        # path makes the filesystem boundary independent from caller input.
+        path = Path(tmp) / "document.upload"
         path.write_bytes(data)
         return import_document_path(safe_name, path, mime=mime, progress=progress)
 
@@ -140,8 +150,6 @@ def import_document_path(
         nonlocal data
         if data is None:
             report_progress(progress, "reading", 0, 0, "Leyendo archivo...")
-            # This public local-file API intentionally reads the exact caller-selected path.
-            # codeql[py/path-injection]
             data = source.read_bytes()
         return data
 
@@ -933,9 +941,9 @@ def office_to_text(filename: str, data: bytes) -> str:
         raise ValueError("libreoffice_not_found")
     with tempfile.TemporaryDirectory(prefix="fusion_office_") as tmp:
         root = Path(tmp)
-        src = root / safe_filename(filename)
-        # The sanitized basename stays in this temporary root.
-        # codeql[py/path-injection]
+        requested_suffix = Path(safe_filename(filename)).suffix.lower()
+        suffix = OFFICE_TEMP_SUFFIXES.get(requested_suffix, ".doc")
+        src = root / f"document{suffix}"
         src.write_bytes(data)
         result = subprocess.run(
             [tool, "--headless", "--convert-to", "txt:Text", "--outdir", str(root), str(src)],
