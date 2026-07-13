@@ -20,14 +20,29 @@ from fusion_reader_v2 import FusionReaderV2, import_document_bytes, import_docum
 from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.observability import configure_logging, get_logger
-from fusion_reader_v2.output_validation import OutputValidationError, stream_file, validate_output_file
 from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.context import WebContext
+from fusion_reader_v2.web.routes.documents import library_items, load_imported_document, resolve_library_path
+from fusion_reader_v2.web.routes.health import handle_health_get
+from fusion_reader_v2.web.jobs import (
+    get_import_job,
+    get_pdf_to_docx_download,
+    import_job_worker,
+    new_import_job,
+    register_pdf_to_docx_download,
+)
+from fusion_reader_v2.web.downloads import (
+    OutputValidationError,
+    audio_url_for,
+    cached_audio_path,
+    stream_file,
+    unique_download_target as unique_download_target,
+    validate_output_file,
+)
 from fusion_reader_v2.web.routing import create_router
 from fusion_reader_v2.pdf_to_docx import (
-    ConversionResult,
     JobStatus,
     convert_pdf_to_docx,
     safe_output_name,
@@ -36,7 +51,6 @@ from fusion_reader_v2.pdf_to_docx import (
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 PORT = 8010
-ALLOWED_LIBRARY_SUFFIXES = {".txt", ".md"}
 UPLOAD_TEMP_SUFFIXES = {
     ".bin": ".bin",
     ".doc": ".doc",
@@ -109,256 +123,6 @@ class FusionHTTPServer(ThreadingHTTPServer):
             app_outcome = self.context.app.shutdown_background_work(timeout=10.0)
             if isinstance(app_outcome, dict) and not app_outcome.get("ok", True):
                 raise RuntimeError("app_shutdown_timeout")
-
-
-def library_items(context: WebContext) -> list[dict]:
-    if not context.library_root.exists():
-        return []
-    items: list[dict] = []
-    for path in sorted(context.library_root.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
-            continue
-        rel = path.relative_to(context.library_root).as_posix()
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace").strip()
-        except Exception:
-            text = ""
-        preview = " ".join(text.split())[:170]
-        items.append(
-            {
-                "id": rel,
-                "title": path.name,
-                "bytes": path.stat().st_size,
-                "preview": preview,
-            }
-        )
-    return items
-
-
-def resolve_library_path(context: WebContext, book_id: str) -> Path:
-    raw = unquote(str(book_id or "")).strip()
-    rel = Path(raw)
-    if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
-        raise ValueError("invalid_book_id")
-    if rel.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
-        raise ValueError("unsupported_book_type")
-    library_root = context.library_root.resolve()
-    if context.library_root.exists():
-        for candidate in context.library_root.rglob("*"):
-            if candidate.relative_to(context.library_root).as_posix() != raw:
-                continue
-            path = candidate.resolve()
-            if path != library_root and library_root not in path.parents:
-                raise ValueError("book_outside_library")
-            if path.is_file():
-                return path
-            break
-    raise FileNotFoundError("book_not_found")
-
-
-def audio_url_for(context: WebContext, path_value: str) -> str:
-    if not path_value:
-        return ""
-    path = Path(path_value).resolve()
-    cache_root = context.app.cache.root.resolve()
-    if path.parent != cache_root or not path.exists():
-        return ""
-    return f"/audio/{path.name}"
-
-
-def cached_audio_path(context: WebContext, url_path: str) -> Path | None:
-    filename = Path(unquote(url_path.removeprefix("/audio/"))).name
-    audio_path = (context.app.cache.root / filename).resolve()
-    cache_root = context.app.cache.root.resolve()
-    if audio_path.parent != cache_root or not audio_path.exists():
-        return None
-    return audio_path
-
-
-def load_imported_document(context: WebContext, imported, role: str = "main") -> dict:
-    context.converted_root.mkdir(parents=True, exist_ok=True)
-    target = context.converted_root / f"{imported.doc_id}.txt"
-    target.write_text(imported.text, encoding="utf-8")
-    raw_target = None
-    if getattr(imported, "raw_text", ""):
-        raw_target = context.converted_root / f"{imported.doc_id}.raw.txt"
-        raw_target.write_text(imported.raw_text, encoding="utf-8")
-    if str(role or "main") == "reference":
-        out = context.app.add_reference_text(
-            imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type
-        )
-    else:
-        out = context.app.load_text(
-            imported.doc_id,
-            imported.title,
-            imported.text,
-            prefetch=False,
-            source_path=str(target),
-            source_type=imported.source_type,
-        )
-    out["role"] = "reference" if str(role or "") == "reference" else "main"
-    out["source_type"] = imported.source_type
-    out["import_detail"] = imported.detail
-    out["converted_text"] = str(target)
-    out["raw_text"] = str(raw_target) if raw_target else ""
-    out["converted_bytes"] = target.stat().st_size
-    return out
-
-
-def new_import_job(
-    context: WebContext,
-    filename: str,
-    mime: str,
-    upload_path: Path,
-    size_bytes: int,
-    role: str = "main",
-) -> dict:
-    job_id = uuid.uuid4().hex[:16]
-    now = time.time()
-    job = {
-        "ok": True,
-        "job_id": job_id,
-        "filename": filename,
-        "mime": mime,
-        "status": "queued",
-        "stage": "queued",
-        "current": 0,
-        "total": 0,
-        "percent": 0,
-        "message": "Documento recibido. Esperando conversión...",
-        "role": "reference" if str(role or "") == "reference" else "main",
-        "size_bytes": size_bytes,
-        "created_ts": now,
-        "updated_ts": now,
-        "result": None,
-        "error": "",
-    }
-    context.import_jobs.add(job_id, job)
-    return dict(job)
-
-
-def prune_import_jobs(context: WebContext) -> int:
-    return context.import_jobs.prune()
-
-
-def update_import_job(context: WebContext, job_id: str, **changes) -> None:
-    def update(job: dict) -> None:
-        job.update(changes)
-        current = int(job.get("current") or 0)
-        total = int(job.get("total") or 0)
-        if total > 0:
-            job["percent"] = max(0, min(100, int(current * 100 / total)))
-        job["updated_ts"] = time.time()
-
-    context.import_jobs.update(job_id, update)
-
-
-def import_progress_for(context: WebContext, job_id: str):
-    def progress(stage: str, current: int = 0, total: int = 0, message: str = "") -> None:
-        update_import_job(
-            context,
-            job_id,
-            status="running",
-            stage=stage,
-            current=int(current or 0),
-            total=int(total or 0),
-            message=message or stage,
-        )
-
-    return progress
-
-
-def import_job_worker(
-    context: WebContext,
-    job_id: str,
-    filename: str,
-    upload_path: Path,
-    mime: str,
-    role: str = "main",
-) -> None:
-    update_import_job(context, job_id, status="running", stage="starting", message="Preparando conversión...")
-    try:
-        imported = import_document_path(filename, upload_path, mime=mime, progress=import_progress_for(context, job_id))
-        update_import_job(
-            context,
-            job_id,
-            status="running",
-            stage="loading",
-            current=0,
-            total=0,
-            message="Cargando texto convertido en el lector...",
-        )
-        result = load_imported_document(context, imported, role=role)
-        update_import_job(
-            context,
-            job_id,
-            status="done",
-            stage="done",
-            current=1,
-            total=1,
-            percent=100,
-            message=f"{filename} {'agregado como consulta' if result.get('role') == 'reference' else 'cargado'}. {result.get('total') or 0} bloques listos.",
-            result=result,
-        )
-    except Exception as exc:
-        update_import_job(
-            context,
-            job_id,
-            status="error",
-            stage="error",
-            message="No pude convertir el documento.",
-            error=type(exc).__name__,
-        )
-    finally:
-        upload_path.unlink(missing_ok=True)
-
-
-def get_import_job(context: WebContext, job_id: str) -> dict | None:
-    job = context.import_jobs.get(job_id)
-    return dict(job) if job else None
-
-
-def prune_pdf_to_docx(context: WebContext) -> int:
-    return context.pdf_downloads.prune()
-
-
-def register_pdf_to_docx_download(
-    context: WebContext,
-    saved_path: Path,
-    filename: str,
-    result: ConversionResult,
-) -> dict:
-    job_id = uuid.uuid4().hex[:16]
-    item = {
-        "id": job_id,
-        "path": str(saved_path),
-        "filename": filename,
-        "created_ts": time.time(),
-        "pages": result.pages,
-        "warnings": list(result.warnings),
-    }
-    context.pdf_downloads.add(job_id, item)
-    return dict(item)
-
-
-def get_pdf_to_docx_download(context: WebContext, job_id: str) -> dict | None:
-    item = context.pdf_downloads.get(job_id)
-    return dict(item) if item else None
-
-
-def unique_download_target(context: WebContext, filename: str) -> Path:
-    downloads_dir = context.settings.paths.downloads
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-    candidate = downloads_dir / filename
-    if not candidate.exists():
-        return candidate
-    stem = candidate.stem
-    suffix = candidate.suffix or ".docx"
-    for index in range(2, 1000):
-        alt = downloads_dir / f"{stem}_{index}{suffix}"
-        if not alt.exists():
-            return alt
-    raise RuntimeError("no_safe_output_slot")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -593,33 +357,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, content_type, asset.read_bytes())
             return
-        if path == "/health/live":
-            self._json(200, {"ok": True, "status": "live", "pid": os.getpid()})
-            return
-        if path == "/health/ready":
-            status = self.context.status()
-            services = status.get("services", {})
-            degradations = [
-                name
-                for name in ("tts", "stt", "chat", "external_research")
-                if not bool((services.get(name) or {}).get("ready", (services.get(name) or {}).get("ok")))
-            ]
-            self._json(
-                200,
-                {
-                    "ok": True,
-                    "status": "ready",
-                    "reader_ready": True,
-                    "services": services,
-                    "degradations": degradations,
-                },
-            )
-            return
-        if path in ("/health", "/api/status"):
-            self._json(200, self.context.status())
-            return
-        if path == "/api/build":
-            self._json(200, {"ok": True, **self.context.runtime_info})
+        if handle_health_get(self, path):
             return
         if path == "/api/library":
             self._json(200, {"ok": True, "items": library_items(self.context)})
