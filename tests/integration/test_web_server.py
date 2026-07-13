@@ -14,14 +14,14 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from fusion_reader_v2.config import create_settings
+from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
 from tests.helpers import SyntheticWavTTSProvider, managed_test_app
 
 
 class WebServerIntegrationTests(unittest.TestCase):
-    def _settings(self, root: Path, *, remote: bool = False):
+    def _settings(self, root: Path):
         settings = create_settings(
             repository_root=Path.cwd(),
             environ={
@@ -32,18 +32,13 @@ class WebServerIntegrationTests(unittest.TestCase):
             },
         )
         settings = replace(settings, ports=replace(settings.ports, api=0))
-        if remote:
-            settings = replace(
-                settings,
-                security=replace(settings.security, allow_remote=True, api_token="test-token"),
-            )
         return settings
 
-    def _start(self, root: Path, *, remote: bool = False, synthetic_tts: bool = False):
+    def _start(self, root: Path, *, synthetic_tts: bool = False):
         tts = SyntheticWavTTSProvider() if synthetic_tts else None
         app_context = managed_test_app(root=root / "app", tts=tts)
         app = app_context.__enter__()
-        server = web_server.create_http_server(app, self._settings(root, remote=remote))
+        server = web_server.create_http_server(app, self._settings(root))
         thread = threading.Thread(target=server.serve_forever, name="fusion-test-http")
         thread.start()
         self.addCleanup(app_context.__exit__, None, None, None)
@@ -155,26 +150,14 @@ class WebServerIntegrationTests(unittest.TestCase):
                     self.assertTrue(response.headers.get("X-Request-ID"))
                     self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
 
-    def test_remote_mode_requires_token_for_mutations(self) -> None:
+    def test_http_server_rejects_non_loopback_security_even_if_settings_are_injected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            server = self._start(Path(tmp), remote=True)
-            url = f"http://127.0.0.1:{server.server_address[1]}/api/load"
-            body = json.dumps({"doc_id": "d", "title": "T", "text": "Texto"}).encode("utf-8")
-            request = urllib.request.Request(
-                url,
-                data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with self.assertRaises(urllib.error.HTTPError) as denied:
-                urllib.request.urlopen(request, timeout=3.0)
-            self.assertEqual(denied.exception.code, 401)
-
-            request.add_header("Authorization", "Bearer test-token")
-            with urllib.request.urlopen(request, timeout=3.0) as response:
-                payload = json.loads(response.read())
-            self.assertTrue(payload["ok"])
-            self.assertEqual(payload["doc_id"], "d")
+            root = Path(tmp)
+            for host in ("0.0.0.0", "192.168.1.20", "reader.lan"):
+                with self.subTest(host=host), managed_test_app(root=root / host.replace("/", "_")) as app:
+                    settings = replace(self._settings(root), security=SecuritySettings(bind_host=host))
+                    with self.assertRaises(ConfigurationError):
+                        web_server.create_http_server(app, settings)
 
     def test_two_servers_keep_application_state_and_jobs_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

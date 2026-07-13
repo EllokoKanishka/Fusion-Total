@@ -178,8 +178,6 @@ class LimitSettings:
 @dataclass(frozen=True)
 class SecuritySettings:
     bind_host: str = "127.0.0.1"
-    allow_remote: bool = False
-    api_token: str = ""
 
     def validate(self) -> None:
         if is_loopback_host(self.bind_host):
@@ -278,8 +276,6 @@ def create_settings(
         ),
         security=SecuritySettings(
             bind_host=env.get("FUSION_READER_BIND_HOST", "127.0.0.1").strip(),
-            allow_remote=_truthy(env.get("FUSION_READER_ALLOW_REMOTE")),
-            api_token=env.get("FUSION_READER_API_TOKEN", ""),
         ),
     )
     return settings.validate()

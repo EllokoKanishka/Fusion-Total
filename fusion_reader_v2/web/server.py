@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import re
@@ -318,16 +317,6 @@ class Handler(BaseHTTPRequestHandler):
             temporary.unlink(missing_ok=True)
             raise
 
-    def _remote_mutation_authorized(self) -> bool:
-        if not self.settings.security.allow_remote:
-            return True
-        expected = self.settings.security.api_token.encode("utf-8")
-        authorization = self.headers.get("Authorization", "")
-        supplied = authorization.removeprefix("Bearer ").strip()
-        if not supplied:
-            supplied = self.headers.get("X-Fusion-Token", "").strip()
-        return bool(supplied) and hmac.compare_digest(supplied.encode("utf-8"), expected)
-
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if ROUTER.resolve("GET", path) is None:
@@ -440,9 +429,6 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if ROUTER.resolve("POST", path) is None:
             self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
-            return
-        if not self._remote_mutation_authorized():
-            self._json(401, {"ok": False, "error": "api_token_required"})
             return
         try:
             if path == "/api/tools/pdf-to-docx":
@@ -607,6 +593,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTPServer:
+    settings.validate()
     configure_logging(settings.paths.logs / "fusion_reader_v2_server.log")
     runtime_info = {
         "app": "fusion_reader_v2",
