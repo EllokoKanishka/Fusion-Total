@@ -4,6 +4,7 @@ import { applyControlState, createBusyControlState } from './busy.mjs';
 import { createDialogueState } from './dialogue.mjs';
 import { collectElements } from './ui.mjs';
 import { createPreparationController } from './preparation.mjs';
+import { createAudioExportController } from './audio_export.mjs';
 
 const els = collectElements();
 const LAB_NOTES_DOC_ID = '__laboratory__';
@@ -15,7 +16,6 @@ let lastRenderedBlockText = '';
 let audioLifecycleSequence = 0;
 let activeReadController = null;
 let activeReadRequest = 0;
-let audioExportPollingJobId = '';
 let voiceCatalogRefreshInFlight = false;
 const busyControls = createBusyControlState(
   (availability, busyLeaseCount) => applyControlState(els, availability, busyLeaseCount),
@@ -27,6 +27,13 @@ const preparation = createPreparationController({ api, elements: els, beginBusyL
 const renderPrepareStatus = preparation.renderStatus;
 const prepareDocument = preparation.start;
 const cancelPrepare = preparation.cancel;
+const audioExport = createAudioExportController({
+  api, elements: els, beginBusyLease, wait, log, getStatus: () => status
+});
+const syncAudioExportInputs = audioExport.syncInputs;
+const renderAudioExportStatus = audioExport.renderStatus;
+const startAudioExport = audioExport.start;
+const cancelAudioExport = audioExport.cancel;
 
 function beginBusyLease() {
   return busyControls.beginBusyLease();
@@ -193,44 +200,6 @@ function setImportProgress(percent) {
 }
 
 
-function syncAudioExportInputs() {
-  const mode = String(els.audioExportMode.value || 'current');
-  els.audioExportBlockWrap.classList.toggle('audio-export-hidden', mode !== 'block');
-  els.audioExportRangeWrap.classList.toggle('audio-export-hidden', mode !== 'range');
-}
-
-function renderAudioExportStatus(item) {
-  const data = item && typeof item === 'object' ? item : {};
-  const state = String(data.state || 'idle');
-  const cached = Number(data.cached_blocks || 0);
-  const generated = Number(data.generated_blocks || 0);
-  if (state === 'running' || state === 'queued' || state === 'canceling') {
-    const detail = data.detail || `Generando bloque ${Number(data.completed_blocks || 0) + 1} de ${Number(data.total_blocks || 0)}...`;
-    els.audioExportInfo.textContent = `${detail} Cacheados: ${cached} · Generados: ${generated}`;
-  } else if (state === 'done') {
-    els.audioExportInfo.textContent = `Listo: guardado en Descargas. Cacheados: ${cached} · Generados: ${generated}`;
-  } else if (state === 'cancelled') {
-    els.audioExportInfo.textContent = 'Exportación cancelada.';
-  } else if (state === 'error') {
-    els.audioExportInfo.textContent = data.error || data.detail || 'No pude exportar audio.';
-  } else {
-    els.audioExportInfo.textContent = 'Sin exportación de audio activa.';
-  }
-  if (data.download_url && state === 'done') {
-    els.audioExportDownload.href = data.download_url;
-    els.audioExportDownload.classList.remove('is-hidden');
-  } else {
-    els.audioExportDownload.removeAttribute('href');
-    els.audioExportDownload.classList.add('is-hidden');
-  }
-  if ((state === 'running' || state === 'queued' || state === 'canceling') && data.job_id && audioExportPollingJobId !== data.job_id) {
-    audioExportPollingJobId = data.job_id;
-    pollAudioExport(data.job_id).catch(() => {});
-  }
-  if (!['running', 'queued', 'canceling'].includes(state) && (!data.job_id || data.job_id === audioExportPollingJobId)) {
-    audioExportPollingJobId = '';
-  }
-}
 
 function voiceLabel(filename) {
   const labels = {
@@ -1342,54 +1311,6 @@ async function readCurrent() {
       activeReadController = null;
     }
     releaseBusy();
-  }
-}
-
-async function pollAudioExport(jobId) {
-  while (jobId && audioExportPollingJobId === jobId) {
-    await wait(1000);
-    const data = await api(`/api/audio-export/status/${jobId}`);
-    renderAudioExportStatus(data);
-    if (!['running', 'queued', 'canceling'].includes(String(data.state || 'idle'))) {
-      return data;
-    }
-  }
-  return null;
-}
-
-async function startAudioExport() {
-  const mode = String(els.audioExportMode.value || 'current');
-  const payload = { mode };
-  if (mode === 'block') {
-    payload.block = Number(els.audioExportBlockInput.value || 0);
-  } else if (mode === 'range') {
-    payload.start = Number(els.audioExportStartInput.value || 0);
-    payload.end = Number(els.audioExportEndInput.value || 0);
-  }
-  const releaseBusy = beginBusyLease();
-  try {
-    const data = await api('/api/audio-export', payload);
-    renderAudioExportStatus(data);
-    log(data.detail || 'Exportación de audio iniciada.');
-  } catch (err) {
-    log(`No pude exportar audio: ${err.message}`);
-  } finally {
-    releaseBusy();
-  }
-}
-
-async function cancelAudioExport() {
-  const jobId = audioExportPollingJobId || String(status && status.audio_export && status.audio_export.job_id || '');
-  if (!jobId) {
-    log('No hay exportación de audio en curso.');
-    return;
-  }
-  try {
-    const data = await api(`/api/audio-export/cancel/${jobId}`, {});
-    renderAudioExportStatus(data);
-    log('Cancelando exportación de audio...');
-  } catch (err) {
-    log(`No pude cancelar la exportación: ${err.message}`);
   }
 }
 

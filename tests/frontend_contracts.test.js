@@ -7,15 +7,16 @@ const root = path.resolve(__dirname, '..');
 const entry = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/bootstrap.mjs'), 'utf8');
 const preparation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/preparation.mjs'), 'utf8');
-const frontend = `${app}\n${preparation}`;
+const audioExport = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/audio_export.mjs'), 'utf8');
+const frontend = `${app}\n${preparation}\n${audioExport}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
   assert.match(entry, /import\('\.\/js\/bootstrap\.mjs'\)/);
   assert.match(app, /new AbortController\(\)/);
   assert.match(app, /activeReadController\.abort\(\)/);
-  assert.match(app, /audioExportPollingJobId !== data\.job_id/);
-  assert.match(app, /audioExportPollingJobId === jobId/);
+  assert.match(audioExport, /pollingJobId !== data\.job_id/);
+  assert.match(audioExport, /pollingJobId === jobId/);
 });
 
 test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions', () => {

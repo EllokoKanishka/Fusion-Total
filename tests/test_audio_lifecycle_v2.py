@@ -371,7 +371,7 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
             text.index("async function changeVoice()") : text.index("async function ensureVoiceCatalog()")
         ]
         self.assertIn("resetAudioLifecycle", change_voice)
-        read = text[text.index("async function readCurrent()") : text.index("async function pollAudioExport(")]
+        read = text[text.index("async function readCurrent()") : text.index("async function readNextWhenAudioEnds()")]
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)
         self.assertIn('_result(409 if result.get("stale") else 200, result)', text)
@@ -414,18 +414,13 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
             ),
             "readCurrent()": (
                 "async function readCurrent()",
-                "async function pollAudioExport(",
+                "async function readNextWhenAudioEnds()",
                 "invalidatePendingRead();",
             ),
             "setReasoningMode(mode)": (
                 "async function setReasoningMode(mode)",
                 "function renderLabFocus(focus)",
                 "const data = await api('/api/reasoning/mode', { mode: targetMode });",
-            ),
-            "startAudioExport()": (
-                "async function startAudioExport()",
-                "async function cancelAudioExport()",
-                "const data = await api('/api/audio-export', payload);",
             ),
             "readNextWhenAudioEnds()": (
                 "async function readNextWhenAudioEnds()",
@@ -463,8 +458,17 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         self.assertIn("started = true;", prepare_block)
         self.assertIn("if (started) await poll();", prepare_block)
         self.assertNotIn("setBusy(", prepare_block)
+        export_module = server_text[server_text.index("export function createAudioExportController") :]
+        export_start = export_module[
+            export_module.index("async function start()") : export_module.index("async function cancel()")
+        ]
+        self.assertIn("const releaseBusy = beginBusyLease();", export_start)
+        self.assertIn("const data = await api('/api/audio-export', payload);", export_start)
+        self.assertIn("releaseBusy();", export_start)
         read_block = server_text[
-            server_text.index("async function readCurrent()") : server_text.index("async function pollAudioExport(")
+            server_text.index("async function readCurrent()") : server_text.index(
+                "async function readNextWhenAudioEnds()"
+            )
         ]
         self.assertIn("if (activeReadController === controller) {", read_block)
         self.assertIn("activeReadController = null;", read_block)

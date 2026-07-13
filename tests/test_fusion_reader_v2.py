@@ -672,7 +672,7 @@ class FusionReaderV2Tests(unittest.TestCase):
     def test_server_read_current_does_not_render_audio_result_as_status(self):
         text = web_source()
         read_start = text.index("async function readCurrent()")
-        read_end = text.index("async function pollAudioExport(", read_start)
+        read_end = text.index("async function readNextWhenAudioEnds()", read_start)
         read_current = text[read_start:read_end]
         self.assertIn("const data = await api('/api/read'", read_current)
         self.assertNotIn("renderStatus(data)", read_current)
@@ -733,23 +733,23 @@ class FusionReaderV2Tests(unittest.TestCase):
         self.assertIn("Documento completo", server)
         self.assertIn("/api/audio-export", server)
         self.assertIn("Descargar WAV", server)
-        self.assertIn("function renderAudioExportStatus", server)
+        self.assertIn("createAudioExportController", server)
         self.assertEqual(server.count("els.audioExportBtn.addEventListener('click', startAudioExport);"), 1)
-        render_start = server.index("function renderAudioExportStatus(item) {")
-        render_end = server.index("function voiceLabel(filename) {", render_start)
+        render_start = server.index("function renderStatus(item) {")
+        render_end = server.index("async function poll(jobId) {", render_start)
         render_body = server[render_start:render_end]
-        self.assertIn("pollAudioExport(data.job_id).catch(() => {});", render_body)
-        self.assertNotIn("startAudioExport(", render_body)
-        poll_start = server.index("async function pollAudioExport(jobId) {")
-        poll_end = server.index("async function startAudioExport() {", poll_start)
+        self.assertIn("poll(data.job_id).catch(() => {});", render_body)
+        self.assertNotIn("start()", render_body)
+        poll_start = server.index("async function poll(jobId) {")
+        poll_end = server.index("async function start() {", poll_start)
         poll_body = server[poll_start:poll_end]
-        self.assertIn("renderAudioExportStatus(data);", poll_body)
-        self.assertNotIn("startAudioExport(", poll_body)
-        start_start = server.index("async function startAudioExport() {")
-        start_end = server.index("async function cancelAudioExport() {", start_start)
+        self.assertIn("renderStatus(data);", poll_body)
+        self.assertNotIn("start()", poll_body)
+        start_start = server.index("async function start() {", poll_start)
+        start_end = server.index("async function cancel() {", start_start)
         start_body = server[start_start:start_end]
         self.assertIn("await api('/api/audio-export', payload);", start_body)
-        self.assertNotIn("pollAudioExport(", start_body)
+        self.assertNotIn("poll(", start_body)
         self.assertNotIn("translateY(-8%);", server)
 
     def test_dialogue_microphone_capture_diagnostics_are_exposed(self):
