@@ -89,9 +89,19 @@ class FusionCtlTests(unittest.TestCase):
             with mock.patch.object(fusionctl.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
                 self.assertEqual(fusionctl.command_start(settings, mock.Mock()), 0)
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_PYTHON"], sys.executable)
+            self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_RUNTIME_ROOT"], str(settings.paths.runtime))
+            self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_RUNTIME_DIR"], str(settings.paths.runtime))
+            self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_LOG_ROOT"], str(settings.paths.logs))
 
         launcher = Path(fusionctl.__file__).with_name("start_fusion_reader_v2.sh").read_text(encoding="utf-8")
         self.assertIn('"$PYTHON_BIN" -m scripts.fusion_reader_v2_server', launcher)
+
+    def test_launcher_prefers_canonical_roots_and_derives_legacy_aliases(self) -> None:
+        launcher = Path(fusionctl.__file__).with_name("start_fusion_reader_v2.sh").read_text(encoding="utf-8")
+        self.assertIn("FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR", launcher)
+        self.assertIn("FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR", launcher)
+        self.assertIn('export FUSION_READER_RUNTIME_DIR="$RUNTIME_DIR"', launcher)
+        self.assertIn('export FUSION_READER_LOG_DIR="$LOG_DIR"', launcher)
 
 
 if __name__ == "__main__":

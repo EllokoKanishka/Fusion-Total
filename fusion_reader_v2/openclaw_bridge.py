@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import environment_copy, environment_value
+from .owned_subprocess import run_owned
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,8 @@ class OpenClawResearchBridge(ExternalResearchBridge):
         agent: str = "",
         timeout_seconds: float | None = None,
         enabled: bool | None = None,
+        retry_attempts: int | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
         self.command = (
             command
@@ -77,7 +80,15 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             if timeout_seconds is not None
             else environment_value("FUSION_READER_OPENCLAW_TIMEOUT", "90") or "90"
         )
-        self.retry_attempts = max(1, int(environment_value("FUSION_READER_OPENCLAW_RETRIES", "2") or "2"))
+        self.retry_attempts = max(
+            1,
+            int(
+                retry_attempts
+                if retry_attempts is not None
+                else environment_value("FUSION_READER_OPENCLAW_RETRIES", "2") or "2"
+            ),
+        )
+        self.environment = dict(environment) if environment is not None else None
         if enabled is None:
             raw_enabled = (environment_value("FUSION_READER_OPENCLAW_ENABLED", "1") or "1").strip().lower()
             self.enabled = raw_enabled not in {"0", "false", "no", "off"}
@@ -115,7 +126,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 query=query,
             )
         prompt = self._build_prompt(query, snapshot or {})
-        env = environment_copy()
+        env = dict(self.environment) if self.environment is not None else environment_copy()
         env["PATH"] = f"{Path.home() / '.openclaw' / 'bin'}:{env.get('PATH', '')}"
         last_error: ExternalResearchResult | None = None
         for attempt in range(1, self.retry_attempts + 1):
@@ -131,7 +142,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 prompt,
             ]
             try:
-                proc = subprocess.run(
+                proc = run_owned(
                     cmd,
                     capture_output=True,
                     text=True,

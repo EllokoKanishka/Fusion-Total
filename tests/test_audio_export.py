@@ -1008,7 +1008,7 @@ class AudioExportTests(unittest.TestCase):
             out = root / "ffmpeg_out.wav"
             created_list_files: list[Path] = []
 
-            def fake_run(cmd, check, stdout, stderr, text):
+            def fake_run(cmd, **_kwargs):
                 list_path = Path(cmd[cmd.index("-i") + 1])
                 created_list_files.append(list_path)
                 out.touch()
@@ -1016,7 +1016,7 @@ class AudioExportTests(unittest.TestCase):
 
             with (
                 mock.patch("fusion_reader_v2.audio_export.shutil.which", return_value="/usr/bin/ffmpeg"),
-                mock.patch("fusion_reader_v2.audio_export.subprocess.run", side_effect=fake_run),
+                mock.patch("fusion_reader_v2.audio_export.run_owned", side_effect=fake_run),
             ):
                 method = concat_wav_files([first, second], out)
             self.assertEqual(method, "ffmpeg")

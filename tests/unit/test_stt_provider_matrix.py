@@ -55,13 +55,13 @@ class STTProviderMatrixTests(unittest.TestCase):
 
             with (
                 mock.patch.object(dialogue.shutil, "which", return_value="/bin/whisper"),
-                mock.patch.object(dialogue.subprocess, "run", side_effect=subprocess.TimeoutExpired("x", 1)),
+                mock.patch.object(dialogue, "run_owned", side_effect=subprocess.TimeoutExpired("x", 1)),
             ):
                 self.assertEqual(provider.transcribe_file(source).detail, "timeout")
             failed = subprocess.CompletedProcess([], 2, stdout="", stderr="failure\nlast")
             with (
                 mock.patch.object(dialogue.shutil, "which", return_value="/bin/whisper"),
-                mock.patch.object(dialogue.subprocess, "run", return_value=failed),
+                mock.patch.object(dialogue, "run_owned", return_value=failed),
             ):
                 self.assertEqual(provider.transcribe_file(source).detail, "last")
 
@@ -81,7 +81,7 @@ class STTProviderMatrixTests(unittest.TestCase):
                 with (
                     self.subTest(text=text),
                     mock.patch.object(dialogue.shutil, "which", return_value="/bin/whisper"),
-                    mock.patch.object(dialogue.subprocess, "run", side_effect=completed(text)),
+                    mock.patch.object(dialogue, "run_owned", side_effect=completed(text)),
                 ):
                     result = provider.transcribe_file(source)
                     self.assertEqual(result.ok, ok)

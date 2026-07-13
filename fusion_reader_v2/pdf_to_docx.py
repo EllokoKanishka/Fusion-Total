@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import zipfile
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Callable
 
 from .config import environment_value
+from .owned_subprocess import OwnedProcessError, run_owned
 
 
 @dataclass(frozen=True)
@@ -231,7 +233,7 @@ def _page_count(pdf_path: Path) -> int:
     tool = shutil.which("pdfinfo")
     if not tool:
         return 0
-    proc = subprocess.run(
+    proc = run_owned(
         [tool, str(pdf_path)],
         check=False,
         capture_output=True,
@@ -296,7 +298,7 @@ def _ocr_pdf_pages(
 
             try:
                 # Render ONLY this page at higher DPI (200 is good balance)
-                subprocess.run(
+                run_owned(
                     [
                         "pdftoppm",
                         "-png",
@@ -329,7 +331,7 @@ def _ocr_pdf_pages(
 
             try:
                 # Use PSM 6 (uniform block of text) for better paragraph preservation
-                proc = subprocess.run(
+                proc = run_owned(
                     ["tesseract", str(img), "stdout", "-l", lang_arg, "--psm", "6"],
                     capture_output=True,
                     text=True,
@@ -348,7 +350,9 @@ def _ocr_pdf_pages(
 
 def _tesseract_langs() -> list[str]:
     try:
-        proc = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, check=True)
+        proc = run_owned(
+            ["tesseract", "--list-langs"], timeout=15, capture_output=True, text=True, check=True
+        )
         return [line.strip() for line in proc.stdout.splitlines() if line.strip() and not line.startswith("List")]
     except (OSError, subprocess.SubprocessError):
         return ["eng"]
@@ -361,7 +365,7 @@ def _preprocess_image(image_path: Path) -> None:
         return
     try:
         # Deskew, normalize, and sharpen
-        subprocess.run(
+        run_owned(
             [convert, str(image_path), "-deskew", "40%", "-normalize", "-sharpen", "0x1", str(image_path)],
             check=True,
             timeout=30,
@@ -379,7 +383,7 @@ def _pdftotext_page(pdf_path: Path, page: int | None) -> str:
     if page is not None:
         cmd.extend(["-f", str(page), "-l", str(page)])
     cmd.extend([str(pdf_path), "-"])
-    proc = subprocess.run(
+    proc = run_owned(
         cmd,
         check=False,
         capture_output=True,
@@ -691,7 +695,7 @@ def is_docling_gpu_available() -> bool:
 
     # Check for CUDA availability inside the venv
     try:
-        proc = subprocess.run(
+        proc = run_owned(
             [str(python_exe), "-c", "import torch; print(torch.cuda.is_available())"],
             capture_output=True,
             text=True,
@@ -738,7 +742,11 @@ def _convert_with_docling_gpu(
                 if status_callback:
                     status_callback(job)
 
-            proc = subprocess.Popen(
+            class JobCancellation:
+                def is_set(self) -> bool:
+                    return bool(job and job.cancelled)
+
+            proc = run_owned(
                 [
                     str(docling_bin),
                     "--device",
@@ -749,27 +757,15 @@ def _convert_with_docling_gpu(
                     "--output",
                     str(tmp_path),
                 ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 text=True,
+                timeout=float(environment_value("FUSION_READER_DOCLING_TIMEOUT", "1200") or "1200"),
+                cancel_event=JobCancellation(),
             )
-
-            # Monitor progress (if possible) or just wait
-            while proc.poll() is None:
-                if job and job.cancelled:
-                    proc.terminate()
-                    if proc.stdout is not None:
-                        proc.stdout.close()
-                    if proc.stderr is not None:
-                        proc.stderr.close()
-                    return ConversionResult(False, error="Cancelado durante Docling GPU.", output_path=str(output_path))
-                time.sleep(1)
-
-            stdout_data, stderr_data = proc.communicate()
-
             if proc.returncode != 0:
-                raise RuntimeError(f"Docling falló (code {proc.returncode}): {stderr_data}")
+                raise RuntimeError(f"Docling falló (code {proc.returncode}): {proc.stderr}")
 
+        except OwnedProcessError as e:
+            return ConversionResult(False, error=str(e), output_path=str(output_path))
         except Exception as e:
             raise RuntimeError(f"Error en fase Docling GPU: {e}")
 
@@ -788,13 +784,21 @@ def _convert_with_docling_gpu(
                 status_callback(job)
 
         helper_script = Path(__file__).parent / "md_to_docx.py"
+        unpublished_docx = tmp_path / "document.docx"
         try:
-            subprocess.run(
-                [str(python_exe), str(helper_script), str(md_file), str(output_path)],
+            run_owned(
+                [str(python_exe), str(helper_script), str(md_file), str(unpublished_docx)],
                 check=True,
                 capture_output=True,
                 timeout=120,
+                cancel_event=JobCancellation(),
             )
+            if not unpublished_docx.is_file():
+                raise RuntimeError("md_to_docx_output_missing")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(unpublished_docx, output_path)
+        except OwnedProcessError as e:
+            return ConversionResult(False, error=str(e), output_path=str(output_path))
         except Exception as e:
             raise RuntimeError(f"Error al convertir Markdown a DOCX: {e}")
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import environment_value
+from .owned_subprocess import run_owned
 
 
 @dataclass(frozen=True)
@@ -76,12 +77,18 @@ def is_hallucinated_transcript(text: str) -> bool:
 class NullSTTProvider(STTProvider):
     name = "null_stt"
 
-    def __init__(self, text: str = "Texto de prueba.") -> None:
+    def __init__(self, text: str = "Texto de prueba.", *, enabled: bool = True) -> None:
         self.text = text
+        self.enabled = enabled
         self.calls: list[tuple[Path, str, str]] = []
 
     def health(self) -> dict:
-        return {"ok": True, "provider": self.name}
+        return {
+            "ok": self.enabled,
+            "provider": self.name,
+            "enabled": self.enabled,
+            "detail": "disabled" if not self.enabled else "",
+        }
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         started = time.perf_counter()
@@ -99,11 +106,12 @@ class WhisperCliSTTProvider(STTProvider):
         command: str | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
+        threads: int | None = None,
     ) -> None:
         self.command = command or environment_value("FUSION_READER_STT_COMMAND") or _default_whisper_command()
         self.model = model or environment_value("FUSION_READER_STT_MODEL") or "small"
         self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_STT_TIMEOUT", "180") or "180")
-        self.threads = int(environment_value("FUSION_READER_STT_THREADS", "8") or "8")
+        self.threads = threads if threads is not None else int(environment_value("FUSION_READER_STT_THREADS", "8") or "8")
 
     def health(self) -> dict:
         resolved = shutil.which(self.command)
@@ -141,7 +149,7 @@ class WhisperCliSTTProvider(STTProvider):
                 str(max(1, self.threads)),
             ]
             try:
-                proc = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=self.timeout_seconds)
+                proc = run_owned(cmd, check=False, text=True, capture_output=True, timeout=self.timeout_seconds)
             except subprocess.TimeoutExpired:
                 return TranscriptResult(
                     False, provider=self.name, detail="timeout", duration_ms=int((time.perf_counter() - started) * 1000)

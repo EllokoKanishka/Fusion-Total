@@ -51,7 +51,7 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             create_settings(environ={"FUSION_READER_ALLTALK_URL": "http://127.0.0.1:7854"})
 
-    def test_remote_bind_requires_opt_in_and_token(self) -> None:
+    def test_remote_bind_is_postponed_and_always_rejected(self) -> None:
         with self.assertRaises(ConfigurationError):
             create_settings(environ={"FUSION_READER_BIND_HOST": "0.0.0.0"})
         with self.assertRaises(ConfigurationError):
@@ -61,14 +61,14 @@ class ConfigurationTests(unittest.TestCase):
                     "FUSION_READER_ALLOW_REMOTE": "1",
                 }
             )
-        settings = create_settings(
-            environ={
-                "FUSION_READER_BIND_HOST": "0.0.0.0",
-                "FUSION_READER_ALLOW_REMOTE": "1",
-                "FUSION_READER_API_TOKEN": "test-token",
-            }
-        )
-        self.assertTrue(settings.security.allow_remote)
+        with self.assertRaises(ConfigurationError):
+            create_settings(
+                environ={
+                    "FUSION_READER_BIND_HOST": "0.0.0.0",
+                    "FUSION_READER_ALLOW_REMOTE": "1",
+                    "FUSION_READER_API_TOKEN": "test-token",
+                }
+            )
 
     def test_path_boundary_rejects_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -45,6 +45,17 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
         return 1
     environment = dict(os.environ)
     environment.setdefault("FUSION_READER_PYTHON", sys.executable)
+    environment.update(
+        {
+            "FUSION_READER_RUNTIME_ROOT": str(settings.paths.runtime),
+            "FUSION_READER_RUNTIME_DIR": str(settings.paths.runtime),
+            "FUSION_READER_LIBRARY_ROOT": str(settings.paths.library),
+            "FUSION_READER_DOWNLOADS_ROOT": str(settings.paths.downloads),
+            "FUSION_READER_CACHE_ROOT": str(settings.paths.cache),
+            "FUSION_READER_LOG_ROOT": str(settings.paths.logs),
+            "FUSION_READER_LOG_DIR": str(settings.paths.logs),
+        }
+    )
     result = subprocess.run([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)
     return int(result.returncode)
 

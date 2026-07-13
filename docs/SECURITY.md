@@ -2,10 +2,9 @@
 
 ## Default boundary
 
-The HTTP server binds to loopback. A remote bind requires both
-`FUSION_READER_ALLOW_REMOTE=1` and `FUSION_READER_API_TOKEN`; mutating requests
-then require a constant-time token check. Do not expose the service directly to
-the Internet.
+The HTTP server binds to loopback. Remote mode is postponed and every
+non-loopback bind is rejected, including when legacy remote variables are set.
+Do not expose the service directly to the Internet.
 
 ## Local data
 

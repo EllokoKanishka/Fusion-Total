@@ -131,10 +131,20 @@ class ProviderSettings:
     stt_provider: str
     stt_url: str
     stt_timeout_seconds: float
+    stt_command: str
+    stt_model: str
+    stt_threads: int
     ollama_url: str
     chat_model: str
     research_provider: str
     searxng_url: str
+    searxng_timeout_seconds: float
+    searxng_enabled: bool
+    openclaw_command: str
+    openclaw_agent: str
+    openclaw_timeout_seconds: float
+    openclaw_retries: int
+    openclaw_enabled: bool
 
     def validate(self, ports: PortSettings) -> None:
         parsed = urlparse(self.tts_url)
@@ -148,6 +158,8 @@ class ProviderSettings:
             raise ConfigurationError("invalid external research provider")
         if self.stt_provider not in {"auto", "server", "cli", "none"}:
             raise ConfigurationError("invalid STT provider")
+        if self.openclaw_agent != "fusion-research":
+            raise ConfigurationError("Fusion external research must use the fusion-research OpenClaw agent")
 
 
 @dataclass(frozen=True)
@@ -172,10 +184,7 @@ class SecuritySettings:
     def validate(self) -> None:
         if is_loopback_host(self.bind_host):
             return
-        if not self.allow_remote:
-            raise ConfigurationError("non-loopback bind requires FUSION_READER_ALLOW_REMOTE=1")
-        if not self.api_token.strip():
-            raise ConfigurationError("non-loopback bind requires FUSION_READER_API_TOKEN")
+        raise ConfigurationError("remote mode is not supported; bind_host must be loopback")
 
 
 @dataclass(frozen=True)
@@ -241,10 +250,22 @@ def create_settings(
             stt_provider=env.get("FUSION_READER_STT_PROVIDER", "auto").strip().lower(),
             stt_url=(env.get("FUSION_READER_STT_URL") or f"http://127.0.0.1:{ports.stt}").rstrip("/"),
             stt_timeout_seconds=_floating(env, "FUSION_READER_STT_TIMEOUT", 120.0, minimum=0.1),
+            stt_command=env.get("FUSION_READER_STT_COMMAND", "whisper"),
+            stt_model=env.get("FUSION_READER_STT_MODEL", "small"),
+            stt_threads=_integer(env, "FUSION_READER_STT_THREADS", 8, minimum=1),
             ollama_url=(env.get("FUSION_READER_OLLAMA_URL") or f"http://127.0.0.1:{ports.ollama}").rstrip("/"),
             chat_model=env.get("FUSION_READER_CHAT_MODEL", "qwen3:14b-q8_0"),
             research_provider=env.get("FUSION_READER_EXTERNAL_RESEARCH_PROVIDER", "auto").strip().lower(),
             searxng_url=(env.get("FUSION_READER_SEARXNG_URL") or f"http://127.0.0.1:{ports.searxng}").rstrip("/"),
+            searxng_timeout_seconds=_floating(env, "FUSION_READER_SEARXNG_TIMEOUT", 12.0, minimum=0.1),
+            searxng_enabled=_truthy(env.get("FUSION_READER_SEARXNG_ENABLED"), default=True),
+            openclaw_command=env.get(
+                "FUSION_READER_OPENCLAW_BIN", str(home / ".openclaw" / "bin" / "openclaw")
+            ),
+            openclaw_agent=env.get("FUSION_READER_OPENCLAW_AGENT", "fusion-research"),
+            openclaw_timeout_seconds=_floating(env, "FUSION_READER_OPENCLAW_TIMEOUT", 90.0, minimum=0.1),
+            openclaw_retries=_integer(env, "FUSION_READER_OPENCLAW_RETRIES", 2, minimum=1),
+            openclaw_enabled=_truthy(env.get("FUSION_READER_OPENCLAW_ENABLED"), default=True),
         ),
         limits=LimitSettings(
             upload_max_bytes=_integer(env, "FUSION_READER_UPLOAD_MAX_BYTES", 128 * 1024 * 1024, minimum=1),

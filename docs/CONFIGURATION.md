@@ -24,7 +24,7 @@ configured runtime root.
 |---|---|
 | `FUSION_READER_BIND_HOST` | `127.0.0.1` |
 | `FUSION_READER_V2_PORT` | `8010` |
-| `FUSION_READER_ALLOW_REMOTE` | false |
+| `FUSION_READER_ALLOW_REMOTE` | reserved; remote mode postponed |
 | `FUSION_READER_API_TOKEN` | empty |
 | `FUSION_READER_ALLTALK_URL` | `http://127.0.0.1:7853` |
 | `FUSION_READER_STT_PROVIDER` | `auto` |
@@ -35,8 +35,9 @@ configured runtime root.
 | `FUSION_READER_VOICE` | `female_03.wav` |
 | `FUSION_READER_LANGUAGE` | `es` |
 
-A non-loopback bind is rejected unless remote access is explicitly enabled and
-a non-empty token is supplied. TTS URLs on `7852` or `7854` are rejected.
+Non-loopback binds are rejected. Remote mode is postponed; the token variables
+remain reserved for a future end-to-end design and do not enable remote access.
+TTS URLs on `7852` or `7854` are rejected.
 
 ## Limits
 

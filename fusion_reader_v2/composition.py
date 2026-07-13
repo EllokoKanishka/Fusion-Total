@@ -3,14 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import Settings, create_settings
+from .config import ProviderSettings, Settings, create_settings
 from .conversation import ConversationCore, OllamaChatProvider
-from .dialogue import STTProvider, default_stt_provider
+from .dialogue import (
+    AutoSTTProvider,
+    FasterWhisperServerSTTProvider,
+    NullSTTProvider,
+    STTProvider,
+    WhisperCliSTTProvider,
+)
 from .facade import FusionReaderV2, VoiceSettings
-from .local_web_bridge import default_external_research_bridge
+from .local_web_bridge import AutoExternalResearchBridge, SearxngResearchBridge
 from .metrics import VoiceMetricsStore
 from .notes import ReaderNotesStore
-from .openclaw_bridge import ExternalResearchBridge
+from .openclaw_bridge import (
+    ExternalResearchBridge,
+    ExternalResearchResult,
+    NullExternalResearchBridge,
+    OpenClawResearchBridge,
+)
 from .tts import AllTalkProvider, AudioCache, TTSProvider
 
 if TYPE_CHECKING:
@@ -40,10 +51,67 @@ def create_providers(settings: Settings) -> ProviderBundle:
     )
     return ProviderBundle(
         tts=tts,
-        stt=default_stt_provider(),
+        stt=create_stt_provider(settings.providers),
         conversation=conversation,
-        research=default_external_research_bridge(),
+        research=create_research_provider(settings.providers),
     )
+
+
+def create_stt_provider(settings: ProviderSettings) -> STTProvider:
+    if settings.stt_provider == "none":
+        provider: STTProvider = NullSTTProvider(enabled=False)
+    elif settings.stt_provider == "server":
+        provider = FasterWhisperServerSTTProvider(
+            base_url=settings.stt_url,
+            timeout_seconds=settings.stt_timeout_seconds,
+        )
+    elif settings.stt_provider == "cli":
+        provider = WhisperCliSTTProvider(
+            command=settings.stt_command,
+            model=settings.stt_model,
+            timeout_seconds=settings.stt_timeout_seconds,
+            threads=settings.stt_threads,
+        )
+    else:
+        provider = AutoSTTProvider(
+            primary=FasterWhisperServerSTTProvider(
+                base_url=settings.stt_url,
+                timeout_seconds=settings.stt_timeout_seconds,
+            ),
+            fallback=WhisperCliSTTProvider(
+                command=settings.stt_command,
+                model=settings.stt_model,
+                timeout_seconds=settings.stt_timeout_seconds,
+                threads=settings.stt_threads,
+            ),
+        )
+    provider.requested_provider = settings.stt_provider
+    return provider
+
+
+def create_research_provider(settings: ProviderSettings) -> ExternalResearchBridge:
+    if settings.research_provider == "none":
+        return NullExternalResearchBridge(
+            ExternalResearchResult(False, detail="bridge_disabled", provider="null_external_research")
+        )
+    searxng = SearxngResearchBridge(
+        base_url=settings.searxng_url,
+        timeout_seconds=settings.searxng_timeout_seconds,
+        enabled=settings.searxng_enabled,
+    )
+    openclaw = OpenClawResearchBridge(
+        command=settings.openclaw_command,
+        agent="fusion-research",
+        timeout_seconds=settings.openclaw_timeout_seconds,
+        retry_attempts=settings.openclaw_retries,
+        enabled=settings.openclaw_enabled,
+        environment={},
+    )
+    if settings.research_provider == "searxng":
+        return searxng
+    if settings.research_provider == "openclaw":
+        return openclaw
+    return AutoExternalResearchBridge(searxng=searxng, openclaw=openclaw)
 
 
 def create_fusion_reader(
@@ -92,5 +160,7 @@ __all__ = [
     "create_fusion_reader",
     "create_http_server",
     "create_providers",
+    "create_research_provider",
+    "create_stt_provider",
     "create_settings",
 ]

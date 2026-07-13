@@ -241,7 +241,7 @@ class FusionReaderV2Tests(unittest.TestCase):
                 "payloads": [{"text": "⚠️ API rate limit reached. Please try again later. (429 quota)"}],
             },
         }
-        with mock.patch("fusion_reader_v2.openclaw_bridge.subprocess.run") as run:
+        with mock.patch("fusion_reader_v2.openclaw_bridge.run_owned") as run:
             run.return_value = subprocess.CompletedProcess(["openclaw"], 0, stdout=json.dumps(payload), stderr="")
             result = bridge.research("Buscá tesis sobre Fedro.")
         self.assertFalse(result.ok)
@@ -290,7 +290,7 @@ class FusionReaderV2Tests(unittest.TestCase):
             },
         }
         with (
-            mock.patch("fusion_reader_v2.openclaw_bridge.subprocess.run") as run,
+            mock.patch("fusion_reader_v2.openclaw_bridge.run_owned") as run,
             mock.patch("fusion_reader_v2.openclaw_bridge.time.sleep") as sleep,
         ):
             run.side_effect = [

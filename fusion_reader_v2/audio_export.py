@@ -8,6 +8,8 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .owned_subprocess import run_owned
+
 from .pdf_to_docx import find_downloads_dir
 
 
@@ -162,8 +164,9 @@ def _concat_wav_with_ffmpeg(inputs: list[Path], output: Path) -> str:
         encoding="utf-8",
     )
     try:
-        subprocess.run(
+        run_owned(
             [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(output)],
+            timeout=180,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

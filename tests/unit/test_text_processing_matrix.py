@@ -154,7 +154,7 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
             failed = subprocess.CompletedProcess([], 1, stdout="", stderr="pdf failed")
             with (
                 mock.patch.object(documents.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(documents.subprocess, "run", return_value=failed),
+                mock.patch.object(documents, "run_owned", return_value=failed),
             ):
                 with self.assertRaisesRegex(ValueError, "pdf failed"):
                     documents.pdf_to_text(pdf_path.name, pdf_path)
@@ -165,7 +165,7 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
 
             with (
                 mock.patch.object(documents.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(documents.subprocess, "run", side_effect=extract_run),
+                mock.patch.object(documents, "run_owned", side_effect=extract_run),
             ):
                 text, detail, raw = documents.pdf_to_text(pdf_path.name, pdf_path)
             self.assertIn("pdftotext", detail)
@@ -177,7 +177,7 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
 
             with (
                 mock.patch.object(documents.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(documents.subprocess, "run", side_effect=sparse_run),
+                mock.patch.object(documents, "run_owned", side_effect=sparse_run),
                 mock.patch.object(documents, "ocr_pdf_to_text", return_value="[Pagina 1]\nOCR suficiente"),
             ):
                 self.assertIn("OCR", documents.pdf_to_text(pdf_path.name, pdf_path)[1])
@@ -186,7 +186,7 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
             info = subprocess.CompletedProcess([], 0, stdout="Pages:          12\n", stderr="")
             with (
                 mock.patch.object(documents.shutil, "which", return_value="pdfinfo"),
-                mock.patch.object(documents.subprocess, "run", return_value=info),
+                mock.patch.object(documents, "run_owned", return_value=info),
             ):
                 self.assertEqual(documents.pdf_page_count(pdf_path), 12)
 
@@ -217,19 +217,19 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
                 self.assertIn("Pagina 3", documents.ocr_pdf_to_text(pdf_path))
 
             render_failed = subprocess.CompletedProcess([], 1, stdout="", stderr="render failed")
-            with mock.patch.object(documents.subprocess, "run", return_value=render_failed):
+            with mock.patch.object(documents, "run_owned", return_value=render_failed):
                 with self.assertRaisesRegex(ValueError, "render failed"):
                     documents.ocr_pdf_page_to_text(pdf_path, 1, "pdftoppm", "tesseract")
             render_ok = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            with mock.patch.object(documents.subprocess, "run", return_value=render_ok):
+            with mock.patch.object(documents, "run_owned", return_value=render_ok):
                 self.assertEqual(documents.ocr_pdf_page_to_text(pdf_path, 1, "pdftoppm", "tesseract"), (1, ""))
 
-            with mock.patch.object(documents.subprocess, "run", return_value=render_failed):
+            with mock.patch.object(documents, "run_owned", return_value=render_failed):
                 with self.assertRaises(ValueError):
                     documents.run_tesseract_plain("tesseract", pdf_path)
             with mock.patch.object(
-                documents.subprocess,
-                "run",
+                documents,
+                "run_owned",
                 return_value=subprocess.CompletedProcess([], 0, stdout="texto", stderr=""),
             ):
                 self.assertEqual(documents.run_tesseract_plain("tesseract", pdf_path), "texto")
@@ -245,12 +245,12 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
 
             with (
                 mock.patch.object(documents.shutil, "which", return_value="libreoffice"),
-                mock.patch.object(documents.subprocess, "run", side_effect=office_run),
+                mock.patch.object(documents, "run_owned", side_effect=office_run),
             ):
                 self.assertEqual(documents.office_to_text("sample.doc", b"data"), "Texto office")
             with (
                 mock.patch.object(documents.shutil, "which", return_value="libreoffice"),
-                mock.patch.object(documents.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
+                mock.patch.object(documents, "run_owned", return_value=subprocess.CompletedProcess([], 0)),
             ):
                 with self.assertRaisesRegex(ValueError, "libreoffice_output_not_found"):
                     documents.office_to_text("missing.doc", b"data")
@@ -592,19 +592,19 @@ Párrafo normal.
             failed_info = subprocess.CompletedProcess([], 1, stdout="", stderr="")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdfinfo"),
-                mock.patch.object(pdf.subprocess, "run", return_value=failed_info),
+                mock.patch.object(pdf, "run_owned", return_value=failed_info),
             ):
                 self.assertEqual(pdf._page_count(source), 0)
             no_match = subprocess.CompletedProcess([], 0, stdout="no pages", stderr="")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdfinfo"),
-                mock.patch.object(pdf.subprocess, "run", return_value=no_match),
+                mock.patch.object(pdf, "run_owned", return_value=no_match),
             ):
                 self.assertEqual(pdf._page_count(source), 0)
             pages = subprocess.CompletedProcess([], 0, stdout="Pages: 3\n", stderr="")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdfinfo"),
-                mock.patch.object(pdf.subprocess, "run", return_value=pages),
+                mock.patch.object(pdf, "run_owned", return_value=pages),
             ):
                 self.assertEqual(pdf._page_count(source), 3)
 
@@ -620,33 +620,33 @@ Párrafo normal.
                 self.assertEqual(pdf._extract_pages_text(source, limit=2), ["1", "2"])
 
             with mock.patch.object(
-                pdf.subprocess,
-                "run",
+                pdf,
+                "run_owned",
                 return_value=subprocess.CompletedProcess([], 0, stdout="List of languages\nspa\neng\n", stderr=""),
             ):
                 self.assertEqual(pdf._tesseract_langs(), ["spa", "eng"])
-            with mock.patch.object(pdf.subprocess, "run", side_effect=OSError("missing")):
+            with mock.patch.object(pdf, "run_owned", side_effect=OSError("missing")):
                 self.assertEqual(pdf._tesseract_langs(), ["eng"])
 
             with mock.patch.object(pdf.shutil, "which", return_value=None):
                 pdf._preprocess_image(source)
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="convert"),
-                mock.patch.object(pdf.subprocess, "run", side_effect=OSError("failed")),
+                mock.patch.object(pdf, "run_owned", side_effect=OSError("failed")),
             ):
                 pdf._preprocess_image(source)
 
             failed_text = subprocess.CompletedProcess([], 1, stdout="", stderr="pdftotext failed")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(pdf.subprocess, "run", return_value=failed_text),
+                mock.patch.object(pdf, "run_owned", return_value=failed_text),
             ):
                 with self.assertRaisesRegex(RuntimeError, "pdftotext failed"):
                     pdf._pdftotext_page(source, 1)
             ok_text = subprocess.CompletedProcess([], 0, stdout="texto", stderr="")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(pdf.subprocess, "run", return_value=ok_text) as run,
+                mock.patch.object(pdf, "run_owned", return_value=ok_text) as run,
             ):
                 self.assertEqual(pdf._pdftotext_page(source, None), "texto")
                 self.assertNotIn("-f", run.call_args.args[0])
@@ -671,9 +671,9 @@ Párrafo normal.
                 python.parent.mkdir()
                 python.write_text("", encoding="utf-8")
                 available = subprocess.CompletedProcess([], 0, stdout="True\n", stderr="")
-                with mock.patch.object(pdf.subprocess, "run", return_value=available):
+                with mock.patch.object(pdf, "run_owned", return_value=available):
                     self.assertTrue(pdf.is_docling_gpu_available())
-                with mock.patch.object(pdf.subprocess, "run", side_effect=OSError("failed")):
+                with mock.patch.object(pdf, "run_owned", side_effect=OSError("failed")):
                     self.assertFalse(pdf.is_docling_gpu_available())
 
 
