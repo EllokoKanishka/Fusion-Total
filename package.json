@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check:ui": "node --check fusion_reader_v2/web/static/app.js && node --check fusion_reader_v2/web/static/busy_controls.js && node --check fusion_reader_v2/web/static/js/api.mjs && node --check fusion_reader_v2/web/static/js/audio.mjs && node --check fusion_reader_v2/web/static/js/bootstrap.mjs",
+    "check:ui": "node --check fusion_reader_v2/web/static/app.js && node --check fusion_reader_v2/web/static/busy_controls.js && node --check fusion_reader_v2/web/static/js/api.mjs && node --check fusion_reader_v2/web/static/js/audio.mjs && node --check fusion_reader_v2/web/static/js/busy.mjs && node --check fusion_reader_v2/web/static/js/dialogue.mjs && node --check fusion_reader_v2/web/static/js/bootstrap.mjs",
     "test:e2e": "playwright test tests/e2e"
   },
   "keywords": [],

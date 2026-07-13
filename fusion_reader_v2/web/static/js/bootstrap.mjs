@@ -1,5 +1,7 @@
 import { api } from './api.mjs';
 import { appendPcmChunk, dialoguePcmStats, encodeDialogueWav, friendlyTtsMessage } from './audio.mjs';
+import { applyControlState, createBusyControlState } from './busy.mjs';
+import { createDialogueState } from './dialogue.mjs';
 
 const els = {
   dropzone: document.getElementById('dropzone'),
@@ -88,48 +90,7 @@ const busyControls = createBusyControlState(
   null,
   els.noteInput ? els.noteInput.value : ''
 );
-const dialogue = {
-  active: false,
-  stream: null,
-  audioContext: null,
-  analyser: null,
-  monitorId: 0,
-  recorder: null,
-  pcmChunks: [],
-  pcmPreRoll: [],
-  pcmPreRollSamples: 0,
-  recording: false,
-  finalizing: false,
-  processing: false,
-  speaking: false,
-  chunkIndex: null,
-  turnId: 0,
-  trace: null,
-  suppressUntil: 0,
-  localSpeechStartedAt: 0,
-  bargeInMs: 240,
-  bargeInSpeechMs: 0,
-  localSelfMuteMs: 700,
-  speechMs: 0,
-  silenceMs: 0,
-  startedAt: 0,
-  lastTick: 0,
-  noiseFloor: 0.012,
-  minThreshold: 0.018,
-  thresholdMultiplier: 2.15,
-  speechStartMs: 35,
-  silenceStopMs: 1250,
-  minRecordMs: 650,
-  maxRecordMs: 18000,
-  preRollMs: 900,
-  finalFlushMs: 180,
-  turnStartedAt: 0,
-  finalizeTimeoutId: 0,
-  captureStopAt: 0,
-  captureStopReason: '',
-  micDeviceLabel: '',
-  sampleRate: 48000
-};
+const dialogue = createDialogueState();
 
 function beginBusyLease() {
   return busyControls.beginBusyLease();

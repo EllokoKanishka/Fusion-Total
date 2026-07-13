@@ -722,6 +722,8 @@ class Handler(BaseHTTPRequestHandler):
                 "js/bootstrap.mjs": "text/javascript; charset=utf-8",
                 "js/api.mjs": "text/javascript; charset=utf-8",
                 "js/audio.mjs": "text/javascript; charset=utf-8",
+                "js/busy.mjs": "text/javascript; charset=utf-8",
+                "js/dialogue.mjs": "text/javascript; charset=utf-8",
             }
             content_type = allowed.get(filename)
             asset = STATIC_ROOT / filename
@@ -916,6 +918,8 @@ class Handler(BaseHTTPRequestHandler):
                     "js/bootstrap.mjs",
                     "js/api.mjs",
                     "js/audio.mjs",
+                    "js/busy.mjs",
+                    "js/dialogue.mjs",
                 }
                 or not asset.is_file()
             ):
