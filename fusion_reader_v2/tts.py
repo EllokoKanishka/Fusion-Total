@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import socket
-import subprocess
 import tempfile
 import threading
 import time
@@ -18,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import environment_value
+from .owned_subprocess import run_owned
 
 
 def _truthy(value: str | None, default: bool = True) -> bool:
@@ -149,7 +149,7 @@ class AllTalkProvider(TTSProvider):
         )
         for command in commands:
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=2.0, check=False)
+                result = run_owned(command, capture_output=True, text=True, timeout=2.0, check=False)
             except Exception:
                 continue
             output = (result.stdout or "").strip()

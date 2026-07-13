@@ -23,6 +23,7 @@ from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.output_validation import OutputValidationError, stream_file, validate_output_file
+from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.version import __version__
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.routing import create_router
@@ -217,10 +218,8 @@ class WebContext:
 
 
 def _get_git_commit(repository: Path) -> str:
-    import subprocess
-
     try:
-        result = subprocess.run(
+        result = run_owned(
             ["git", "rev-parse", "--short", "HEAD"],
             cwd=repository,
             capture_output=True,

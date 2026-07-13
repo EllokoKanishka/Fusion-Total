@@ -67,9 +67,9 @@ class AllTalkProviderMatrixTests(unittest.TestCase):
                     [], 0, stdout='LISTEN 0 1 127.0.0.1:7853 users:(("python",pid=4321,fd=1))', stderr=""
                 ),
             )
-            with mock.patch.object(tts.subprocess, "run", side_effect=outputs):
+            with mock.patch.object(tts, "run_owned", side_effect=outputs):
                 self.assertEqual(provider._listening_pid(7853), 4321)
-            with mock.patch.object(tts.subprocess, "run", side_effect=OSError("missing")):
+            with mock.patch.object(tts, "run_owned", side_effect=OSError("missing")):
                 self.assertIsNone(provider._listening_pid(7853))
             with mock.patch.object(provider, "_cmdline_for_pid", return_value="python -m tts_server:app --port 7853"):
                 self.assertTrue(provider._listener_matches_fusion_tts(1, 7853))

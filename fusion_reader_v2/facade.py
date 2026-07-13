@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-import subprocess
 import threading
 import time
 import re
@@ -34,6 +33,7 @@ from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from .services.notes import NotesService
 from .services.research import ResearchService
+from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
 from .services.persistence import AtomicJSONStore
@@ -3346,7 +3346,7 @@ class FusionReaderV2:
             ["aplay", str(path)],
         ):
             try:
-                subprocess.run(cmd, check=False, timeout=300)
+                run_owned(cmd, check=False, timeout=300)
                 return
             except FileNotFoundError:
                 continue
