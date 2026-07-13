@@ -35,6 +35,7 @@ from .services.notes import NotesService
 from .services.research import ResearchService
 from .services.reader import ReaderService
 from .services.preparation import PreparationService, new_prepare_status
+from .services.dialogue import DialogueService
 from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
@@ -121,10 +122,6 @@ class FusionReaderV2:
             clear_prefetch=self._clear_prefetch_queue_impl,
             reset_prefetch=self._reset_prefetch_queue_impl,
         )
-        self._chat_lock = threading.Lock()
-        self._chat_history: list[dict] = []
-        self._dialogue_lock = threading.Lock()
-        self._dialogue_history: list[dict] = []
         self.dialogue_tts_max_chars = int(environment_value("FUSION_READER_DIALOGUE_TTS_MAX_CHARS", "520") or "520")
         self.fast_note_ack = (environment_value("FUSION_READER_FAST_NOTE_ACK", "0") or "0").strip().lower() not in {
             "0",
@@ -150,10 +147,14 @@ class FusionReaderV2:
             "yes",
             "on",
         }
-        self.reasoning_mode = str(getattr(self.conversation, "default_reasoning_mode", "thinking") or "thinking")
-        self.laboratory_mode = "document"
-        self.profile = "academica"
-        self.veil = "lucy"
+        self._dialogue_service = DialogueService(
+            conversation=self.conversation,
+            reasoning_mode=str(getattr(self.conversation, "default_reasoning_mode", "thinking") or "thinking"),
+            dialogue_allow_supreme=self.dialogue_allow_supreme,
+            persist=lambda: self._persist_session_state(),
+            trace=lambda event: self._append_dialogue_trace(event),
+            services_status=lambda: self._dialogue_services_status(),
+        )
         self.session_state_path = Path(session_state_path) if session_state_path else None
         self._session_store = (
             AtomicJSONStore(self.session_state_path, schema_version=1, max_bytes=32 * 1024 * 1024)
@@ -176,10 +177,10 @@ class FusionReaderV2:
         self._notes_service = NotesService(
             session=self.session,
             notes=self.notes,
-            dialogue_history=self._dialogue_history,
-            dialogue_lock=self._dialogue_lock,
-            chat_history=self._chat_history,
-            chat_lock=self._chat_lock,
+            dialogue_history=self._dialogue_service.dialogue_history,
+            dialogue_lock=self._dialogue_service.dialogue_lock,
+            chat_history=self._dialogue_service.chat_history,
+            chat_lock=self._dialogue_service.chat_lock,
             looks_like_note_request=self._looks_like_note_request,
         )
         self._research_service = ResearchService(self.external_research, self._external_research_snapshot)
@@ -315,6 +316,77 @@ class FusionReaderV2:
         return self._lifecycle_service.state == "closed"
 
     @property
+    def _chat_lock(self):
+        return self._dialogue_service.chat_lock
+
+    @property
+    def _chat_history(self):
+        return self._dialogue_service.chat_history
+
+    @_chat_history.setter
+    def _chat_history(self, value):
+        self._dialogue_service.chat_history[:] = value
+
+    @property
+    def _dialogue_lock(self):
+        return self._dialogue_service.dialogue_lock
+
+    @property
+    def _dialogue_history(self):
+        return self._dialogue_service.dialogue_history
+
+    @_dialogue_history.setter
+    def _dialogue_history(self, value):
+        self._dialogue_service.dialogue_history[:] = value
+
+    @property
+    def reasoning_mode(self):
+        return self._dialogue_service.reasoning_mode
+
+    @reasoning_mode.setter
+    def reasoning_mode(self, value):
+        self._dialogue_service.reasoning_mode = value
+
+    @property
+    def laboratory_mode(self):
+        return self._dialogue_service.laboratory_mode
+
+    @laboratory_mode.setter
+    def laboratory_mode(self, value):
+        self._dialogue_service.laboratory_mode = value
+
+    @property
+    def profile(self):
+        return self._dialogue_service.profile
+
+    @profile.setter
+    def profile(self, value):
+        self._dialogue_service.profile = value
+
+    @property
+    def veil(self):
+        return self._dialogue_service.veil
+
+    @veil.setter
+    def veil(self, value):
+        self._dialogue_service.veil = value
+
+    @property
+    def dialogue_allow_supreme(self):
+        service = self.__dict__.get("_dialogue_service")
+        if service is not None:
+            return service.dialogue_allow_supreme
+        return bool(self.__dict__.get("_dialogue_allow_supreme_bootstrap", False))
+
+    @dialogue_allow_supreme.setter
+    def dialogue_allow_supreme(self, value):
+        service = self.__dict__.get("_dialogue_service")
+        if service is not None:
+            service.dialogue_allow_supreme = bool(value)
+        else:
+            self.__dict__["_dialogue_allow_supreme_bootstrap"] = bool(value)
+
+    @property
     def _prepare_lock(self):
         return self._preparation_service.lock
 
@@ -378,22 +450,7 @@ class FusionReaderV2:
         return
 
     def _effective_reasoning_mode(self, *, dialogue: bool = False) -> dict:
-        requested = str(self.reasoning_mode or "thinking")
-        if requested == "contrapunto":
-            requested = "pensamiento_critico"
-        applied = requested
-        degraded = False
-        reason = ""
-        if dialogue and requested in {"supreme", "pensamiento_critico"} and not self.dialogue_allow_supreme:
-            applied = "thinking"
-            degraded = True
-            reason = f"dialogue_{requested}_degraded_to_thinking"
-        return {
-            "requested": requested,
-            "applied": applied,
-            "degraded": degraded,
-            "reason": reason,
-        }
+        return self._dialogue_service.effective_reasoning(dialogue=dialogue)
 
     def _append_dialogue_trace(self, event: dict) -> None:
         if self.dialogue_trace_path is None:
@@ -2022,57 +2079,16 @@ class FusionReaderV2:
         }
 
     def _remember_chat_turn(self, user_message: str, assistant_answer: str) -> None:
-        user_message = str(user_message or "").strip()
-        assistant_answer = str(assistant_answer or "").strip()
-        if not user_message and not assistant_answer:
-            return
-        with self._chat_lock:
-            if user_message:
-                self._chat_history.append({"role": "user", "content": user_message})
-            if assistant_answer:
-                self._chat_history.append({"role": "assistant", "content": assistant_answer})
-            self._chat_history = self._chat_history[-20:]
+        self._dialogue_service.remember_chat_turn(user_message, assistant_answer)
 
     def clear_laboratory_history(self) -> dict:
-        with self._chat_lock:
-            chat_turns = len(self._chat_history)
-            self._chat_history = []
-        with self._dialogue_lock:
-            dialogue_turns = len(self._dialogue_history)
-            self._dialogue_history = []
-        return {
-            "ok": True,
-            "cleared": True,
-            "chat_items": chat_turns,
-            "dialogue_items": dialogue_turns,
-        }
+        return self._dialogue_service.clear_history()
 
     def dialogue_status(self) -> dict:
-        dialogue_reasoning = self._effective_reasoning_mode(dialogue=True)
-        services = self._dialogue_services_status()
-        return {
-            "ok": True,
-            "stt": services["stt"],
-            "tts": services["tts"],
-            "chat": services["chat"],
-            "external_research": services["external_research"],
-            "services": services,
-            "turns": len(self._dialogue_history),
-            "reasoning": self.reasoning_status(),
-            "laboratory_mode": self.laboratory_mode_status(),
-            "dialogue_reasoning": {
-                **self.conversation.reasoning_status(dialogue_reasoning["applied"]),
-                "requested_mode": dialogue_reasoning["requested"],
-                "applied_mode": dialogue_reasoning["applied"],
-                "degraded": dialogue_reasoning["degraded"],
-                "degraded_reason": dialogue_reasoning["reason"],
-            },
-        }
+        return self._dialogue_service.status()
 
     def reasoning_status(self) -> dict:
-        info = self.conversation.reasoning_status(self.reasoning_mode)
-        info["selected"] = info.get("mode") == self.reasoning_mode
-        return info
+        return self._dialogue_service.reasoning_status()
 
     def get_voice_catalog(self) -> dict:
         return self._audio_service.catalog(fallback_current=True)
@@ -2081,80 +2097,19 @@ class FusionReaderV2:
         return self._audio_service.set_voice(voice)
 
     def laboratory_mode_status(self) -> dict:
-        mode = "free" if str(self.laboratory_mode or "").strip().lower() == "free" else "document"
-        return {
-            "mode": mode,
-            "label": "Modo libre" if mode == "free" else "Anclado al texto",
-            "description": (
-                "Lucy puede conversar libremente aunque el tema no dependa del texto; el documento queda como contexto opcional."
-                if mode == "free"
-                else "Lucy prioriza lo que ves, el texto activo y los documentos cargados."
-            ),
-            "selected": True,
-        }
+        return self._dialogue_service.laboratory_mode_status()
 
     def set_reasoning_mode(self, mode: str) -> dict:
-        profile = self.conversation.reasoning_status(mode)
-        self.reasoning_mode = str(profile.get("mode") or self.reasoning_mode or "thinking")
-        if self.reasoning_mode == "contrapunto":
-            self.reasoning_mode = "pensamiento_critico"
-        self._persist_session_state()
-        self._append_dialogue_trace(
-            {
-                "ts": time.time(),
-                "event": "reasoning_mode_changed",
-                "requested_mode": str(mode or ""),
-                "selected_mode": self.reasoning_mode,
-                "dialogue_allow_supreme": self.dialogue_allow_supreme,
-            }
-        )
-        out = self.reasoning_status()
-        dialogue_reasoning = self._effective_reasoning_mode(dialogue=True)
-        out["dialogue_reasoning"] = {
-            **self.conversation.reasoning_status(dialogue_reasoning["applied"]),
-            "requested_mode": dialogue_reasoning["requested"],
-            "applied_mode": dialogue_reasoning["applied"],
-            "degraded": dialogue_reasoning["degraded"],
-            "degraded_reason": dialogue_reasoning["reason"],
-        }
-        return out
+        return self._dialogue_service.set_reasoning_mode(mode)
 
     def set_laboratory_mode(self, mode: str) -> dict:
-        self.laboratory_mode = "free" if str(mode or "").strip().lower() == "free" else "document"
-        self._persist_session_state()
-        self._append_dialogue_trace(
-            {
-                "ts": time.time(),
-                "event": "laboratory_mode_changed",
-                "selected_mode": self.laboratory_mode,
-            }
-        )
-        return self.laboratory_mode_status()
+        return self._dialogue_service.set_laboratory_mode(mode)
 
     def profile_status(self) -> dict:
-        mode = "bohemia" if str(self.profile or "").strip().lower() == "bohemia" else "academica"
-        return {
-            "mode": mode,
-            "label": "Bohemia" if mode == "bohemia" else "Académica",
-            "description": (
-                "Lucy Bohemia: más libre, literaria y directa. Menos escolar, más exploratoria."
-                if mode == "bohemia"
-                else "Lucy Académica: seria, formal, precisa y orientada al estudio riguroso."
-            ),
-            "selected": True,
-        }
+        return self._dialogue_service.profile_status()
 
     def set_profile(self, mode: str) -> dict:
-        self.profile = "bohemia" if str(mode or "").strip().lower() == "bohemia" else "academica"
-        self._persist_session_state()
-        self._append_dialogue_trace(
-            {
-                "ts": time.time(),
-                "event": "profile_changed",
-                "selected_mode": self.profile,
-            }
-        )
-        return self.profile_status()
+        return self._dialogue_service.set_profile(mode)
 
     def veil_catalog(self) -> list[dict]:
         return [
@@ -2275,9 +2230,7 @@ class FusionReaderV2:
         return self.veil_status()
 
     def dialogue_reset(self) -> dict:
-        with self._dialogue_lock:
-            self._dialogue_history = []
-        return self.dialogue_status()
+        return self._dialogue_service.reset()
 
     def dialogue_turn_text(self, text: str, model: str = "", chunk_index: int | None = None) -> dict:
         text = str(text or "").strip()
