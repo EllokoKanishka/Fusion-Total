@@ -1,6 +1,7 @@
 # Fusion Reader v2: estado de continuidad
 
 Fecha: 2026-07-12
+Versión del paquete: `2.0.0`
 
 ## Norte
 
@@ -18,7 +19,7 @@ cargar, navegar o leer.
 - paquete activo: `fusion_reader_v2/`;
 - composition root: `fusion_reader_v2/composition.py`;
 - configuración: `fusion_reader_v2/config.py`;
-- fachada compatible: `fusion_reader_v2/facade.py` -> `service.py`;
+- fachada pública real: `fusion_reader_v2/facade.py`; `service.py` conserva solo el import compatible;
 - lifecycle: `fusion_reader_v2/services/lifecycle.py`;
 - persistencia: `fusion_reader_v2/services/persistence.py` y
   `session_persistence.py`;

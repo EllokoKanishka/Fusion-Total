@@ -33,7 +33,7 @@ configured runtime root.
 | `FUSION_READER_VOICE` | `female_03.wav` |
 | `FUSION_READER_LANGUAGE` | `es` |
 
-Non-loopback binds are rejected. Remote mode is postponed and this version does
+The HTTP server is local-only. Non-loopback binds are rejected. Remote mode is postponed and this version does
 not read or use remote-access token variables.
 TTS URLs on `7852` or `7854` are rejected.
 
