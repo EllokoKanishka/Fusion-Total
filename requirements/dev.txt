@@ -1,4 +1,3 @@
--c constraints-py311.txt
 -e .
 coverage[toml]
 mypy

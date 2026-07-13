@@ -1,3 +1,2 @@
--c constraints-py311.txt
 Pillow
 python-docx
