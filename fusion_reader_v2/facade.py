@@ -37,7 +37,7 @@ from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
 from .services.persistence import AtomicJSONStore
-from .services.session_persistence import SessionPersistenceService
+from .services.session_persistence import SessionPersistenceService, SessionPreferences
 
 
 @dataclass
@@ -177,7 +177,19 @@ class FusionReaderV2:
             if self.session_state_path is not None
             else None
         )
-        self._persistence_service = SessionPersistenceService(self)
+        self._persistence_service = SessionPersistenceService(
+            session=self.session,
+            store=self._session_store,
+            voice=self.voice,
+            conversation=self.conversation,
+            references=self._reference_documents,
+            get_preferences=self._session_preferences,
+            apply_preferences=self._apply_session_preferences,
+            get_main_source=lambda: (self._main_source_path, self._main_source_type),
+            set_main_source=self._set_main_source,
+            reset_preparation=self._reset_prepare_for_new_document,
+            build_document_record=self._document_record,
+        )
         self._lifecycle_service = BackgroundLifecycleService(self)
         self._notes_service = NotesService(
             session=self.session,
@@ -3168,6 +3180,24 @@ class FusionReaderV2:
 
     def _persist_session_state(self, text: str | None = None, source_path: str = "", source_type: str = "") -> None:
         self._persistence_service.persist(text, source_path, source_type)
+
+    def _session_preferences(self) -> SessionPreferences:
+        return SessionPreferences(
+            reasoning_mode=self.reasoning_mode,
+            laboratory_mode=self.laboratory_mode,
+            profile=self.profile,
+            veil=self.veil,
+        )
+
+    def _apply_session_preferences(self, preferences: SessionPreferences) -> None:
+        self.reasoning_mode = preferences.reasoning_mode
+        self.laboratory_mode = preferences.laboratory_mode
+        self.profile = preferences.profile
+        self.veil = preferences.veil
+
+    def _set_main_source(self, source_path: str, source_type: str) -> None:
+        self._main_source_path = source_path
+        self._main_source_type = source_type
 
     def _read_session_state(self) -> dict:
         return self._persistence_service.read()

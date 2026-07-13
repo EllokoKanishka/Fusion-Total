@@ -8,10 +8,50 @@ from pathlib import Path
 from unittest import mock
 
 from fusion_reader_v2.services.persistence import AtomicJSONStore
+from fusion_reader_v2.reader import Document, ReaderSession
+from fusion_reader_v2.services.session_persistence import SessionPersistenceService, SessionPreferences
 from tests.helpers import managed_test_app
 
 
 class AtomicJSONStoreTests(unittest.TestCase):
+    def test_session_persistence_service_round_trip_without_facade(self) -> None:
+        class Voice:
+            voice = "female.wav"
+
+        class Conversation:
+            def reasoning_status(self, mode: str = "") -> dict:
+                return {"mode": mode or "thinking"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ReaderSession()
+            session.load(Document.from_text("book", "Book", "One paragraph.\n\nAnother paragraph."))
+            references: dict[str, dict] = {}
+            preferences = SessionPreferences("thinking", "document", "academica", "lucy")
+            main_source = ["", "text"]
+            service = SessionPersistenceService(
+                session=session,
+                store=AtomicJSONStore(Path(tmp) / "session.json"),
+                voice=Voice(),
+                conversation=Conversation(),
+                references=references,
+                get_preferences=lambda: preferences,
+                apply_preferences=lambda value: None,
+                get_main_source=lambda: (main_source[0], main_source[1]),
+                set_main_source=lambda path, kind: main_source.__setitem__(slice(None), [path, kind]),
+                reset_preparation=lambda: None,
+                build_document_record=lambda doc_id, title, text, **source: {
+                    "doc_id": doc_id,
+                    "title": title,
+                    "text": text,
+                    **source,
+                },
+            )
+            service.persist(text="One paragraph.\n\nAnother paragraph.")
+            session.document = None
+            session.cursor = 0
+            service.restore()
+            self.assertEqual(session.status()["doc_id"], "book")
+
     def test_constructor_and_write_reject_invalid_values(self) -> None:
         with self.assertRaises(ValueError):
             AtomicJSONStore("state.json", schema_version=0)
