@@ -263,13 +263,16 @@ def resolve_library_path(context: WebContext, book_id: str) -> Path:
     if not raw or rel.is_absolute() or any(part == ".." for part in rel.parts):
         raise ValueError("invalid_book_id")
     # Resolving before the parent check also blocks symlink escapes.
-    path = (context.library_root / rel).resolve()  # lgtm[py/path-injection]
+    # codeql[py/path-injection]
+    path = (context.library_root / rel).resolve()
     library_root = context.library_root.resolve()
     if path != library_root and library_root not in path.parents:
         raise ValueError("book_outside_library")
     if path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
         raise ValueError("unsupported_book_type")
-    if not path.exists() or not path.is_file():  # lgtm[py/path-injection]: path is contained above.
+    # The resolved path is contained within library_root above.
+    # codeql[py/path-injection]
+    if not path.exists() or not path.is_file():
         raise FileNotFoundError("book_not_found")
     return path
 
@@ -573,9 +576,7 @@ class Handler(BaseHTTPRequestHandler):
         if length > limit:
             raise ValueError("upload_too_large")
         self.context.upload_root.mkdir(parents=True, exist_ok=True)
-        fd, name = tempfile.mkstemp(  # lgtm[py/path-injection]: suffix is selected from a constant allowlist.
-            prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root
-        )
+        fd, name = tempfile.mkstemp(prefix="fusion_reader_upload_", suffix=suffix, dir=self.context.upload_root)
         path = Path(name)
         remaining = length
         try:
@@ -587,10 +588,10 @@ class Handler(BaseHTTPRequestHandler):
                     f.write(chunk)
                     remaining -= len(chunk)
         except Exception:
-            path.unlink(missing_ok=True)  # lgtm[py/path-injection]: path was returned by mkstemp above.
+            path.unlink(missing_ok=True)
             raise
         if remaining:
-            path.unlink(missing_ok=True)  # lgtm[py/path-injection]: path was returned by mkstemp above.
+            path.unlink(missing_ok=True)
             raise ValueError("incomplete_upload")
         return path
 
@@ -646,7 +647,7 @@ class Handler(BaseHTTPRequestHandler):
         mime = str(mime_match.group(1)).strip() if mime_match else "application/pdf"
         suffix = UPLOAD_TEMP_SUFFIXES.get(Path(safe_filename(filename)).suffix.lower(), ".bin")
         self.context.upload_root.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(  # lgtm[py/path-injection]: constant suffix, owned root.
+        descriptor, temporary_name = tempfile.mkstemp(
             prefix="fusion_reader_multipart_",
             suffix=suffix,
             dir=self.context.upload_root,
@@ -1012,7 +1013,7 @@ class Handler(BaseHTTPRequestHandler):
                     filename,
                     mime,
                     tmp_path,
-                    tmp_path.stat().st_size,  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
+                    tmp_path.stat().st_size,
                     role=role,
                 )
                 self.context.start_thread(
@@ -1031,7 +1032,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     imported = import_document_path(filename, tmp_path, mime=mime)
                 finally:
-                    tmp_path.unlink(missing_ok=True)  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
+                    tmp_path.unlink(missing_ok=True)
                 self._json(200, load_imported_document(self.context, imported, role=role))
                 return
             if path == "/api/dialogue/turn" and "application/json" not in (self.headers.get("Content-Type", "") or ""):
@@ -1061,7 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                         ),
                     )
                 finally:
-                    tmp_path.unlink(missing_ok=True)  # lgtm[py/path-injection]: tmp_path is owned by mkstemp.
+                    tmp_path.unlink(missing_ok=True)
                 return
             payload = self._payload()
             if path == "/api/load":

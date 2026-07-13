@@ -118,7 +118,9 @@ def import_document_bytes(
     with tempfile.TemporaryDirectory(prefix="fusion_import_bytes_") as tmp:
         safe_name = safe_filename(filename)
         path = Path(tmp) / safe_name
-        path.write_bytes(data)  # lgtm[py/path-injection]: basename is confined to the owned temporary root.
+        # The sanitized basename is confined to the owned temporary root.
+        # codeql[py/path-injection]
+        path.write_bytes(data)
         return import_document_path(safe_name, path, mime=mime, progress=progress)
 
 
@@ -139,7 +141,8 @@ def import_document_path(
         if data is None:
             report_progress(progress, "reading", 0, 0, "Leyendo archivo...")
             # This public local-file API intentionally reads the exact caller-selected path.
-            data = source.read_bytes()  # lgtm[py/path-injection]
+            # codeql[py/path-injection]
+            data = source.read_bytes()
         return data
 
     if suffix in TEXT_SUFFIXES or (not suffix and looks_like_text(read_data())):
@@ -931,7 +934,9 @@ def office_to_text(filename: str, data: bytes) -> str:
     with tempfile.TemporaryDirectory(prefix="fusion_office_") as tmp:
         root = Path(tmp)
         src = root / safe_filename(filename)
-        src.write_bytes(data)  # lgtm[py/path-injection]: sanitized basename stays in this temporary root.
+        # The sanitized basename stays in this temporary root.
+        # codeql[py/path-injection]
+        src.write_bytes(data)
         result = subprocess.run(
             [tool, "--headless", "--convert-to", "txt:Text", "--outdir", str(root), str(src)],
             capture_output=True,
