@@ -44,7 +44,11 @@ def coverage_metadata(path: Path | None) -> dict:
         totals = report["totals"]
         return {
             "state": "observed_local",
-            "lines": float(totals["percent_covered"]),
+            "lines": (
+                100.0
+                if int(totals.get("num_statements", 0)) == 0
+                else int(totals.get("covered_lines", 0)) * 100.0 / int(totals["num_statements"])
+            ),
             "branches": (
                 100.0
                 if int(totals.get("num_branches", 0)) == 0
