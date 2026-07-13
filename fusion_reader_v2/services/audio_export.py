@@ -5,7 +5,8 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import Protocol
 
 from fusion_reader_v2.audio_export import (
     AudioExportJob,
@@ -15,9 +16,21 @@ from fusion_reader_v2.audio_export import (
 )
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.output_reservation import reserve_output_path
+from fusion_reader_v2.reader import ReaderSession
+from fusion_reader_v2.tts import AudioArtifact
 
-if TYPE_CHECKING:
-    from fusion_reader_v2.service import FusionReaderV2
+
+class VoiceSelection(Protocol):
+    voice: str
+    language: str
+
+
+class AudioCacheReader(Protocol):
+    def get(self, text: str, voice: str, language: str) -> AudioArtifact | None: ...
+
+
+class TTSHealth(Protocol):
+    def health(self) -> dict: ...
 
 
 class AudioExportService:
@@ -25,19 +38,42 @@ class AudioExportService:
 
     def __init__(
         self,
-        owner: FusionReaderV2,
         *,
-        jobs: dict[str, AudioExportJob],
+        session: ReaderSession,
+        voice: VoiceSelection,
+        cache: AudioCacheReader,
+        tts: TTSHealth,
+        output_root: Path,
+        background_condition: threading.Condition,
+        background_is_open_locked: Callable[[], bool],
+        before_registration: Callable[[], None],
+        wait_for_interactive_tts: Callable[[], None],
+        synthesize: Callable[[str, str, str], AudioArtifact],
         max_items: int = 256,
         ttl_seconds: float = 6 * 60 * 60,
     ) -> None:
-        self.owner = owner
+        self.session = session
+        self.voice = voice
+        self.cache = cache
+        self.tts = tts
+        self.output_root = output_root
+        self.background_condition = background_condition
+        self.background_is_open_locked = background_is_open_locked
+        self.before_registration = before_registration
+        self.wait_for_interactive_tts = wait_for_interactive_tts
+        self.synthesize = synthesize
+        self.lock = threading.Lock()
+        self.cancel_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.jobs: dict[str, AudioExportJob] = {}
+        self.active_job_id = ""
+        self.latest_job_id = ""
         self.registry = JobRegistry(
             max_items=max_items,
             ttl_seconds=ttl_seconds,
             is_terminal=lambda job: job.terminal,
             updated_at=lambda job: job.updated_at,
-            backing=jobs,
+            backing=self.jobs,
         )
 
     def new_job(self, snapshot: AudioExportSnapshot) -> AudioExportJob:
@@ -66,12 +102,11 @@ class AudioExportService:
         start: int | None = None,
         end: int | None = None,
     ) -> AudioExportSnapshot:
-        owner = self.owner
-        document = owner.session.document
+        document = self.session.document
         if not document or not document.chunks:
             raise ValueError("no_document_loaded")
         total = len(document.chunks)
-        current_block = owner.session.cursor + 1
+        current_block = self.session.cursor + 1
         normalized_mode = str(mode or "").strip().lower()
         if normalized_mode == "current":
             start_block = end_block = current_block
@@ -92,18 +127,17 @@ class AudioExportService:
         return AudioExportSnapshot(
             doc_id=document.doc_id,
             title=document.title,
-            voice=owner.voice.voice,
-            language=owner.voice.language,
+            voice=self.voice.voice,
+            language=self.voice.language,
             total_blocks=total,
             blocks=blocks,
         )
 
     def overview(self) -> dict:
-        owner = self.owner
-        with owner._audio_export_lock:
+        with self.lock:
             self.registry.prune()
-            job_id = owner._audio_export_active_job_id or owner._audio_export_latest_job_id
-            job = owner._audio_export_jobs.get(job_id) if job_id else None
+            job_id = self.active_job_id or self.latest_job_id
+            job = self.jobs.get(job_id) if job_id else None
             if job is not None:
                 return job.to_dict()
         return {
@@ -130,75 +164,71 @@ class AudioExportService:
         clean = str(job_id or "").strip()
         if not clean:
             return self.overview()
-        owner = self.owner
-        with owner._audio_export_lock:
+        with self.lock:
             job = self.registry.get(clean)
             return job.to_dict() if job else {"ok": False, "error": "audio_export_job_not_found"}
 
     def start(self, mode: str, block: int | None = None, start: int | None = None, end: int | None = None) -> dict:
-        owner = self.owner
         try:
-            snapshot = owner._resolve_audio_export_snapshot(mode, block=block, start=start, end=end)
+            snapshot = self.resolve_snapshot(mode, block=block, start=start, end=end)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        if any(not owner.cache.get(text, snapshot.voice, snapshot.language) for _, text in snapshot.blocks):
-            tts_health = owner.tts.health()
+        if any(not self.cache.get(text, snapshot.voice, snapshot.language) for _, text in snapshot.blocks):
+            tts_health = self.tts.health()
             if not bool(tts_health.get("ok")):
                 return {
                     "ok": False,
                     "error": "tts_unavailable_for_audio_export",
                     "detail": str(tts_health.get("detail") or ""),
                 }
-        owner._before_audio_export_registration()
-        with owner._background_work_condition:
-            if not owner._background_work_is_open_locked():
+        self.before_registration()
+        with self.background_condition:
+            if not self.background_is_open_locked():
                 return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
-            with owner._audio_export_lock:
-                if not owner._background_work_is_open_locked():
+            with self.lock:
+                if not self.background_is_open_locked():
                     return {"ok": False, "error": "service_shutting_down", "detail": "El lector se está cerrando."}
-                if owner._audio_export_thread and owner._audio_export_thread.is_alive():
+                if self.thread and self.thread.is_alive():
                     return {
                         "ok": False,
                         "error": "audio_export_busy",
                         "detail": "Ya hay una exportación de audio en curso.",
                     }
-                owner._audio_export_cancel.clear()
-                job = owner._new_audio_export_job(snapshot)
+                self.cancel_event.clear()
+                job = self.new_job(snapshot)
                 job.download_url = f"/api/audio-export/download/{job.job_id}"
                 try:
                     self.registry.add(job.job_id, job)
                 except RuntimeError:
                     return {"ok": False, "error": "audio_export_registry_full"}
-                owner._audio_export_active_job_id = job.job_id
-                owner._audio_export_latest_job_id = job.job_id
-                owner._audio_export_thread = threading.Thread(
-                    target=owner._audio_export_worker,
+                self.active_job_id = job.job_id
+                self.latest_job_id = job.job_id
+                self.thread = threading.Thread(
+                    target=self.worker,
                     args=(job.job_id,),
                     name="fusion-reader-v2-audio-export",
                     daemon=False,
                 )
-                owner._audio_export_thread.start()
+                self.thread.start()
                 return job.to_dict()
 
     def cancel(self, job_id: str) -> dict:
-        owner = self.owner
         clean = str(job_id or "").strip()
-        with owner._audio_export_lock:
-            target_id = clean or owner._audio_export_active_job_id
-            job = owner._audio_export_jobs.get(target_id)
+        with self.lock:
+            target_id = clean or self.active_job_id
+            job = self.jobs.get(target_id)
             if not job:
                 return {"ok": False, "error": "audio_export_job_not_found"}
             if job.state not in {"queued", "running"}:
                 return job.to_dict()
             job.state = "canceling" if job.state == "running" else "cancelled"
             job.detail = "Cancelando exportación de audio..."
-            owner._audio_export_cancel.set()
+            self.cancel_event.set()
             return job.to_dict()
 
     def download(self, job_id: str) -> dict:
-        owner = self.owner
-        with owner._audio_export_lock:
-            job = owner._audio_export_jobs.get(str(job_id or "").strip())
+        with self.lock:
+            job = self.jobs.get(str(job_id or "").strip())
             if not job:
                 return {"ok": False, "error": "audio_export_job_not_found"}
             if job.state != "done" or not job.output_path:
@@ -208,7 +238,7 @@ class AudioExportService:
                 return {"ok": False, "error": "audio_export_path_invalid"}
             path = raw_path.resolve()
             filename = job.filename
-        downloads_dir = owner.audio_export_root.resolve()
+        downloads_dir = self.output_root.resolve()
         try:
             path.relative_to(downloads_dir)
         except ValueError:
@@ -227,9 +257,8 @@ class AudioExportService:
         concat_method: str = "",
         error: str = "",
     ) -> None:
-        owner = self.owner
-        with owner._audio_export_lock:
-            job = owner._audio_export_jobs.get(job_id)
+        with self.lock:
+            job = self.jobs.get(job_id)
             if not job:
                 return
             job.state = state
@@ -240,13 +269,12 @@ class AudioExportService:
             if output_path:
                 job.output_path = str(output_path)
                 job.filename = output_path.name
-            if owner._audio_export_active_job_id == job_id:
-                owner._audio_export_active_job_id = ""
+            if self.active_job_id == job_id:
+                self.active_job_id = ""
 
     def worker(self, job_id: str) -> None:
-        owner = self.owner
-        with owner._audio_export_lock:
-            job = owner._audio_export_jobs.get(job_id)
+        with self.lock:
+            job = self.jobs.get(job_id)
             if not job or not job.snapshot:
                 return
             snapshot = job.snapshot
@@ -257,34 +285,34 @@ class AudioExportService:
         temporary: Path | None = None
         try:
             for chunk_number, text in snapshot.blocks:
-                if owner._audio_export_cancel.is_set():
-                    owner._finish_audio_export_job(job_id, "cancelled", "Exportación cancelada.")
+                if self.cancel_event.is_set():
+                    self.finish(job_id, "cancelled", "Exportación cancelada.")
                     return
-                owner._wait_for_interactive_tts()
-                with owner._audio_export_lock:
-                    job = owner._audio_export_jobs.get(job_id)
+                self.wait_for_interactive_tts()
+                with self.lock:
+                    job = self.jobs.get(job_id)
                     if not job:
                         return
                     job.current_block = chunk_number
                     job.detail = f"Generando bloque {job.completed_blocks + 1} de {job.total_blocks}..."
-                artifact = owner.cache.get(text, snapshot.voice, snapshot.language)
+                artifact = self.cache.get(text, snapshot.voice, snapshot.language)
                 if artifact:
-                    with owner._audio_export_lock:
-                        owner._audio_export_jobs[job_id].cached_blocks += 1
+                    with self.lock:
+                        self.jobs[job_id].cached_blocks += 1
                 else:
-                    artifact = owner._synthesize_cached_with_settings(text, snapshot.voice, snapshot.language)
+                    artifact = self.synthesize(text, snapshot.voice, snapshot.language)
                     if not artifact.ok:
-                        owner._finish_audio_export_job(
+                        self.finish(
                             job_id,
                             "error",
                             "No pude generar audio para exportar.",
                             error=artifact.detail or "tts_failed",
                         )
                         return
-                    with owner._audio_export_lock:
-                        owner._audio_export_jobs[job_id].generated_blocks += 1
+                    with self.lock:
+                        self.jobs[job_id].generated_blocks += 1
                 if not artifact.ok or not artifact.path or not artifact.path.exists():
-                    owner._finish_audio_export_job(
+                    self.finish(
                         job_id,
                         "error",
                         "No encontré el WAV de un bloque exportado.",
@@ -292,17 +320,15 @@ class AudioExportService:
                     )
                     return
                 inputs.append(Path(artifact.path))
-                with owner._audio_export_lock:
-                    current_job = owner._audio_export_jobs.get(job_id)
+                with self.lock:
+                    current_job = self.jobs.get(job_id)
                     if current_job:
                         current_job.completed_blocks += 1
                         current_job.detail = f"Bloque {chunk_number} listo."
             if not inputs:
-                owner._finish_audio_export_job(
-                    job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs"
-                )
+                self.finish(job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs")
                 return
-            reservation = reserve_output_path(owner.audio_export_root, job.filename, default_suffix=".wav")
+            reservation = reserve_output_path(self.output_root, job.filename, default_suffix=".wav")
             target = reservation.path
             temporary = target.with_name(f".{target.stem}.{job_id}.part.wav")
             if len(inputs) == 1:
@@ -314,13 +340,13 @@ class AudioExportService:
                 concat_method = "copy"
             else:
                 concat_method = concat_wav_files(inputs, temporary)
-            if owner._audio_export_cancel.is_set():
+            if self.cancel_event.is_set():
                 temporary.unlink(missing_ok=True)
-                owner._finish_audio_export_job(job_id, "cancelled", "Exportación cancelada.")
+                self.finish(job_id, "cancelled", "Exportación cancelada.")
                 return
             reservation.publish(temporary)
             temporary = None
-            owner._finish_audio_export_job(
+            self.finish(
                 job_id,
                 "done",
                 "Listo: guardado en Descargas.",
@@ -332,8 +358,18 @@ class AudioExportService:
                 temporary.unlink(missing_ok=True)
             if target and target.exists():
                 target.unlink(missing_ok=True)
-            owner._finish_audio_export_job(job_id, "error", "Falló la exportación de audio.", error=type(exc).__name__)
+            self.finish(job_id, "error", "Falló la exportación de audio.", error=type(exc).__name__)
         finally:
             if "reservation" in locals():
                 reservation.cleanup()
-            owner._audio_export_cancel.clear()
+            self.cancel_event.clear()
+
+    def begin_shutdown(self) -> threading.Thread | None:
+        self.cancel_event.set()
+        with self.lock:
+            thread = self.thread
+            job = self.jobs.get(self.active_job_id)
+            if job and job.state in {"queued", "running"}:
+                job.state = "canceling" if job.state == "running" else "cancelled"
+                job.detail = "Cancelando exportación de audio..."
+            return thread

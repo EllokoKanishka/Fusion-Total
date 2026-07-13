@@ -117,18 +117,6 @@ class FusionReaderV2:
         self._prepare_thread: threading.Thread | None = None
         self._prepare_generation = 0
         self._prepare_status: dict = self._new_prepare_status()
-        self._audio_export_lock = threading.Lock()
-        self._audio_export_cancel = threading.Event()
-        self._audio_export_thread: threading.Thread | None = None
-        self._audio_export_jobs: dict[str, AudioExportJob] = {}
-        self._audio_export_service = AudioExportService(
-            self,
-            jobs=self._audio_export_jobs,
-            max_items=job_max_items,
-            ttl_seconds=job_ttl_seconds,
-        )
-        self._audio_export_active_job_id = ""
-        self._audio_export_latest_job_id = ""
         # Canonical coordination order for lifecycle-sensitive background work:
         # _background_work_condition -> {_audio_export_lock, _prepare_lock, _prefetch_lock} -> _tts_gate.
         # Never call _background_work_is_open() while holding _prefetch_lock or _tts_gate.
@@ -208,6 +196,20 @@ class FusionReaderV2:
         self.audio_export_root = (
             (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
         )
+        self._audio_export_service = AudioExportService(
+            session=self.session,
+            voice=self.voice,
+            cache=self.cache,
+            tts=self.tts,
+            output_root=self.audio_export_root,
+            background_condition=self._background_work_condition,
+            background_is_open_locked=lambda: self._background_work_is_open_locked(),
+            before_registration=lambda: self._before_audio_export_registration(),
+            wait_for_interactive_tts=lambda: self._wait_for_interactive_tts(),
+            synthesize=lambda text, voice, language: self._synthesize_cached_with_settings(text, voice, language),
+            max_items=job_max_items,
+            ttl_seconds=job_ttl_seconds,
+        )
         self._audio_service = AudioService(
             tts=self.tts,
             voice=self.voice,
@@ -230,6 +232,42 @@ class FusionReaderV2:
         self._restore_session_state()
         if self.session.document:
             self._document_generation = max(1, self._document_generation)
+
+    @property
+    def _audio_export_lock(self):
+        return self._audio_export_service.lock
+
+    @property
+    def _audio_export_cancel(self):
+        return self._audio_export_service.cancel_event
+
+    @property
+    def _audio_export_thread(self):
+        return self._audio_export_service.thread
+
+    @_audio_export_thread.setter
+    def _audio_export_thread(self, value):
+        self._audio_export_service.thread = value
+
+    @property
+    def _audio_export_jobs(self):
+        return self._audio_export_service.jobs
+
+    @property
+    def _audio_export_active_job_id(self):
+        return self._audio_export_service.active_job_id
+
+    @_audio_export_active_job_id.setter
+    def _audio_export_active_job_id(self, value):
+        self._audio_export_service.active_job_id = value
+
+    @property
+    def _audio_export_latest_job_id(self):
+        return self._audio_export_service.latest_job_id
+
+    @_audio_export_latest_job_id.setter
+    def _audio_export_latest_job_id(self, value):
+        self._audio_export_service.latest_job_id = value
 
     def _set_background_work_state_locked(self, state: str) -> None:
         self._lifecycle_service.set_state_locked(state)
