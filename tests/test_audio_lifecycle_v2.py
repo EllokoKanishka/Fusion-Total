@@ -378,9 +378,9 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
 
     def test_frontend_busy_leases_are_balanced_for_resetting_operations(self):
         server_text = web_source()
-        helper_text = Path("fusion_reader_v2/web/static/busy_controls.js").read_text(encoding="utf-8")
+        helper_text = Path("fusion_reader_v2/web/static/js/busy.mjs").read_text(encoding="utf-8")
         self.assertNotIn("__BUSY_CONTROL_HELPERS__", server_text)
-        self.assertIn('src="/static/busy_controls.js"', server_text)
+        self.assertIn("from './busy.mjs'", server_text)
         self.assertIn("busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '')", server_text)
         self.assertIn(
             "els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));", server_text
