@@ -8,8 +8,7 @@ import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from threading import Event
-from typing import Any
+from typing import Any, Protocol
 
 LOG = logging.getLogger(__name__)
 DEFAULT_OUTPUT_LIMIT = 1024 * 1024
@@ -17,6 +16,10 @@ DEFAULT_OUTPUT_LIMIT = 1024 * 1024
 
 class OwnedProcessError(RuntimeError):
     """Stable failure raised when an owned subprocess cannot be reaped."""
+
+
+class CancelSignal(Protocol):
+    def is_set(self) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -74,7 +77,7 @@ def run_owned(
     command: Sequence[os.PathLike[str] | str],
     *,
     timeout: float,
-    cancel_event: Event | None = None,
+    cancel_event: CancelSignal | None = None,
     cwd: os.PathLike[str] | str | None = None,
     env: Mapping[str, str] | None = None,
     input: str | bytes | None = None,

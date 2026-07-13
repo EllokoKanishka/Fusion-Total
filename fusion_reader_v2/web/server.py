@@ -151,12 +151,12 @@ class WebContext:
                 return {"ok": True, "state": "closed", "alive_threads": []}
             self._closed = True
             threads = list(self._threads)
-        for job in self.pdf_jobs.snapshot().values():
-            if job.state not in {"done", "cancelled", "error"}:
-                job.cancelled = True
-        for job in self.import_jobs.snapshot().values():
-            if str(job.get("status") or "") not in {"done", "cancelled", "error"}:
-                job["cancelled"] = True
+        for pdf_job in self.pdf_jobs.snapshot().values():
+            if pdf_job.state not in {"done", "cancelled", "error"}:
+                pdf_job.cancelled = True
+        for import_job in self.import_jobs.snapshot().values():
+            if str(import_job.get("status") or "") not in {"done", "cancelled", "error"}:
+                import_job["cancelled"] = True
         deadline = time.monotonic() + max(0.0, timeout)
         for thread in threads:
             remaining = deadline - time.monotonic()
