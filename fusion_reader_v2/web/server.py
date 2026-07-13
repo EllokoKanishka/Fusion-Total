@@ -25,13 +25,6 @@ from fusion_reader_v2.web.routes.documents import (
     load_imported_document,
     resolve_library_path as resolve_library_path,
 )
-from fusion_reader_v2.web.routes.health import handle_health_get
-from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
-from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
-from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
-from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
-from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
-from fusion_reader_v2.web.routes.reading import handle_reading_post
 from fusion_reader_v2.web.jobs import import_job_worker, new_import_job
 from fusion_reader_v2.web.downloads import (
     audio_url_for,
@@ -343,23 +336,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, content_type, asset.read_bytes())
             return
-        if handle_health_get(self, path):
-            return
         if path == "/api/library":
             self._json(200, {"ok": True, "items": library_items(self.context)})
-            return
-        if handle_audio_get(self, path, self.path):
-            return
-        if handle_preparation_get(self, path):
             return
         if path == "/api/references":
             self._json(200, self.app.list_reference_documents())
             return
-        if handle_notes_get(self, path, self.path):
-            return
-        if handle_dialogue_get(self, path):
-            return
-        if handle_tools_get(self, path, self.path):
+        if ROUTER.dispatch_get(self, path, self.path):
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
@@ -433,7 +416,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
             return
         try:
-            if handle_tools_post(self, path):
+            if ROUTER.dispatch_raw_post(self, path):
                 return
             if path == "/api/import-file/start":
                 params = parse_qs(parsed.query)
@@ -498,15 +481,7 @@ class Handler(BaseHTTPRequestHandler):
                     tmp_path.unlink(missing_ok=True)
                 return
             payload = self._payload()
-            if handle_audio_post(self, path, payload):
-                return
-            if handle_dialogue_post(self, path, payload):
-                return
-            if handle_preparation_post(self, path, payload):
-                return
-            if handle_reading_post(self, path, payload):
-                return
-            if handle_notes_post(self, path, payload):
+            if ROUTER.dispatch_post(self, path, payload):
                 return
         except Exception as exc:
             get_logger().warning(

@@ -9,6 +9,7 @@ from fusion_reader_v2.web.routes.preparation import handle_preparation_get, hand
 from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
+from fusion_reader_v2.web.routing import create_router
 
 
 class Context:
@@ -113,6 +114,14 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["start"], "beginning")
         self.assertTrue(handle_preparation_post(responder, "/api/prepare/cancel", {}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["state"], "cancelled")
+
+    def test_router_dispatches_to_domain_handlers(self) -> None:
+        responder = DomainResponder()
+        router = create_router()
+        self.assertTrue(router.dispatch_get(responder, "/api/voices", "/api/voices"))  # type: ignore[arg-type]
+        self.assertEqual(len(responder.responses), 1)
+        self.assertTrue(router.dispatch_post(responder, "/api/next", {}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["current"], 2)
 
 
 if __name__ == "__main__":

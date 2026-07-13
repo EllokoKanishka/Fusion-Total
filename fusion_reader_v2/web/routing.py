@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
+from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
+from fusion_reader_v2.web.routes.health import handle_health_get
+from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
+from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
+from fusion_reader_v2.web.routes.reading import handle_reading_post
+from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
+
 
 @dataclass(frozen=True)
 class Route:
@@ -22,6 +30,30 @@ class Router:
 
     def resolve(self, method: str, path: str) -> Route | None:
         return next((route for route in self.routes if route.matches(method, path)), None)
+
+    def dispatch_get(self, responder, path: str, raw_path: str) -> bool:
+        handlers = (
+            lambda: handle_health_get(responder, path),
+            lambda: handle_audio_get(responder, path, raw_path),
+            lambda: handle_preparation_get(responder, path),
+            lambda: handle_notes_get(responder, path, raw_path),
+            lambda: handle_dialogue_get(responder, path),
+            lambda: handle_tools_get(responder, path, raw_path),
+        )
+        return any(handler() for handler in handlers)
+
+    def dispatch_raw_post(self, responder, path: str) -> bool:
+        return handle_tools_post(responder, path)
+
+    def dispatch_post(self, responder, path: str, payload: dict) -> bool:
+        handlers = (
+            lambda: handle_audio_post(responder, path, payload),
+            lambda: handle_dialogue_post(responder, path, payload),
+            lambda: handle_preparation_post(responder, path, payload),
+            lambda: handle_reading_post(responder, path, payload),
+            lambda: handle_notes_post(responder, path, payload),
+        )
+        return any(handler() for handler in handlers)
 
 
 def create_router() -> Router:
