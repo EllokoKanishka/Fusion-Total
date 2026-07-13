@@ -57,7 +57,8 @@ omit = ["*/__main__.py", "*/web/static/*"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 85
+# Independent line and branch gates live in scripts/check_coverage_thresholds.py.
+fail_under = 0
 
 [tool.coverage.xml]
 output = "coverage.xml"

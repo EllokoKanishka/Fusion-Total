@@ -5,8 +5,10 @@ import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
-from fusion_reader_v2.owned_subprocess import OwnedProcessError, run_owned, sanitized_command
+from fusion_reader_v2 import owned_subprocess
+from fusion_reader_v2.owned_subprocess import OwnedProcessError, run_owned, sanitized_command, terminate_owned_process
 
 
 class OwnedSubprocessTests(unittest.TestCase):
@@ -47,6 +49,45 @@ class OwnedSubprocessTests(unittest.TestCase):
         self.assertNotIn("secret-value", rendered)
         self.assertIn("<redacted>", rendered)
         self.assertIn("<arg:300 chars>", rendered)
+
+    def test_shell_input_and_signal_failure_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "shell_not_supported"):
+            run_owned([sys.executable, "-c", "pass"], timeout=1, shell=True)
+        echoed = run_owned(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"],
+            timeout=2,
+            input="hola",
+            text=True,
+        )
+        self.assertEqual(echoed.stdout, "hola")
+
+        finished = mock.Mock()
+        finished.poll.return_value = 0
+        with mock.patch.object(owned_subprocess.os, "killpg") as killpg:
+            owned_subprocess._signal_process(finished, 15)
+        killpg.assert_not_called()
+
+        fallback = mock.Mock(pid=123)
+        fallback.poll.return_value = None
+        with mock.patch.object(owned_subprocess.os, "killpg", side_effect=PermissionError):
+            owned_subprocess._signal_process(fallback, 15)
+        fallback.send_signal.assert_called_once_with(15)
+
+        gone = mock.Mock(pid=123)
+        gone.poll.return_value = None
+        gone.send_signal.side_effect = ProcessLookupError
+        with mock.patch.object(owned_subprocess.os, "killpg", side_effect=ProcessLookupError):
+            owned_subprocess._signal_process(gone, 15)
+
+    def test_unreaped_process_has_stable_error(self) -> None:
+        process = mock.Mock(pid=123)
+        process.poll.return_value = None
+        process.wait.side_effect = subprocess.TimeoutExpired("child", 0.1)
+        with (
+            mock.patch.object(owned_subprocess.os, "killpg"),
+            self.assertRaisesRegex(OwnedProcessError, "owned_process_unreaped"),
+        ):
+            terminate_owned_process(process, grace=0.01)
 
 
 if __name__ == "__main__":
