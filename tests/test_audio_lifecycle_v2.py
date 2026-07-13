@@ -374,7 +374,7 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
         read = text[text.index("async function readCurrent()") : text.index("async function pollPrepare()")]
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)
-        self.assertIn('self._result(409 if result.get("stale") else 200, result)', text)
+        self.assertIn('_result(409 if result.get("stale") else 200, result)', text)
 
     def test_frontend_busy_leases_are_balanced_for_resetting_operations(self):
         server_text = web_source()

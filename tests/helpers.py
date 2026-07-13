@@ -274,6 +274,11 @@ class FailingChatProvider:
 def web_source() -> str:
     paths = (
         Path("fusion_reader_v2/web/server.py"),
+        Path("fusion_reader_v2/web/routes/audio.py"),
+        Path("fusion_reader_v2/web/routes/dialogue.py"),
+        Path("fusion_reader_v2/web/routes/notes.py"),
+        Path("fusion_reader_v2/web/routes/reading.py"),
+        Path("fusion_reader_v2/web/routes/tools.py"),
         Path("fusion_reader_v2/web/static/index.html"),
         Path("fusion_reader_v2/web/static/app.js"),
         Path("fusion_reader_v2/web/static/js/bootstrap.mjs"),

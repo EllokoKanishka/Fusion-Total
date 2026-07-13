@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import hmac
 import json
 import os
@@ -16,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from fusion_reader_v2 import FusionReaderV2, import_document_bytes, import_document_path
+from fusion_reader_v2 import FusionReaderV2, import_document_path
 from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.observability import configure_logging, get_logger
@@ -24,22 +22,22 @@ from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.context import WebContext
-from fusion_reader_v2.web.routes.documents import library_items, load_imported_document, resolve_library_path
-from fusion_reader_v2.web.routes.health import handle_health_get
-from fusion_reader_v2.web.jobs import (
-    get_import_job,
-    get_pdf_to_docx_download,
-    import_job_worker,
-    new_import_job,
-    register_pdf_to_docx_download,
+from fusion_reader_v2.web.routes.documents import (
+    library_items,
+    load_imported_document,
+    resolve_library_path as resolve_library_path,
 )
+from fusion_reader_v2.web.routes.health import handle_health_get
+from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
+from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
+from fusion_reader_v2.web.routes.tools import handle_tools_get
+from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
+from fusion_reader_v2.web.routes.reading import handle_reading_post
+from fusion_reader_v2.web.jobs import import_job_worker, new_import_job, register_pdf_to_docx_download
 from fusion_reader_v2.web.downloads import (
-    OutputValidationError,
     audio_url_for,
     cached_audio_path,
-    stream_file,
     unique_download_target as unique_download_target,
-    validate_output_file,
 )
 from fusion_reader_v2.web.routing import create_router
 from fusion_reader_v2.pdf_to_docx import (
@@ -362,133 +360,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/library":
             self._json(200, {"ok": True, "items": library_items(self.context)})
             return
-        if path == "/api/voice/voices" or path == "/api/voices":
-            self._json(200, self.app.get_voice_catalog())
-            return
-        if path == "/api/voice/metrics":
-            self._json(200, self.app.recent_voice_metrics())
-            return
-        if path == "/api/voice/metrics/summary":
-            self._json(200, self.app.voice_metrics_summary())
-            return
-        if path == "/api/voice/metrics/documents":
-            self._json(200, self.app.voice_metrics_by_document())
-            return
-        if path == "/api/voice/metrics/chunks":
-            parsed = urlparse(self.path)
-            params = parse_qs(parsed.query)
-            doc_id = str((params.get("doc_id") or [""])[0])
-            limit = int((params.get("limit") or ["20"])[0])
-            self._json(200, self.app.voice_metrics_by_chunk(doc_id=doc_id, limit=limit))
+        if handle_audio_get(self, path, self.path):
             return
         if path == "/api/prepare/status":
             self._json(200, self.app.prepare_status())
             return
-        if path == "/api/audio-export/status":
-            self._json(200, self.app.audio_export_overview())
-            return
         if path == "/api/references":
             self._json(200, self.app.list_reference_documents())
             return
-        if path == "/api/notes":
-            parsed = urlparse(self.path)
-            params = parse_qs(parsed.query)
-            doc_id = str((params.get("doc_id") or [""])[0])
-            current_only = str((params.get("current_only") or ["0"])[0]).lower() in {"1", "true", "yes"}
-            chunk_index_raw = str((params.get("chunk_index") or [""])[0])
-            chunk_index = int(chunk_index_raw) if chunk_index_raw else None
-            self._json(200, self.app.list_notes(doc_id=doc_id, chunk_index=chunk_index, current_only=current_only))
+        if handle_notes_get(self, path, self.path):
             return
-        if path == "/api/dialogue/status":
-            self._json(200, self.app.dialogue_status())
+        if handle_dialogue_get(self, path):
             return
-        if path == "/api/import-status":
-            parsed = urlparse(self.path)
-            params = parse_qs(parsed.query)
-            job_id = str((params.get("id") or [""])[0])
-            import_job = get_import_job(self.context, job_id)
-            if not import_job:
-                self._json(404, {"ok": False, "error": "import_job_not_found"})
-                return
-            self._json(200, import_job)
-            return
-        if path.startswith("/api/tools/pdf-to-docx/status/"):
-            job_id = path.split("/")[-1]
-            pdf_job = self.context.pdf_jobs.get(job_id)
-            if not pdf_job:
-                self._json(404, {"ok": False, "error": "Job no encontrado."})
-                return
-            self._json(
-                200,
-                {
-                    "ok": True,
-                    "job_id": pdf_job.job_id,
-                    "state": pdf_job.state,
-                    "stage": pdf_job.stage,
-                    "current_page": pdf_job.current_page,
-                    "total_pages": pdf_job.total_pages,
-                    "percent": pdf_job.percent,
-                    "message": pdf_job.message,
-                    "filename": pdf_job.filename,
-                    "saved_path": pdf_job.saved_path,
-                    "download_url": pdf_job.download_url,
-                    "warnings": pdf_job.warnings,
-                    "error": pdf_job.error,
-                    "noise_lines_removed": pdf_job.result.noise_lines_removed if pdf_job.result else 0,
-                    "paragraphs_merged": pdf_job.result.paragraphs_merged if pdf_job.result else 0,
-                    "headings_detected": pdf_job.result.headings_detected if pdf_job.result else 0,
-                },
-            )
-            return
-
-        if path.startswith("/api/tools/pdf-to-docx/download/"):
-            job_id = Path(path).name
-            item = get_pdf_to_docx_download(self.context, job_id)
-            if not item:
-                self._json(404, {"ok": False, "error": "pdf_to_docx_download_not_found"})
-                return
-            try:
-                try:
-                    docx_path = validate_output_file(
-                        str(item.get("path") or ""), self.settings.paths.downloads, suffix=".docx"
-                    )
-                except OutputValidationError:
-                    docx_path = validate_output_file(str(item.get("path") or ""), self.context.pdf_root, suffix=".docx")
-            except OutputValidationError:
-                self._json(404, {"ok": False, "error": "pdf_to_docx_file_missing"})
-                return
-            stream_file(
-                self,
-                docx_path,
-                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                filename=str(item.get("filename") or "documento.docx"),
-            )
-            return
-        if path.startswith("/api/audio-export/status/"):
-            job_id = Path(path).name
-            status = self.app.audio_export_status(job_id)
-            self._json(200 if status.get("ok") else 404, status)
-            return
-        if path.startswith("/api/audio-export/download/"):
-            job_id = Path(path).name
-            item = self.app.get_audio_export_download(job_id)
-            if not item.get("ok"):
-                self._json(404, item)
-                return
-            try:
-                audio_root = Path(getattr(self.app, "audio_export_root", self.settings.paths.downloads))
-                wav_path = validate_output_file(str(item.get("path") or ""), audio_root, suffix=".wav")
-            except OutputValidationError:
-                self._json(404, {"ok": False, "error": "audio_export_file_missing"})
-                return
-            stream_file(self, wav_path, content_type="audio/wav", filename=str(item.get("filename") or "audio.wav"))
-            return
-        if path.startswith("/audio/"):
-            audio_path = cached_audio_path(self.context, path)
-            if not audio_path:
-                self._json(404, {"ok": False, "error": "audio_not_found"})
-                return
-            self._send(200, "audio/wav", audio_path.read_bytes())
+        if handle_tools_get(self, path, self.path):
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
@@ -702,216 +586,13 @@ class Handler(BaseHTTPRequestHandler):
                     tmp_path.unlink(missing_ok=True)
                 return
             payload = self._payload()
-            if path == "/api/load":
-                role = str(payload.get("role") or "main")
-                if payload.get("book_id"):
-                    if role == "reference":
-                        self._json(
-                            200,
-                            self.app.add_reference_file(
-                                resolve_library_path(self.context, str(payload.get("book_id")))
-                            ),
-                        )
-                    else:
-                        self._json(
-                            200,
-                            self.app.load_file(
-                                resolve_library_path(self.context, str(payload.get("book_id"))), prefetch=False
-                            ),
-                        )
-                    return
-                if payload.get("text"):
-                    if role == "reference":
-                        self._json(
-                            200,
-                            self.app.add_reference_text(
-                                str(payload.get("doc_id") or "manual"),
-                                str(payload.get("title") or "Manual"),
-                                str(payload.get("text")),
-                                source_type="manual",
-                            ),
-                        )
-                    else:
-                        self._json(
-                            200,
-                            self.app.load_text(
-                                str(payload.get("doc_id") or "manual"),
-                                str(payload.get("title") or "Manual"),
-                                str(payload.get("text")),
-                                prefetch=False,
-                                source_type="manual",
-                            ),
-                        )
-                    return
-                if payload.get("path"):
-                    if role == "reference":
-                        self._json(
-                            200,
-                            self.app.add_reference_file(resolve_library_path(self.context, str(payload.get("path")))),
-                        )
-                    else:
-                        self._json(
-                            200,
-                            self.app.load_file(
-                                resolve_library_path(self.context, str(payload.get("path"))), prefetch=False
-                            ),
-                        )
-                    return
-                self._json(400, {"ok": False, "error": "missing_text_or_book_id"})
+            if handle_audio_post(self, path, payload):
                 return
-            if path == "/api/import":
-                filename = str(payload.get("filename") or "documento")
-                mime = str(payload.get("mime") or "")
-                role = str(payload.get("role") or "main")
-                raw_b64 = str(payload.get("data_b64") or "")
-                if not raw_b64:
-                    self._json(400, {"ok": False, "error": "missing_file_data"})
-                    return
-                if len(raw_b64) > (self.settings.limits.upload_max_bytes * 4 // 3) + 8:
-                    raise ValueError("base64_upload_too_large")
-                try:
-                    decoded = base64.b64decode(raw_b64, validate=True)
-                except (binascii.Error, ValueError) as exc:
-                    raise ValueError("invalid_base64") from exc
-                if len(decoded) > self.settings.limits.upload_max_bytes:
-                    raise ValueError("upload_too_large")
-                imported = import_document_bytes(filename, decoded, mime=mime)
-                self._json(200, load_imported_document(self.context, imported, role=role))
+            if handle_dialogue_post(self, path, payload):
                 return
-            if path == "/api/reference/promote":
-                self._json(200, self.app.promote_reference_document(str(payload.get("doc_id") or ""), prefetch=False))
+            if handle_reading_post(self, path, payload):
                 return
-            if path == "/api/reference/remove":
-                self._json(200, self.app.remove_reference_document(str(payload.get("doc_id") or "")))
-                return
-            if path == "/api/document/clear":
-                self._json(200, self.app.clear_document())
-                return
-            if path == "/api/read":
-                result = self.app.read_current(play=bool(payload.get("play", False)))
-                self._result(409 if result.get("stale") else 200, result)
-                return
-            if path == "/api/next":
-                self._json(200, self.app.next())
-                return
-            if path == "/api/previous":
-                self._json(200, self.app.previous())
-                return
-            if path == "/api/jump":
-                self._json(200, self.app.jump(int(payload.get("index", 1))))
-                return
-            if path == "/api/prepare/start":
-                self._json(200, self.app.prepare_document(start=str(payload.get("start") or "cursor")))
-                return
-            if path == "/api/prepare/cancel":
-                self._json(200, self.app.cancel_prepare())
-                return
-            if path == "/api/audio-export":
-                block_value = payload.get("block")
-                start_value = payload.get("start")
-                end_value = payload.get("end")
-                self._json(
-                    200,
-                    self.app.start_audio_export(
-                        str(payload.get("mode") or ""),
-                        block=int(block_value) if block_value is not None else None,
-                        start=int(start_value) if start_value is not None else None,
-                        end=int(end_value) if end_value is not None else None,
-                    ),
-                )
-                return
-            if path.startswith("/api/audio-export/cancel/"):
-                self._json(200, self.app.cancel_audio_export(Path(path).name))
-                return
-            if path == "/api/notes/create":
-                chunk_index = payload.get("chunk_index")
-                self._json(
-                    200,
-                    self.app.create_note(
-                        str(payload.get("text") or ""),
-                        chunk_index=int(chunk_index) if chunk_index is not None else None,
-                    ),
-                )
-                return
-            if path == "/api/notes/update":
-                self._json(
-                    200,
-                    self.app.update_note(
-                        str(payload.get("note_id") or ""),
-                        str(payload.get("text") or ""),
-                        doc_id=str(payload.get("doc_id") or ""),
-                    ),
-                )
-                return
-            if path == "/api/notes/rename":
-                self._json(
-                    200,
-                    self.app.rename_note(
-                        str(payload.get("note_id") or ""),
-                        str(payload.get("label") or ""),
-                        doc_id=str(payload.get("doc_id") or ""),
-                    ),
-                )
-                return
-            if path == "/api/notes/delete":
-                self._json(
-                    200,
-                    self.app.delete_note(str(payload.get("note_id") or ""), doc_id=str(payload.get("doc_id") or "")),
-                )
-                return
-            if path == "/api/dialogue/reset":
-                self._json(200, self.app.dialogue_reset())
-                return
-            if path == "/api/reasoning/mode":
-                self._json(200, self.app.set_reasoning_mode(str(payload.get("mode") or "")))
-                return
-            if path == "/api/laboratory/mode":
-                self._json(200, self.app.set_laboratory_mode(str(payload.get("mode") or "")))
-                return
-            if path == "/api/profile":
-                self._json(200, self.app.set_profile(str(payload.get("mode") or "")))
-                return
-            if path == "/api/veil":
-                self._json(200, self.app.set_veil(str(payload.get("mode") or "")))
-                return
-            if path == "/api/voice":
-                self._json(200, self.app.set_voice(str(payload.get("voice") or "")))
-                return
-            if path in ("/api/laboratory/reset", "/api/chat/reset"):
-                self._json(200, self.app.clear_laboratory_history())
-                return
-            if path == "/api/dialogue/turn":
-                content_type = self.headers.get("Content-Type", "") or ""
-                if "application/json" in content_type:
-                    dialogue_chunk_value = payload.get("chunk_index")
-                    self._result(
-                        200,
-                        self.app.dialogue_turn_text(
-                            str(payload.get("text") or ""),
-                            model=str(payload.get("model") or ""),
-                            chunk_index=int(dialogue_chunk_value) if dialogue_chunk_value is not None else None,
-                        ),
-                    )
-                    return
-            if path == "/api/voice/test":
-                self._result(
-                    200,
-                    self.app.test_voice(
-                        str(payload.get("text") or "Prueba de voz neural del lector conversacional."),
-                        play=bool(payload.get("play", False)),
-                    ),
-                )
-                return
-            if path == "/api/chat":
-                chat_chunk_value = payload.get("chunk_index")
-                self._result(
-                    200,
-                    self.app.chat(
-                        str(payload.get("message") or ""),
-                        model=str(payload.get("model") or ""),
-                        chunk_index=int(chat_chunk_value) if chat_chunk_value is not None else None,
-                    ),
-                )
+            if handle_notes_post(self, path, payload):
                 return
         except Exception as exc:
             get_logger().warning(
