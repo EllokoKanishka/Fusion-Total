@@ -22,6 +22,7 @@ from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.observability import configure_logging, get_logger
+from fusion_reader_v2.output_validation import OutputValidationError, stream_file, validate_output_file
 from fusion_reader_v2.version import __version__
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.routing import create_router
@@ -144,22 +145,33 @@ class WebContext:
             thread.start()
             return thread
 
-    def shutdown_jobs(self, timeout: float = 10.0) -> None:
+    def shutdown_jobs(self, timeout: float = 10.0) -> dict:
         with self._threads_lock:
             if self._closed and not self._threads:
-                return
+                return {"ok": True, "state": "closed", "alive_threads": []}
             self._closed = True
             threads = list(self._threads)
         for job in self.pdf_jobs.snapshot().values():
             if job.state not in {"done", "cancelled", "error"}:
                 job.cancelled = True
-                job.state = "cancelled"
+        for job in self.import_jobs.snapshot().values():
+            if str(job.get("status") or "") not in {"done", "cancelled", "error"}:
+                job["cancelled"] = True
         deadline = time.monotonic() + max(0.0, timeout)
         for thread in threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(remaining)
+        with self._threads_lock:
+            alive = sorted(thread.name for thread in self._threads if thread.is_alive())
+            if not alive:
+                self._threads.clear()
+        return {
+            "ok": not alive,
+            "state": "closed" if not alive else "timeout",
+            "alive_threads": alive,
+        }
 
     def status(self) -> dict:
         status = self.app.status()
@@ -228,9 +240,14 @@ class FusionHTTPServer(ThreadingHTTPServer):
     context: WebContext
 
     def server_close(self) -> None:
-        if hasattr(self, "context"):
-            self.context.shutdown_jobs(timeout=10.0)
         super().server_close()
+        if hasattr(self, "context"):
+            outcome = self.context.shutdown_jobs(timeout=10.0)
+            if not outcome["ok"]:
+                raise RuntimeError(f"web_shutdown_timeout:{','.join(outcome['alive_threads'])}")
+            app_outcome = self.context.app.shutdown_background_work(timeout=10.0)
+            if isinstance(app_outcome, dict) and not app_outcome.get("ok", True):
+                raise RuntimeError("app_shutdown_timeout")
 
 
 def library_items(context: WebContext) -> list[dict]:
@@ -826,20 +843,22 @@ class Handler(BaseHTTPRequestHandler):
             if not item:
                 self._json(404, {"ok": False, "error": "pdf_to_docx_download_not_found"})
                 return
-            docx_path = Path(str(item.get("path") or "")).resolve()
-            if not docx_path.exists():
+            try:
+                try:
+                    docx_path = validate_output_file(
+                        str(item.get("path") or ""), self.settings.paths.downloads, suffix=".docx"
+                    )
+                except OutputValidationError:
+                    docx_path = validate_output_file(str(item.get("path") or ""), self.context.pdf_root, suffix=".docx")
+            except OutputValidationError:
                 self._json(404, {"ok": False, "error": "pdf_to_docx_file_missing"})
                 return
-            raw = docx_path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header(
-                "Content-Disposition",
-                f'attachment; filename="{Path(str(item.get("filename") or "documento.docx")).name}"',
+            stream_file(
+                self,
+                docx_path,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                filename=str(item.get("filename") or "documento.docx"),
             )
-            self.end_headers()
-            self.wfile.write(raw)
             return
         if path.startswith("/api/audio-export/status/"):
             job_id = Path(path).name
@@ -852,16 +871,15 @@ class Handler(BaseHTTPRequestHandler):
             if not item.get("ok"):
                 self._json(404, item)
                 return
-            wav_path = Path(str(item.get("path") or "")).resolve()
-            raw = wav_path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Content-Length", str(len(raw)))
-            self.send_header(
-                "Content-Disposition", f'attachment; filename="{Path(str(item.get("filename") or "audio.wav")).name}"'
-            )
-            self.end_headers()
-            self.wfile.write(raw)
+            try:
+                audio_root = Path(getattr(self.app, "audio_export_root", self.settings.paths.downloads))
+                wav_path = validate_output_file(
+                    str(item.get("path") or ""), audio_root, suffix=".wav"
+                )
+            except OutputValidationError:
+                self._json(404, {"ok": False, "error": "audio_export_file_missing"})
+                return
+            stream_file(self, wav_path, content_type="audio/wav", filename=str(item.get("filename") or "audio.wav"))
             return
         if path.startswith("/audio/"):
             audio_path = cached_audio_path(self.context, path)
