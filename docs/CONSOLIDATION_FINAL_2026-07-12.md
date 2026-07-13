@@ -23,10 +23,10 @@ Executed from `/tmp/fusion-reader-v2-py312`, Python 3.12.3, editable
 
 | Gate | Result |
 |---|---|
-| Python suite | 501 passed in 29.717 s under final Python 3.12 coverage run |
+| Python suite | 502 passed in 29.698 s under final Python 3.12 coverage run |
 | Stress | 3 passed in 6.512 s; required 100/100/50/50/20 repetition matrix |
-| Line coverage | 91.63% (`6,795 / 7,416`) |
-| Branch coverage | 80.82% (`1,985 / 2,456`, independently thresholded) |
+| Line coverage | 91.62% (`6,801 / 7,423`) |
+| Branch coverage | 80.71% (`1,987 / 2,462`, independently thresholded) |
 | Ruff check/format | pass |
 | mypy | pass, 31 active modules |
 | py_compile | pass |
@@ -85,4 +85,6 @@ temporary HOME/runtime/library/download roots and synthetic providers.
   synthetic results.
 
 Remote workflow results and PR mergeability are authoritative in the open PR.
-The consolidation does not merge, enable auto-merge or delete its branch.
+After the final `py/path-injection` hardening commit, PR `#13` is open, ready
+for review, `CLEAN`, without auto-merge, and with no open CodeQL alerts for the
+PR. The consolidation does not merge, enable auto-merge or delete its branch.
