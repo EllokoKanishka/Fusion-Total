@@ -69,7 +69,9 @@ class CompositionTests(unittest.TestCase):
             self.assertEqual((server.base_url, server.timeout_seconds), (base["FUSION_READER_STT_URL"], 7.25))
             cli = create_providers(create_settings(environ={**base, "FUSION_READER_STT_PROVIDER": "cli"})).stt
             self.assertIsInstance(cli, WhisperCliSTTProvider)
-            self.assertEqual((cli.command, cli.model, cli.timeout_seconds, cli.threads), ("/opt/fusion/whisper", "tiny", 7.25, 3))
+            self.assertEqual(
+                (cli.command, cli.model, cli.timeout_seconds, cli.threads), ("/opt/fusion/whisper", "tiny", 7.25, 3)
+            )
             auto = create_providers(create_settings(environ={**base, "FUSION_READER_STT_PROVIDER": "auto"})).stt
             self.assertIsInstance(auto, AutoSTTProvider)
             self.assertEqual(auto.primary.base_url, base["FUSION_READER_STT_URL"])

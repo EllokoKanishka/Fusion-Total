@@ -873,9 +873,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 audio_root = Path(getattr(self.app, "audio_export_root", self.settings.paths.downloads))
-                wav_path = validate_output_file(
-                    str(item.get("path") or ""), audio_root, suffix=".wav"
-                )
+                wav_path = validate_output_file(str(item.get("path") or ""), audio_root, suffix=".wav")
             except OutputValidationError:
                 self._json(404, {"ok": False, "error": "audio_export_file_missing"})
                 return

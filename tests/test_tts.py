@@ -265,7 +265,10 @@ class TTSTests(unittest.TestCase):
     def test_fusion_launcher_has_persistent_log_and_pid_lifecycle(self):
         root = Path(__file__).resolve().parents[1]
         text = (root / "scripts" / "start_fusion_reader_v2.sh").read_text(encoding="utf-8")
-        self.assertIn('RUNTIME_DIR="${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}"', text)
+        self.assertIn(
+            'RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"',
+            text,
+        )
         self.assertIn("fusion_reader_v2.pid", text)
 
     def test_voice_port_isolation_verifier_separates_strict_and_external_sections(self):

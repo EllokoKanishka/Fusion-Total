@@ -259,9 +259,7 @@ def create_settings(
             searxng_url=(env.get("FUSION_READER_SEARXNG_URL") or f"http://127.0.0.1:{ports.searxng}").rstrip("/"),
             searxng_timeout_seconds=_floating(env, "FUSION_READER_SEARXNG_TIMEOUT", 12.0, minimum=0.1),
             searxng_enabled=_truthy(env.get("FUSION_READER_SEARXNG_ENABLED"), default=True),
-            openclaw_command=env.get(
-                "FUSION_READER_OPENCLAW_BIN", str(home / ".openclaw" / "bin" / "openclaw")
-            ),
+            openclaw_command=env.get("FUSION_READER_OPENCLAW_BIN", str(home / ".openclaw" / "bin" / "openclaw")),
             openclaw_agent=env.get("FUSION_READER_OPENCLAW_AGENT", "fusion-research"),
             openclaw_timeout_seconds=_floating(env, "FUSION_READER_OPENCLAW_TIMEOUT", 90.0, minimum=0.1),
             openclaw_retries=_integer(env, "FUSION_READER_OPENCLAW_RETRIES", 2, minimum=1),

@@ -350,9 +350,7 @@ def _ocr_pdf_pages(
 
 def _tesseract_langs() -> list[str]:
     try:
-        proc = run_owned(
-            ["tesseract", "--list-langs"], timeout=15, capture_output=True, text=True, check=True
-        )
+        proc = run_owned(["tesseract", "--list-langs"], timeout=15, capture_output=True, text=True, check=True)
         return [line.strip() for line in proc.stdout.splitlines() if line.strip() and not line.startswith("List")]
     except (OSError, subprocess.SubprocessError):
         return ["eng"]

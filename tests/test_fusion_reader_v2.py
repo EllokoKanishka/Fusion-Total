@@ -3204,22 +3204,24 @@ Sigue en otra línea y mantiene la misma idea.
 
         with (
             mock.patch("fusion_reader_v2.pdf_to_docx.is_docling_gpu_available", return_value=True),
-            mock.patch("subprocess.Popen") as mock_popen,
             mock.patch("fusion_reader_v2.pdf_to_docx._extract_pages_text", return_value=["   "]),
-            mock.patch("subprocess.run"),
+            mock.patch("fusion_reader_v2.pdf_to_docx._page_count", return_value=1),
+            mock.patch("fusion_reader_v2.pdf_to_docx.run_owned") as run_owned,
         ):
-            mock_proc = mock.MagicMock()
-            mock_proc.poll.return_value = 0
-            mock_proc.returncode = 0
-            mock_proc.communicate.return_value = ("ok", "")
-            mock_popen.return_value = mock_proc
+
+            def synthetic_run(command, **_kwargs):
+                if any(str(part).endswith("md_to_docx.py") for part in command):
+                    Path(command[-1]).write_bytes(b"PK synthetic")
+                return mock.MagicMock(returncode=0, stderr="")
+
+            run_owned.side_effect = synthetic_run
 
             # Temporary mock for find md files
             with mock.patch("pathlib.Path.glob", return_value=[Path("dummy.md")]):
                 convert_pdf_to_docx("test.pdf", "test.docx")
 
-            args, kwargs = mock_popen.call_args
-            cmd = args[0]
+            docling_call = next(call for call in run_owned.call_args_list if "--image-export-mode" in call.args[0])
+            cmd = docling_call.args[0]
             self.assertIn("--image-export-mode", cmd)
             self.assertIn("placeholder", cmd)
 

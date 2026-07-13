@@ -111,7 +111,9 @@ class WhisperCliSTTProvider(STTProvider):
         self.command = command or environment_value("FUSION_READER_STT_COMMAND") or _default_whisper_command()
         self.model = model or environment_value("FUSION_READER_STT_MODEL") or "small"
         self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_STT_TIMEOUT", "180") or "180")
-        self.threads = threads if threads is not None else int(environment_value("FUSION_READER_STT_THREADS", "8") or "8")
+        self.threads = (
+            threads if threads is not None else int(environment_value("FUSION_READER_STT_THREADS", "8") or "8")
+        )
 
     def health(self) -> dict:
         resolved = shutil.which(self.command)
