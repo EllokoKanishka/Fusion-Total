@@ -17,6 +17,8 @@ from unittest.mock import patch
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
+from fusion_reader_v2.web.jobs import register_pdf_to_docx_download
+from fusion_reader_v2.web.routes import tools as tools_routes
 from tests.helpers import SyntheticWavTTSProvider, managed_test_app
 
 
@@ -376,7 +378,7 @@ class WebServerIntegrationTests(unittest.TestCase):
             docx = server.context.pdf_root / "download.docx"
             docx.parent.mkdir(parents=True, exist_ok=True)
             docx.write_bytes(b"PK synthetic docx")
-            item = web_server.register_pdf_to_docx_download(
+            item = register_pdf_to_docx_download(
                 server.context,
                 docx,
                 docx.name,
@@ -412,7 +414,7 @@ class WebServerIntegrationTests(unittest.TestCase):
                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
                 method="POST",
             )
-            with patch.object(web_server, "convert_pdf_to_docx", side_effect=convert):
+            with patch.object(tools_routes, "convert_pdf_to_docx", side_effect=convert):
                 with urllib.request.urlopen(request, timeout=5.0) as response:
                     created = json.loads(response.read())
                 for _ in range(100):
@@ -483,7 +485,7 @@ class WebServerIntegrationTests(unittest.TestCase):
             )
 
             missing_docx = server.context.pdf_root / "missing.docx"
-            item = web_server.register_pdf_to_docx_download(
+            item = register_pdf_to_docx_download(
                 server.context,
                 missing_docx,
                 missing_docx.name,

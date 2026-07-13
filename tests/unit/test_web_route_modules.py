@@ -6,7 +6,7 @@ from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
-from fusion_reader_v2.web.routes.tools import handle_tools_get
+from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
 
@@ -89,6 +89,9 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertTrue(
             handle_tools_get(responder, "/api/import-status", "/api/import-status?id=missing")  # type: ignore[arg-type]
         )
+        self.assertEqual(responder.responses[-1][0], 404)
+        responder.context.pdf_jobs = type("Jobs", (), {"get": lambda self, key: None})()  # type: ignore[attr-defined]
+        self.assertTrue(handle_tools_post(responder, "/api/tools/pdf-to-docx/cancel/missing"))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][0], 404)
 
     def test_post_modules_dispatch_reading_audio_notes_and_dialogue(self) -> None:

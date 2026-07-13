@@ -17,7 +17,6 @@ from fusion_reader_v2 import FusionReaderV2, import_document_path
 from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.observability import configure_logging, get_logger
-from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.web.errors import error_response
 from fusion_reader_v2.web.context import WebContext
@@ -30,21 +29,16 @@ from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
-from fusion_reader_v2.web.routes.tools import handle_tools_get
+from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
-from fusion_reader_v2.web.jobs import import_job_worker, new_import_job, register_pdf_to_docx_download
+from fusion_reader_v2.web.jobs import import_job_worker, new_import_job
 from fusion_reader_v2.web.downloads import (
     audio_url_for,
     cached_audio_path,
     unique_download_target as unique_download_target,
 )
 from fusion_reader_v2.web.routing import create_router
-from fusion_reader_v2.pdf_to_docx import (
-    JobStatus,
-    convert_pdf_to_docx,
-    safe_output_name,
-)
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -439,83 +433,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
             return
         try:
-            if path == "/api/tools/pdf-to-docx":
-                filename, mime, input_path = self._read_multipart_file(field_name="file")
-                clean_name = Path(filename).name
-                if Path(clean_name).suffix.lower() != ".pdf":
-                    input_path.unlink(missing_ok=True)
-                    self._json(400, {"ok": False, "error": "Solo se aceptan archivos PDF."})
-                    return
-                self.context.pdf_root.mkdir(parents=True, exist_ok=True)
-                job_id = uuid.uuid4().hex[:16]
-                owned_input = self.context.pdf_root / f"{job_id}.pdf"
-                os.replace(input_path, owned_input)
-                input_path = owned_input
-
-                pdf_job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
-                self.context.pdf_jobs.add(job_id, pdf_job)
-
-                def _run_job(j: JobStatus, in_p: Path, original_name: str):
-                    temp_docx = self.context.pdf_root / f"{j.job_id}.docx"
-                    try:
-                        result = convert_pdf_to_docx(in_p, temp_docx, job=j)
-                        if not result.ok:
-                            j.state = "error"
-                            j.error = result.error or "Error desconocido en conversión."
-                            return
-
-                        if j.cancelled:
-                            j.state = "cancelled"
-                            return
-
-                        reservation = reserve_output_path(
-                            self.context.settings.paths.downloads, j.filename, default_suffix=".docx"
-                        )
-                        final_target = reservation.publish(temp_docx)
-                        download_item = register_pdf_to_docx_download(
-                            self.context,
-                            final_target,
-                            final_target.name,
-                            result,
-                        )
-
-                        j.state = "done"
-                        j.saved_path = str(final_target)
-                        j.filename = final_target.name
-                        j.download_url = f"/api/tools/pdf-to-docx/download/{download_item['id']}"
-                        j.warnings = list(result.warnings)
-                    except Exception as exc:
-                        j.state = "error"
-                        if "reservation" in locals():
-                            reservation.cleanup()
-                        j.error = type(exc).__name__
-                        get_logger().exception(
-                            "pdf conversion failed",
-                            extra={"request_id": self.request_id, "job_id": j.job_id},
-                        )
-                    finally:
-                        j.updated_ts = time.time()
-                        in_p.unlink(missing_ok=True)
-                        if j.state != "done":
-                            temp_docx.unlink(missing_ok=True)
-
-                self.context.start_thread(
-                    target=_run_job,
-                    args=(pdf_job, input_path, clean_name),
-                    name=f"fusion-pdf-to-docx-{job_id}",
-                )
-                self._json(200, {"ok": True, "job_id": job_id})
-                return
-
-            if path.startswith("/api/tools/pdf-to-docx/cancel/"):
-                job_id = path.split("/")[-1]
-                cancelled_job = self.context.pdf_jobs.get(job_id)
-                if not cancelled_job:
-                    self._json(404, {"ok": False, "error": "Job no encontrado."})
-                    return
-                cancelled_job.cancelled = True
-                cancelled_job.state = "cancelled"
-                self._json(200, {"ok": True, "job_id": job_id})
+            if handle_tools_post(self, path):
                 return
             if path == "/api/import-file/start":
                 params = parse_qs(parsed.query)
