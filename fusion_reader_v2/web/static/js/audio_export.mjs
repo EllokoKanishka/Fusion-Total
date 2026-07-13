@@ -86,5 +86,5 @@ export function createAudioExportController({ api, elements, beginBusyLease, wai
     }
   }
 
-  return { cancel, renderStatus, start, syncInputs };
+  return { cancel, dispose: () => { pollingJobId = ''; }, renderStatus, start, syncInputs };
 }

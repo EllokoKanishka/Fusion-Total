@@ -1,4 +1,5 @@
 export function createPreparationController({ api, elements, beginBusyLease, wait, log }) {
+  let disposed = false;
   function renderStatus(prepare) {
     if (!prepare) return;
     elements.prepareProgress.value = Math.max(0, Math.min(100, Number(prepare.percent || 0)));
@@ -23,12 +24,13 @@ export function createPreparationController({ api, elements, beginBusyLease, wai
   }
 
   async function poll() {
-    while (true) {
+    while (!disposed) {
       await wait(1000);
       const data = await api('/api/prepare/status');
       renderStatus(data);
       if (!['running', 'canceling'].includes(data.status)) return data;
     }
+    return null;
   }
 
   async function start() {
@@ -57,5 +59,5 @@ export function createPreparationController({ api, elements, beginBusyLease, wai
     }
   }
 
-  return { cancel, poll, renderStatus, start };
+  return { cancel, dispose: () => { disposed = true; }, poll, renderStatus, start };
 }

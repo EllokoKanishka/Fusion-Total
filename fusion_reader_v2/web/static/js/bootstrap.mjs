@@ -1,7 +1,7 @@
 import { api } from './api.mjs';
 import { appendPcmChunk, dialoguePcmStats, encodeDialogueWav, friendlyTtsMessage } from './audio.mjs';
 import { applyControlState, createBusyControlState } from './busy.mjs';
-import { createDialogueState } from './dialogue.mjs';
+import { clearDialogueTimers, createDialogueState } from './dialogue.mjs';
 import { collectElements } from './ui.mjs';
 import { createPreparationController } from './preparation.mjs';
 import { createAudioExportController } from './audio_export.mjs';
@@ -1756,6 +1756,16 @@ els.dropzone.addEventListener('drop', event => {
 els.pdfToWordTool.addEventListener('drop', event => {
   const files = event.dataTransfer && event.dataTransfer.files;
   convertPdfToWord(files && files[0]);
+});
+
+window.addEventListener('beforeunload', () => {
+  if (activeReadController) activeReadController.abort();
+  preparation.dispose();
+  audioExport.dispose();
+  clearDialogueTimers(dialogue);
+  if (dialogue.stream) dialogue.stream.getTracks().forEach(track => track.stop());
+  try { els.player.pause(); } catch (_) {}
+  try { els.dialoguePlayer.pause(); } catch (_) {}
 });
 
 refresh().then(() => refreshVoices()).catch(err => log(`Arranque incompleto: ${err.message}`));

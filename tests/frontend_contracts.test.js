@@ -43,6 +43,15 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="audioExportMode"[^>]+aria-label=/);
 });
 
+test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {
+  assert.match(app, /window\.addEventListener\('beforeunload'/);
+  assert.match(app, /activeReadController\.abort\(\)/);
+  assert.match(app, /preparation\.dispose\(\)/);
+  assert.match(app, /audioExport\.dispose\(\)/);
+  assert.match(app, /clearDialogueTimers\(dialogue\)/);
+  assert.match(app, /getTracks\(\)\.forEach\(track => track\.stop\(\)\)/);
+});
+
 test('UI element collection is isolated and resolves each declared element once', async () => {
   const { collectElements, ELEMENT_IDS } = await import('../fusion_reader_v2/web/static/js/ui.mjs');
   const calls = [];
