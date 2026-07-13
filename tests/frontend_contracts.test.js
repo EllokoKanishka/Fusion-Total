@@ -38,3 +38,13 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="voiceSelect"[^>]+aria-label="Voz"/);
   assert.match(html, /id="audioExportMode"[^>]+aria-label=/);
 });
+
+test('UI element collection is isolated and resolves each declared element once', async () => {
+  const { collectElements, ELEMENT_IDS } = await import('../fusion_reader_v2/web/static/js/ui.mjs');
+  const calls = [];
+  const elements = collectElements({ getElementById(id) { calls.push(id); return { id }; } });
+  assert.equal(new Set(ELEMENT_IDS).size, ELEMENT_IDS.length);
+  assert.deepEqual(calls, ELEMENT_IDS);
+  assert.equal(elements.dialogueBtn.id, 'dialogueBtn');
+  assert.equal(elements.voiceSelect.id, 'voiceSelect');
+});
