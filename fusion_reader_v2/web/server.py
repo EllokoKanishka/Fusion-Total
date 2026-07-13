@@ -23,6 +23,7 @@ from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.output_validation import OutputValidationError, stream_file, validate_output_file
+from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.version import __version__
 from fusion_reader_v2.web.errors import error_response
@@ -972,8 +973,10 @@ class Handler(BaseHTTPRequestHandler):
                             j.state = "cancelled"
                             return
 
-                        final_target = unique_download_target(self.context, j.filename)
-                        os.replace(temp_docx, final_target)
+                        reservation = reserve_output_path(
+                            self.context.settings.paths.downloads, j.filename, default_suffix=".docx"
+                        )
+                        final_target = reservation.publish(temp_docx)
                         download_item = register_pdf_to_docx_download(
                             self.context,
                             final_target,
@@ -988,6 +991,8 @@ class Handler(BaseHTTPRequestHandler):
                         j.warnings = list(result.warnings)
                     except Exception as exc:
                         j.state = "error"
+                        if "reservation" in locals():
+                            reservation.cleanup()
                         j.error = type(exc).__name__
                         get_logger().exception(
                             "pdf conversion failed",

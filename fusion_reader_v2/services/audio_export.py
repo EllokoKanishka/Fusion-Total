@@ -12,9 +12,9 @@ from fusion_reader_v2.audio_export import (
     AudioExportSnapshot,
     build_audio_export_filename,
     concat_wav_files,
-    unique_audio_download_target,
 )
 from fusion_reader_v2.domain.jobs import JobRegistry
+from fusion_reader_v2.output_reservation import reserve_output_path
 
 if TYPE_CHECKING:
     from fusion_reader_v2.service import FusionReaderV2
@@ -302,7 +302,8 @@ class AudioExportService:
                     job_id, "error", "No había bloques para exportar.", error="audio_export_no_inputs"
                 )
                 return
-            target = unique_audio_download_target(job.filename, owner.audio_export_root)
+            reservation = reserve_output_path(owner.audio_export_root, job.filename, default_suffix=".wav")
+            target = reservation.path
             temporary = target.with_name(f".{target.stem}.{job_id}.part.wav")
             if len(inputs) == 1:
                 with inputs[0].open("rb") as source, temporary.open("wb") as output:
@@ -317,7 +318,7 @@ class AudioExportService:
                 temporary.unlink(missing_ok=True)
                 owner._finish_audio_export_job(job_id, "cancelled", "Exportación cancelada.")
                 return
-            os.replace(temporary, target)
+            reservation.publish(temporary)
             temporary = None
             owner._finish_audio_export_job(
                 job_id,
@@ -333,4 +334,6 @@ class AudioExportService:
                 target.unlink(missing_ok=True)
             owner._finish_audio_export_job(job_id, "error", "Falló la exportación de audio.", error=type(exc).__name__)
         finally:
+            if "reservation" in locals():
+                reservation.cleanup()
             owner._audio_export_cancel.clear()
