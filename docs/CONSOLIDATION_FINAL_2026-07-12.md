@@ -23,10 +23,10 @@ Executed from `/tmp/fusion-reader-v2-py312`, Python 3.12.3, editable
 
 | Gate | Result |
 |---|---|
-| Python suite | 500 passed in 28.611 s under final Python 3.12 coverage run |
-| Stress | 3 passed in 6.060 s; required 100/100/50/50/20 repetition matrix |
-| Line coverage | 91.33% (`6,773 / 7,416`) |
-| Branch coverage | 80.25% (`1,971 / 2,456`, independently thresholded) |
+| Python suite | 501 passed in 29.717 s under final Python 3.12 coverage run |
+| Stress | 3 passed in 6.512 s; required 100/100/50/50/20 repetition matrix |
+| Line coverage | 91.63% (`6,795 / 7,416`) |
+| Branch coverage | 80.82% (`1,985 / 2,456`, independently thresholded) |
 | Ruff check/format | pass |
 | mypy | pass, 31 active modules |
 | py_compile | pass |

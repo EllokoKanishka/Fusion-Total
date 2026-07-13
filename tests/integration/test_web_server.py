@@ -95,6 +95,47 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(runtime.exists())
 
+    def test_local_path_boundary_helper_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, managed_test_app(root=Path(tmp) / "app") as app:
+            root = Path(tmp)
+            context = web_server.WebContext(app=app, settings=self._settings(root), runtime_info={})
+
+            self.assertEqual(web_server.library_items(context), [])
+            context.library_root.mkdir(parents=True)
+            book = context.library_root / "book.txt"
+            book.write_text("Texto de biblioteca", encoding="utf-8")
+            (context.library_root / "ignored.pdf").write_bytes(b"%PDF")
+            self.assertEqual([item["id"] for item in web_server.library_items(context)], ["book.txt"])
+
+            for invalid in ("", "../escape.txt", str(root / "absolute.txt")):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "invalid_book_id"):
+                    web_server.resolve_library_path(context, invalid)
+
+            outside = root / "outside.txt"
+            outside.write_text("afuera", encoding="utf-8")
+            (context.library_root / "linked.txt").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "book_outside_library"):
+                web_server.resolve_library_path(context, "linked.txt")
+            with self.assertRaisesRegex(ValueError, "unsupported_book_type"):
+                web_server.resolve_library_path(context, "ignored.pdf")
+            with self.assertRaisesRegex(FileNotFoundError, "book_not_found"):
+                web_server.resolve_library_path(context, "missing.txt")
+            self.assertEqual(web_server.resolve_library_path(context, "book.txt"), book)
+
+            cache_file = app.cache.root / "inside.wav"
+            cache_file.write_bytes(b"RIFF")
+            self.assertEqual(web_server.audio_url_for(context, ""), "")
+            self.assertEqual(web_server.audio_url_for(context, str(outside)), "")
+            self.assertEqual(web_server.audio_url_for(context, str(app.cache.root / "missing.wav")), "")
+            self.assertEqual(web_server.audio_url_for(context, str(cache_file)), "/audio/inside.wav")
+            self.assertIsNone(web_server.cached_audio_path(context, "/audio/missing.wav"))
+            self.assertEqual(web_server.cached_audio_path(context, "/audio/inside.wav"), cache_file)
+
+            first = web_server.unique_download_target(context, "result.docx")
+            self.assertEqual(first.name, "result.docx")
+            first.write_bytes(b"docx")
+            self.assertEqual(web_server.unique_download_target(context, "result.docx").name, "result_2.docx")
+
     def test_static_liveness_and_readiness_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp))
