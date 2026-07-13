@@ -35,6 +35,7 @@ from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownCo
 from .services.notes import NotesService
 from .services.research import ResearchService
 from .services.audio_export import AudioExportService
+from .services.audio import AudioService
 from .services.persistence import AtomicJSONStore
 from .services.session_persistence import SessionPersistenceService
 
@@ -193,6 +194,19 @@ class FusionReaderV2:
         )
         self.audio_export_root = (
             (Path(audio_export_root) if audio_export_root is not None else find_downloads_dir()).expanduser().resolve()
+        )
+        self._audio_service = AudioService(
+            tts=self.tts,
+            voice=self.voice,
+            metrics=self.metrics,
+            synthesize=self._synthesize_cached,
+            play=self._play,
+            record_metric=self._record_voice_metric,
+            persist=self._persist_session_state,
+            clear_prefetch=self._clear_prefetch_queue,
+            prepare_status=self.prepare_status,
+            cancel_prepare=self.cancel_prepare,
+            status=self.status,
         )
         self._restore_session_state()
         if self.session.document:
@@ -1529,37 +1543,22 @@ class FusionReaderV2:
         self._audio_export_service.worker(job_id)
 
     def test_voice(self, text: str = "Prueba de voz neural del lector conversacional.", play: bool = True) -> dict:
-        started = time.perf_counter()
-        artifact = self._synthesize_cached(text)
-        ready_ms = int((time.perf_counter() - started) * 1000)
-        if play and artifact.ok:
-            self._play(artifact.path)
-        out = {
-            "ok": artifact.ok,
-            "audio": str(artifact.path or ""),
-            "cached": artifact.cached,
-            "detail": artifact.detail,
-            "provider": artifact.provider,
-            "synthesis_ms": artifact.duration_ms,
-            "ready_ms": ready_ms,
-        }
-        self._record_voice_metric("voice_test", out, text)
-        return out
+        return self._audio_service.test(text, play=play)
 
     def voices(self) -> dict:
-        return {"ok": True, "voices": self.tts.voices(), "current": self.voice.voice}
+        return self._audio_service.catalog()
 
     def recent_voice_metrics(self, limit: int = 20) -> dict:
-        return {"ok": True, "items": self.metrics.recent(limit=limit)}
+        return self._audio_service.recent(limit)
 
     def voice_metrics_summary(self, limit: int = 500) -> dict:
-        return {"ok": True, "items": self.metrics.summary(limit=limit)}
+        return self._audio_service.summary(limit)
 
     def voice_metrics_by_document(self, limit: int = 1000) -> dict:
-        return {"ok": True, "items": self.metrics.document_summary(limit=limit)}
+        return self._audio_service.by_document(limit)
 
     def voice_metrics_by_chunk(self, doc_id: str = "", limit: int = 1000) -> dict:
-        return {"ok": True, "items": self.metrics.chunk_summary(doc_id=doc_id, limit=limit)}
+        return self._audio_service.by_chunk(doc_id, limit)
 
     def reader_snapshot(self) -> dict:
         document = self.session.document
@@ -2170,32 +2169,10 @@ class FusionReaderV2:
         return info
 
     def get_voice_catalog(self) -> dict:
-        available = self.tts.voices()
-        return {
-            "ok": True,
-            "current": self.voice.voice,
-            "voices": available if available else [self.voice.voice],
-        }
+        return self._audio_service.catalog(fallback_current=True)
 
     def set_voice(self, voice: str) -> dict:
-        if not voice or not str(voice).strip():
-            return {"ok": False, "error": "voice_empty"}
-
-        catalog = self.tts.voices()
-        if catalog and voice not in catalog:
-            return {"ok": False, "error": "voice_not_in_catalog"}
-
-        self.voice.voice = voice
-        self._persist_session_state()
-
-        # Cancel active prefetches to avoid mixed voices and stale queue state
-        self._clear_prefetch_queue()
-
-        # If preparation is running, we should probably stop it or it will mix voices
-        if self.prepare_status().get("status") == "running":
-            self.cancel_prepare()
-
-        return self.status()
+        return self._audio_service.set_voice(voice)
 
     def laboratory_mode_status(self) -> dict:
         mode = "free" if str(self.laboratory_mode or "").strip().lower() == "free" else "document"
