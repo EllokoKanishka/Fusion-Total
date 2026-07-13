@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import unittest
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future, TimeoutError
 
 from fusion_reader_v2.audio_export import AudioExportJob
 from fusion_reader_v2.services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
@@ -12,6 +12,14 @@ from tests.helpers import close_test_app, test_app
 
 
 class LifecycleBranchMatrixTests(unittest.TestCase):
+    @staticmethod
+    def _service(*, futures=()) -> BackgroundLifecycleService:
+        return BackgroundLifecycleService(
+            capture_prefetch=lambda: ([], list(futures)),
+            clear_prefetch=lambda: None,
+            reset_prefetch=lambda future: None,
+        )
+
     def test_lifecycle_service_is_instantiable_without_facade(self) -> None:
         service = BackgroundLifecycleService(
             capture_prefetch=lambda: ([], []),
@@ -134,6 +142,58 @@ class LifecycleBranchMatrixTests(unittest.TestCase):
         finally:
             context.shutdown_errors.clear()
             close_test_app(app)
+
+    def test_binding_guards_and_prioritize_fallback(self) -> None:
+        class Stoppable:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def begin_shutdown(self):
+                self.calls += 1
+                return None
+
+        lifecycle = self._service()
+        with self.assertRaisesRegex(RuntimeError, "not_bound"):
+            lifecycle.capture_shutdown_context(BackgroundShutdownContext())
+        with self.assertRaisesRegex(RuntimeError, "not_bound"):
+            lifecycle.prioritize_dialogue()
+        first, second = Stoppable(), Stoppable()
+        lifecycle.bind_background_services(audio_export=first, preparation=second)
+        with self.assertRaisesRegex(RuntimeError, "already_bound"):
+            lifecycle.bind_background_services(audio_export=first, preparation=second)
+        lifecycle.prioritize_dialogue()
+        self.assertEqual(second.calls, 1)
+
+    def test_shutdown_prefetch_deadline_cancelled_and_timeout_paths(self) -> None:
+        class Stoppable:
+            def begin_shutdown(self):
+                return None
+
+        class ResultFuture:
+            def __init__(self, error: Exception) -> None:
+                self.error = error
+
+            def done(self) -> bool:
+                return False
+
+            def cancel(self) -> bool:
+                return False
+
+            def result(self, timeout: float):
+                raise self.error
+
+        def bound(future) -> BackgroundLifecycleService:
+            service = self._service(futures=(future,))
+            service.bind_background_services(audio_export=Stoppable(), preparation=Stoppable())
+            return service
+
+        pending: Future[AudioArtifact] = Future()
+        with self.assertRaisesRegex(AssertionError, "prefetch future"):
+            bound(pending).shutdown(timeout=0.0)
+        cancelled = bound(ResultFuture(CancelledError()))
+        self.assertEqual(cancelled.shutdown(timeout=1.0)["state"], "closed")
+        with self.assertRaisesRegex(AssertionError, "prefetch future"):
+            bound(ResultFuture(TimeoutError())).shutdown(timeout=1.0)
 
 
 if __name__ == "__main__":
