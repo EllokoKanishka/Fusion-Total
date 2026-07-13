@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import io
+import tempfile
 import unittest
 import zipfile
+from pathlib import Path
+from unittest import mock
 
-from fusion_reader_v2.documents import ArchiveLimits, docx_to_text, odt_to_text
+from fusion_reader_v2 import documents
+from fusion_reader_v2.documents import ArchiveLimits, docx_to_text, import_document_path, imported, odt_to_text
 
 
 def archive(entries: dict[str, bytes], *, compression: int = zipfile.ZIP_DEFLATED) -> bytes:
@@ -67,6 +71,17 @@ class DocumentArchiveSafetyTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "document_text_too_large"):
             docx_to_text(text_xml, limits=ArchiveLimits(max_text_chars=3))
+
+    def test_office_import_and_empty_extraction_are_deterministic_without_libreoffice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "upload"
+            source.write_bytes(b"synthetic office input")
+            with mock.patch.object(documents, "office_to_text", return_value="Texto de oficina") as convert:
+                result = import_document_path("sample.doc", source)
+            self.assertEqual(result.source_type, "office")
+            convert.assert_called_once_with("sample.doc", b"synthetic office input")
+        with self.assertRaisesRegex(ValueError, "empty_extracted_text:text"):
+            imported("empty.txt", "  ", "text", "test")
 
 
 if __name__ == "__main__":
