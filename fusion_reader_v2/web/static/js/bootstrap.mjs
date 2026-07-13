@@ -3,6 +3,7 @@ import { appendPcmChunk, dialoguePcmStats, encodeDialogueWav, friendlyTtsMessage
 import { applyControlState, createBusyControlState } from './busy.mjs';
 import { createDialogueState } from './dialogue.mjs';
 import { collectElements } from './ui.mjs';
+import { createPreparationController } from './preparation.mjs';
 
 const els = collectElements();
 const LAB_NOTES_DOC_ID = '__laboratory__';
@@ -22,6 +23,10 @@ const busyControls = createBusyControlState(
   els.noteInput ? els.noteInput.value : ''
 );
 const dialogue = createDialogueState();
+const preparation = createPreparationController({ api, elements: els, beginBusyLease, wait, log });
+const renderPrepareStatus = preparation.renderStatus;
+const prepareDocument = preparation.start;
+const cancelPrepare = preparation.cancel;
 
 function beginBusyLease() {
   return busyControls.beginBusyLease();
@@ -187,31 +192,6 @@ function setImportProgress(percent) {
   els.importProgress.value = value;
 }
 
-function setPrepareProgress(percent) {
-  const value = Math.max(0, Math.min(100, Number(percent || 0)));
-  els.prepareProgress.value = value;
-}
-
-function renderPrepareStatus(prepare) {
-  if (!prepare) {
-    return;
-  }
-  setPrepareProgress(prepare.percent || 0);
-  const total = prepare.total || 0;
-  const done = (prepare.cached || 0) + (prepare.generated || 0) + (prepare.failed || 0);
-  const label = total ? `bloque ${Math.min(done, total)} de ${total} — ${prepare.percent || 0} %` : 'sin bloques preparados';
-  if (prepare.status === 'running' || prepare.status === 'canceling') {
-    els.prepareInfo.textContent = `Preparando documento: ${label}. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}${prepare.failed ? `, fallidos ${prepare.failed}` : ''}.`;
-  } else if (prepare.status === 'done') {
-    els.prepareInfo.textContent = `Documento listo: ${label}. Cache ${prepare.cached || 0}, nuevos ${prepare.generated || 0}${prepare.failed ? `, fallidos ${prepare.failed}` : ''}.`;
-  } else if (prepare.status === 'canceled') {
-    els.prepareInfo.textContent = `Preparación cancelada: ${label}.`;
-  } else if (prepare.status === 'error') {
-    els.prepareInfo.textContent = prepare.message ? `${prepare.message} ${total ? `(${label})` : ''}`.trim() : 'No pude preparar el documento.';
-  } else {
-    els.prepareInfo.textContent = total ? 'Audio pendiente de preparar.' : 'Audio sin preparar.';
-  }
-}
 
 function syncAudioExportInputs() {
   const mode = String(els.audioExportMode.value || 'current');
@@ -1362,45 +1342,6 @@ async function readCurrent() {
       activeReadController = null;
     }
     releaseBusy();
-  }
-}
-
-async function pollPrepare() {
-  while (true) {
-    await wait(1000);
-    const data = await api('/api/prepare/status');
-    renderPrepareStatus(data);
-    if (!['running', 'canceling'].includes(data.status)) {
-      return data;
-    }
-  }
-}
-
-async function prepareDocument() {
-  const releaseBusy = beginBusyLease();
-  let started = false;
-  try {
-    const data = await api('/api/prepare/start', { start: 'cursor' });
-    renderPrepareStatus(data);
-    log('Preparando audio del documento en segundo plano...');
-    started = true;
-  } catch (err) {
-    log(`No pude preparar el documento: ${err.message}`);
-  } finally {
-    releaseBusy();
-  }
-  if (started) {
-    await pollPrepare();
-  }
-}
-
-async function cancelPrepare() {
-  try {
-    const data = await api('/api/prepare/cancel', {});
-    renderPrepareStatus(data);
-    log('Cancelando preparación de audio...');
-  } catch (err) {
-    log(`No pude cancelar: ${err.message}`);
   }
 }
 

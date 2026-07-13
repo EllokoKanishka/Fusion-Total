@@ -371,7 +371,7 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
             text.index("async function changeVoice()") : text.index("async function ensureVoiceCatalog()")
         ]
         self.assertIn("resetAudioLifecycle", change_voice)
-        read = text[text.index("async function readCurrent()") : text.index("async function pollPrepare()")]
+        read = text[text.index("async function readCurrent()") : text.index("async function pollAudioExport(")]
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)
         self.assertIn('_result(409 if result.get("stale") else 200, result)', text)
@@ -414,7 +414,7 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
             ),
             "readCurrent()": (
                 "async function readCurrent()",
-                "async function pollPrepare()",
+                "async function pollAudioExport(",
                 "invalidatePendingRead();",
             ),
             "setReasoningMode(mode)": (
@@ -457,15 +457,14 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
             self.assertLess(block.index("beginBusyLease()"), block.index(first_action), name)
 
         prepare_block = server_text[
-            server_text.index("async function prepareDocument()") : server_text.index("async function cancelPrepare()")
+            server_text.index("async function start()") : server_text.index("async function cancel()")
         ]
         self.assertIn("const releaseBusy = beginBusyLease();", prepare_block)
         self.assertIn("started = true;", prepare_block)
-        self.assertIn("if (started) {", prepare_block)
-        self.assertIn("await pollPrepare();", prepare_block)
+        self.assertIn("if (started) await poll();", prepare_block)
         self.assertNotIn("setBusy(", prepare_block)
         read_block = server_text[
-            server_text.index("async function readCurrent()") : server_text.index("async function pollPrepare()")
+            server_text.index("async function readCurrent()") : server_text.index("async function pollAudioExport(")
         ]
         self.assertIn("if (activeReadController === controller) {", read_block)
         self.assertIn("activeReadController = null;", read_block)

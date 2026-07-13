@@ -15,6 +15,7 @@ def _web_source() -> str:
         Path("fusion_reader_v2/web/static/js/bootstrap.mjs"),
         Path("fusion_reader_v2/web/static/js/audio.mjs"),
         Path("fusion_reader_v2/web/static/js/dialogue.mjs"),
+        Path("fusion_reader_v2/web/static/js/preparation.mjs"),
         Path("fusion_reader_v2/web/static/styles.css"),
     )
     return "\\n".join(path.read_text(encoding="utf-8") for path in paths)

@@ -672,7 +672,7 @@ class FusionReaderV2Tests(unittest.TestCase):
     def test_server_read_current_does_not_render_audio_result_as_status(self):
         text = web_source()
         read_start = text.index("async function readCurrent()")
-        read_end = text.index("async function pollPrepare()", read_start)
+        read_end = text.index("async function pollAudioExport(", read_start)
         read_current = text[read_start:read_end]
         self.assertIn("const data = await api('/api/read'", read_current)
         self.assertNotIn("renderStatus(data)", read_current)

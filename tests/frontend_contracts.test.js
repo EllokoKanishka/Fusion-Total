@@ -6,6 +6,8 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '..');
 const entry = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/app.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/bootstrap.mjs'), 'utf8');
+const preparation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/preparation.mjs'), 'utf8');
+const frontend = `${app}\n${preparation}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
@@ -28,7 +30,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/dialogue/turn',
     '/api/tools/pdf-to-docx',
   ]) {
-    assert.ok(app.includes(endpoint), `missing endpoint ${endpoint}`);
+    assert.ok(frontend.includes(endpoint), `missing endpoint ${endpoint}`);
   }
 });
 
