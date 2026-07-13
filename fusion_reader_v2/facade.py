@@ -33,6 +33,7 @@ from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider
 from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from .services.notes import NotesService
+from .services.research import ResearchService
 from .services.audio_export import AudioExportService
 from .services.persistence import AtomicJSONStore
 from .services.session_persistence import SessionPersistenceService
@@ -186,6 +187,7 @@ class FusionReaderV2:
             chat_lock=self._chat_lock,
             looks_like_note_request=self._looks_like_note_request,
         )
+        self._research_service = ResearchService(self.external_research, self._external_research_snapshot)
         self.dialogue_trace_path = (
             (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         )
@@ -397,77 +399,10 @@ class FusionReaderV2:
         return out
 
     def _normalized_external_key(self, text: str) -> str:
-        lowered = str(text or "").lower()
-        plain = "".join(char for char in unicodedata.normalize("NFKD", lowered) if not unicodedata.combining(char))
-        return " ".join(plain.replace("¿", "").replace("¡", "").split())
+        return ResearchService.normalized_key(text)
 
     def _looks_like_external_research_request(self, text: str) -> bool:
-        clean = self._normalized_external_key(text)
-        if not clean:
-            return False
-        explicit_markers = (
-            "busca en internet",
-            "buscar en internet",
-            "busca en la red",
-            "buscar en la red",
-            "busca en web",
-            "buscar en web",
-            "busca afuera",
-            "buscar afuera",
-            "investiga en internet",
-            "investigar en internet",
-            "investiga afuera",
-            "investigar afuera",
-            "trae fuentes externas",
-            "trae fuentes de internet",
-            "busca fuentes externas",
-            "googlea",
-            "googlealo",
-            "googleala",
-            "busca online",
-        )
-        if any(marker in clean for marker in explicit_markers):
-            return True
-        academic_markers = (
-            "tesis",
-            "tesis doctoral",
-            "tesis de doctorado",
-            "paper",
-            "papers",
-            "articulo",
-            "articulos",
-            "fuente",
-            "fuentes",
-            "repositorio",
-            "repositorios",
-            "universidad",
-            "universidades",
-            "bibliografia",
-            "journal",
-            "revista academica",
-            "revistas academicas",
-        )
-        leading_verbs = (
-            "busca",
-            "buscar",
-            "buscame",
-            "buscame",
-            "investiga",
-            "investigar",
-            "trae",
-            "traer",
-            "revisa",
-            "revisa",
-        )
-        if any(clean.startswith(verb + " ") for verb in leading_verbs) and any(
-            marker in clean for marker in academic_markers
-        ):
-            return True
-        if ("trae" in clean or "busca" in clean or "investiga" in clean) and (
-            "fuentes" in clean or "tesis" in clean or "papers" in clean or "articulos" in clean
-        ):
-            return True
-        return False
+        return self._research_service.is_explicit_request(text)
 
     def _external_research_snapshot(self) -> dict:
         snapshot = self.reader_snapshot()
@@ -478,7 +413,7 @@ class FusionReaderV2:
         return snapshot
 
     def _run_external_research(self, message: str) -> ExternalResearchResult:
-        return self.external_research.research(message, snapshot=self._external_research_snapshot())
+        return self._research_service.research(message)
 
     def _external_research_chat_response(self, message: str, started: float) -> dict | None:
         if not self._looks_like_external_research_request(message):
@@ -722,6 +657,8 @@ class FusionReaderV2:
         return out
 
     def _external_research_health(self) -> dict:
+        return self._research_service.health()
+        """Compatibility implementation retained below for stable blame history."""
         bridge = self.external_research
         out = {
             "provider": str(getattr(bridge, "name", "external_research") or "external_research"),
