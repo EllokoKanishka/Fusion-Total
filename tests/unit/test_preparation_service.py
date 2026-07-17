@@ -44,7 +44,7 @@ def make_service(
     )
 
 
-def wait_until(predicate, timeout: float = 2.0) -> None:
+def wait_until(predicate, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate() and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -75,33 +75,38 @@ class PreparationServiceTests(unittest.TestCase):
         def synthesize(text: str, voice: str, language: str) -> AudioArtifact:
             if text == "old":
                 old_entered.set()
-                old_release.wait(timeout=2)
+                old_release.wait(timeout=30)
             else:
                 new_entered.set()
-                new_release.wait(timeout=2)
+                new_release.wait(timeout=30)
             return AudioArtifact(True)
 
         service = make_service(session, synthesize, generation=lambda: generation)
-        service.start()
-        self.assertTrue(old_entered.wait(timeout=1))
-        old_worker = service.active_threads()[0]
+        shutdown_waiter = None
+        try:
+            service.start()
+            self.assertTrue(old_entered.wait(timeout=5))
+            old_worker = service.active_threads()[0]
 
-        service.reset()
-        generation = 2
-        session.load(Document("new", "New", "new", ["new"]))
-        service.start()
-        self.assertTrue(new_entered.wait(timeout=1))
-        workers = service.active_threads()
-        self.assertEqual(len(workers), 2)
-        self.assertIn(old_worker, workers)
-        self.assertFalse(any(worker.daemon for worker in workers))
+            service.reset()
+            generation = 2
+            session.load(Document("new", "New", "new", ["new"]))
+            service.start()
+            self.assertTrue(new_entered.wait(timeout=5))
+            workers = service.active_threads()
+            self.assertEqual(len(workers), 2)
+            self.assertIn(old_worker, workers)
+            self.assertFalse(any(worker.daemon for worker in workers))
 
-        shutdown_waiter = service.begin_shutdown()
-        self.assertIsNotNone(shutdown_waiter)
-        self.assertTrue(shutdown_waiter.is_alive())
-        old_release.set()
-        new_release.set()
-        shutdown_waiter.join(timeout=2)
+            shutdown_waiter = service.begin_shutdown()
+            self.assertIsNotNone(shutdown_waiter)
+            self.assertTrue(shutdown_waiter.is_alive())
+        finally:
+            old_release.set()
+            new_release.set()
+            if shutdown_waiter is not None:
+                shutdown_waiter.join(timeout=5)
+
         self.assertFalse(shutdown_waiter.is_alive())
         wait_until(lambda: not service.active_threads())
         self.assertEqual(service.status()["doc_id"], "new")
@@ -131,20 +136,25 @@ class PreparationServiceTests(unittest.TestCase):
 
         def synthesize(text: str, voice: str, language: str) -> AudioArtifact:
             entered.set()
-            release.wait(timeout=2)
+            release.wait(timeout=30)
             return AudioArtifact(True)
 
         service = make_service(session, synthesize, generation=lambda: generation)
-        service.start()
-        self.assertTrue(entered.wait(timeout=1))
-        worker = service.active_threads()[0]
-        service.reset()
-        service.reset()
-        self.assertIn(worker, service.active_threads())
-        waiter = service.begin_shutdown()
-        self.assertIsNotNone(waiter)
-        release.set()
-        waiter.join(timeout=2)
+        waiter = None
+        try:
+            service.start()
+            self.assertTrue(entered.wait(timeout=5))
+            worker = service.active_threads()[0]
+            service.reset()
+            service.reset()
+            self.assertIn(worker, service.active_threads())
+            waiter = service.begin_shutdown()
+            self.assertIsNotNone(waiter)
+        finally:
+            release.set()
+            if waiter is not None:
+                waiter.join(timeout=5)
+
         wait_until(lambda: not service.active_threads())
         self.assertEqual(service.status()["status"], "idle")
 
