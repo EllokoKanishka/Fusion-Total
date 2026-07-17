@@ -29,7 +29,10 @@ fusionctl = "scripts.fusionctl:main"
 include = ["fusion_reader_v2*", "scripts"]
 
 [tool.setuptools.package-data]
-fusion_reader_v2 = ["web/static/*"]
+fusion_reader_v2 = [
+  "web/static/*",
+  "web/static/js/*.mjs",
+]
 
 [tool.ruff]
 target-version = "py311"
