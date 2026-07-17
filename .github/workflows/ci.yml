@@ -54,6 +54,52 @@ jobs:
       - run: coverage xml
       - run: git diff --check
 
+  package:
+    name: Non-editable wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip wheel --no-deps . --wheel-dir dist
+      - run: python scripts/check_wheel_assets.py dist/*.whl
+      - name: Install and inspect wheel outside checkout
+        run: |
+          python -m venv /tmp/fusion-wheel
+          /tmp/fusion-wheel/bin/python -m pip install --upgrade pip
+          /tmp/fusion-wheel/bin/python -m pip install -c requirements/constraints-py312.txt dist/*.whl
+          cd /tmp
+          /tmp/fusion-wheel/bin/python - <<'PY'
+          from importlib.resources import files
+
+          from fusion_reader_v2 import FusionReaderV2
+          from fusion_reader_v2.service import FusionReaderV2 as LegacyFusionReaderV2
+
+          assert FusionReaderV2 is LegacyFusionReaderV2
+          static = files("fusion_reader_v2").joinpath("web/static")
+          expected = (
+              "index.html",
+              "styles.css",
+              "app.js",
+              "busy_controls.js",
+              "js/api.mjs",
+              "js/audio.mjs",
+              "js/audio_export.mjs",
+              "js/bootstrap.mjs",
+              "js/busy.mjs",
+              "js/dialogue.mjs",
+              "js/notes.mjs",
+              "js/preparation.mjs",
+              "js/ui.mjs",
+          )
+          missing = [name for name in expected if not static.joinpath(name).is_file()]
+          assert not missing, missing
+          PY
+          /tmp/fusion-wheel/bin/fusionctl version
+
   shell:
     name: Shell
     runs-on: ubuntu-latest
