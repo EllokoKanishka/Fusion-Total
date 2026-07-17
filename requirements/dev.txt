@@ -1,0 +1,5 @@
+-e .
+coverage[toml]
+mypy
+pip-audit
+ruff

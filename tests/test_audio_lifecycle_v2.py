@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fusion_reader_v2 import AudioArtifact, NullTTSProvider
 from tests.helpers import test_app
+from tests.helpers import web_source
 
 
 class ControlledTTS(NullTTSProvider):
@@ -189,10 +190,12 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         app.load_text("a", "A", "ALFA ALFA.", prefetch=False)
         results = []
         threads = [threading.Thread(target=lambda: results.append(app.read_current(play=False))) for _ in range(2)]
-        for thread in threads: thread.start()
+        for thread in threads:
+            thread.start()
         self.assertTrue(tts.started.wait(1))
         tts.release.set()
-        for thread in threads: thread.join(2)
+        for thread in threads:
+            thread.join(2)
         self.assertEqual(len(tts.calls), 1)
         self.assertTrue(all(item["ok"] for item in results))
 
@@ -342,66 +345,133 @@ class AudioLifecycleV2Tests(unittest.TestCase):
 
 class AudioLifecycleFrontendTests(unittest.TestCase):
     def test_frontend_invalidates_requests_and_resets_player(self):
-        text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
-        for token in ("AbortController", "audioLifecycleSequence", "activeReadRequest", "els.player.pause()", "els.player.currentTime = 0", "els.player.removeAttribute('src')", "els.player.load()", "resetAudioLifecycle"):
+        text = web_source()
+        for token in (
+            "AbortController",
+            "audioLifecycleSequence",
+            "activeReadRequest",
+            "els.player.pause()",
+            "els.player.currentTime = 0",
+            "els.player.removeAttribute('src')",
+            "els.player.load()",
+            "resetAudioLifecycle",
+        ):
             self.assertIn(token, text)
-        load = text[text.index("async function loadFile(file)"):text.index("async function navigate(")]
+        load = text[text.index("async function loadFile(file)") : text.index("async function navigate(")]
         self.assertIn("if (role === 'main')", load)
         self.assertNotIn("if (role === 'reference') {\n        resetAudioLifecycle", load)
 
     def test_frontend_checks_identity_and_does_not_gate_read_on_tts_snapshot(self):
-        text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        text = web_source()
         self.assertIn("Number(data.document_generation || 0) !== currentGeneration", text)
         self.assertIn("String(data.requested_doc_id || '') !== currentDocId", text)
         self.assertIn("String(data.voice || '') !== currentVoice", text)
         self.assertIn("String(data.language || '') !== currentLanguage", text)
-        change_voice = text[text.index("async function changeVoice()"):text.index("async function ensureVoiceCatalog()")]
+        change_voice = text[
+            text.index("async function changeVoice()") : text.index("async function ensureVoiceCatalog()")
+        ]
         self.assertIn("resetAudioLifecycle", change_voice)
-        read = text[text.index("async function readCurrent()"):text.index("async function pollPrepare()")]
+        read = text[text.index("async function readCurrent()") : text.index("async function readNextWhenAudioEnds()")]
         self.assertNotIn("if (!ttsActionAvailable(status))", read)
         self.assertIn("Solicitud aceptada", read)
-        self.assertIn('self._result(409 if result.get("stale") else 200, result)', text)
+        self.assertIn('_result(409 if result.get("stale") else 200, result)', text)
 
     def test_frontend_busy_leases_are_balanced_for_resetting_operations(self):
-        server_text = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
-        helper_text = Path("scripts/fusion_reader_v2_busy_controls.js").read_text(encoding="utf-8")
-        self.assertIn("BUSY_CONTROL_HELPERS", server_text)
+        server_text = web_source()
+        helper_text = Path("fusion_reader_v2/web/static/js/busy.mjs").read_text(encoding="utf-8")
+        self.assertNotIn("__BUSY_CONTROL_HELPERS__", server_text)
+        self.assertIn("from './busy.mjs'", server_text)
         self.assertIn("busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '')", server_text)
-        self.assertIn("els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));", server_text)
+        self.assertIn(
+            "els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));", server_text
+        )
         self.assertNotIn("function setBusy(", server_text)
         self.assertIn("computeControlAvailability", helper_text)
         self.assertIn("applyControlState", helper_text)
         self.assertIn("createBusyControlState", helper_text)
 
         blocks = {
-            "changeVoice()": ("async function changeVoice()", "async function ensureVoiceCatalog()", "resetAudioLifecycle"),
-            "clearDocument()": ("async function clearDocument()", "async function setLaboratoryMode(mode)", "resetAudioLifecycle"),
-            "promoteReference(docId)": ("async function promoteReference(docId)", "async function removeReference(docId)", "resetAudioLifecycle"),
+            "changeVoice()": (
+                "async function changeVoice()",
+                "async function ensureVoiceCatalog()",
+                "resetAudioLifecycle",
+            ),
+            "clearDocument()": (
+                "async function clearDocument()",
+                "async function setLaboratoryMode(mode)",
+                "resetAudioLifecycle",
+            ),
+            "promoteReference(docId)": (
+                "async function promoteReference(docId)",
+                "async function removeReference(docId)",
+                "resetAudioLifecycle",
+            ),
             "loadFile(file)": ("async function loadFile(file)", "function canConvertPdf(file)", "resetAudioLifecycle"),
-            "navigate(path, body = {})": ("async function navigate(path, body = {})", "async function readCurrent()", "invalidatePendingRead();"),
-            "readCurrent()": ("async function readCurrent()", "async function pollPrepare()", "invalidatePendingRead();"),
-            "setReasoningMode(mode)": ("async function setReasoningMode(mode)", "function renderLabFocus(focus)", "const data = await api('/api/reasoning/mode', { mode: targetMode });"),
-            "startAudioExport()": ("async function startAudioExport()", "async function cancelAudioExport()", "const data = await api('/api/audio-export', payload);"),
-            "readNextWhenAudioEnds()": ("async function readNextWhenAudioEnds()", "async function sendChat()", "log('Avanzando al siguiente bloque...');"),
-            "sendChat()": ("async function sendChat()", "function stopDialoguePlaybackForTypedTurn()", "if (dialogue.active) {"),
-            "clearLaboratoryHistory()": ("async function clearLaboratoryHistory()", "function dialogueMimeType()", "const data = await api('/api/laboratory/reset', {});"),
-            "saveCurrentNote()": ("async function saveCurrentNote()", "async function goToNote(note)", "const data = await api('/api/notes/create', { text });"),
+            "navigate(path, body = {})": (
+                "async function navigate(path, body = {})",
+                "async function readCurrent()",
+                "invalidatePendingRead();",
+            ),
+            "readCurrent()": (
+                "async function readCurrent()",
+                "async function readNextWhenAudioEnds()",
+                "invalidatePendingRead();",
+            ),
+            "setReasoningMode(mode)": (
+                "async function setReasoningMode(mode)",
+                "function renderLabFocus(focus)",
+                "const data = await api('/api/reasoning/mode', { mode: targetMode });",
+            ),
+            "readNextWhenAudioEnds()": (
+                "async function readNextWhenAudioEnds()",
+                "async function sendChat()",
+                "log('Avanzando al siguiente bloque...');",
+            ),
+            "sendChat()": (
+                "async function sendChat()",
+                "function stopDialoguePlaybackForTypedTurn()",
+                "if (dialogue.active) {",
+            ),
+            "clearLaboratoryHistory()": (
+                "async function clearLaboratoryHistory()",
+                "function dialogueMimeType()",
+                "const data = await api('/api/laboratory/reset', {});",
+            ),
         }
         for name, (start_marker, end_marker, first_action) in blocks.items():
-            block = server_text[server_text.index(start_marker):server_text.index(end_marker)]
+            block = server_text[server_text.index(start_marker) : server_text.index(end_marker)]
             self.assertIn("beginBusyLease()", block, name)
             self.assertIn("releaseBusy();", block, name)
             self.assertIn("try {", block, name)
             self.assertIn("finally {", block, name)
             self.assertLess(block.index("beginBusyLease()"), block.index(first_action), name)
 
-        prepare_block = server_text[server_text.index("async function prepareDocument()"):server_text.index("async function cancelPrepare()")]
+        prepare_block = server_text[
+            server_text.index("async function start()") : server_text.index("async function cancel()")
+        ]
         self.assertIn("const releaseBusy = beginBusyLease();", prepare_block)
         self.assertIn("started = true;", prepare_block)
-        self.assertIn("if (started) {", prepare_block)
-        self.assertIn("await pollPrepare();", prepare_block)
+        self.assertIn("if (started) await poll();", prepare_block)
         self.assertNotIn("setBusy(", prepare_block)
-        read_block = server_text[server_text.index("async function readCurrent()"):server_text.index("async function pollPrepare()")]
+        export_module = server_text[server_text.index("export function createAudioExportController") :]
+        export_start = export_module[
+            export_module.index("async function start()") : export_module.index("async function cancel()")
+        ]
+        self.assertIn("const releaseBusy = beginBusyLease();", export_start)
+        self.assertIn("const data = await api('/api/audio-export', payload);", export_start)
+        self.assertIn("releaseBusy();", export_start)
+        notes_module = server_text[server_text.index("export function createNotesController") :]
+        notes_save = notes_module[
+            notes_module.index("async function save()") : notes_module.index("async function goTo(")
+        ]
+        self.assertIn("const releaseBusy = beginBusyLease();", notes_save)
+        self.assertIn("const data = await api('/api/notes/create', { text });", notes_save)
+        self.assertIn("releaseBusy();", notes_save)
+        read_block = server_text[
+            server_text.index("async function readCurrent()") : server_text.index(
+                "async function readNextWhenAudioEnds()"
+            )
+        ]
         self.assertIn("if (activeReadController === controller) {", read_block)
         self.assertIn("activeReadController = null;", read_block)
 

@@ -1,3 +1,5 @@
+"""Archived sensor prototype; not part of Fusion Reader v2."""
+
 import json
 import logging
 import os
@@ -7,7 +9,6 @@ import tempfile
 import unicodedata
 import wave
 
-import numpy as np
 import requests
 import sounddevice as sd
 import webrtcvad
@@ -24,7 +25,7 @@ WEBHOOK_URL = "http://localhost:5678/webhook/voice-input"
 TTS_COMMAND = "/home/lucy-ubuntu/Lucy_Workspace/Proyecto-VSCode/.venv-lucy-voz/bin/mimic3"
 TTS_VOICE = "es_ES/m-ailabs_low#karen_savage"
 
-logging.basicConfig(level=logging.INFO, format='[lucy] %(message)s')
+logging.basicConfig(level=logging.INFO, format="[lucy] %(message)s")
 
 
 class VADAudio:
@@ -186,22 +187,14 @@ def main():
 
                 try:
                     payload = res.json()
-                    respuesta_final = (
-                        payload.get("response_text")
-                        or payload.get("text")
-                        or payload.get("output")
-                    )
+                    respuesta_final = payload.get("response_text") or payload.get("text") or payload.get("output")
                     if not respuesta_final:
                         respuesta_final = str(payload)
                 except json.JSONDecodeError:
                     respuesta_final = res.text
 
                 if respuesta_final:
-                    respuesta_final = (
-                        respuesta_final.replace('"', "")
-                        .replace("{", "")
-                        .replace("}", "")
-                    )
+                    respuesta_final = respuesta_final.replace('"', "").replace("{", "").replace("}", "")
                     speak(respuesta_final)
 
             except Exception as exc:

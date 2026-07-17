@@ -44,7 +44,7 @@ ok() {
 
 port_is_listening() {
   local port="$1"
-  ss -ltn 2>/dev/null | grep -q "[.:]$port[[:space:]]"
+  ss -ltn 2>/dev/null | grep -q "[.:]${port}[[:space:]]"
 }
 
 curl_json_ok() {

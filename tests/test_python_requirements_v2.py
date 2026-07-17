@@ -14,7 +14,17 @@ class PythonRequirementsV2Tests(unittest.TestCase):
         self.assertNotIn("7854", text)
         self.assertNotIn("/home/", text)
         lowered = text.casefold()
-        for forbidden in ("doctora", "antigravity", "telegram", "openclaw", "curl", "ffmpeg", "pdftotext", "tesseract", "ss"):
+        for forbidden in (
+            "doctora",
+            "antigravity",
+            "telegram",
+            "openclaw",
+            "curl",
+            "ffmpeg",
+            "pdftotext",
+            "tesseract",
+            "ss",
+        ):
             self.assertNotIn(forbidden, lowered)
 
     def test_optional_requirements_are_documented_and_conservative(self):

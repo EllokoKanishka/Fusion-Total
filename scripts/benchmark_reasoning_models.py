@@ -192,7 +192,9 @@ def main() -> int:
         "host": args.host,
         "think": args.think,
         "num_predict": args.num_predict,
-        "results": [benchmark_model(args.host, model, think=args.think, num_predict=args.num_predict) for model in args.models],
+        "results": [
+            benchmark_model(args.host, model, think=args.think, num_predict=args.num_predict) for model in args.models
+        ],
     }
     print(json.dumps(report, ensure_ascii=True, indent=2))
     return 0

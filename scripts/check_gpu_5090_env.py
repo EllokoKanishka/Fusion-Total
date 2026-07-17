@@ -7,7 +7,9 @@ from pathlib import Path
 
 
 # Machine-local GPU env default remains overrideable via FUSION_READER_GPU_ENV.
-DEFAULT_GPU_ENV = Path(os.environ.get("FUSION_READER_GPU_ENV", "/home/lucy-ubuntu/fusion_reader_envs/alltalk_gpu_5090_py311"))
+DEFAULT_GPU_ENV = Path(
+    os.environ.get("FUSION_READER_GPU_ENV", str(Path.home() / "fusion_reader_envs" / "alltalk_gpu_5090_py311"))
+)
 
 if os.environ.get("FUSION_READER_GPU_CHECK_NO_REEXEC") != "1":
     env_python = DEFAULT_GPU_ENV / "bin" / "python"

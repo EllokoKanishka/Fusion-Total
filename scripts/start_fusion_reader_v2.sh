@@ -7,13 +7,22 @@ GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 GPU_TTS_URL="http://127.0.0.1:${GPU_TTS_PORT}"
 CPU_TTS_URL="http://127.0.0.1:${CPU_TTS_PORT}"
-OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$ROOT/runtime/fusion_reader_v2/tts_owner.json}"
 GPU_TTS_WAIT_SECONDS="${FUSION_READER_GPU_TTS_WAIT_SECONDS:-30}"
-RUNTIME_DIR="${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}"
-LOG_DIR="${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}"
+RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
+LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}}"
+OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
+PYTHON_BIN="${FUSION_READER_PYTHON:-python3}"
+
+export FUSION_READER_RUNTIME_ROOT="$RUNTIME_DIR"
+export FUSION_READER_RUNTIME_DIR="$RUNTIME_DIR"
+export FUSION_READER_LOG_ROOT="$LOG_DIR"
+export FUSION_READER_LOG_DIR="$LOG_DIR"
+export FUSION_READER_LIBRARY_ROOT="${FUSION_READER_LIBRARY_ROOT:-$ROOT/library}"
+export FUSION_READER_DOWNLOADS_ROOT="${FUSION_READER_DOWNLOADS_ROOT:-${HOME}/Descargas}"
+export FUSION_READER_CACHE_ROOT="${FUSION_READER_CACHE_ROOT:-$RUNTIME_DIR/audio_cache}"
 
 cd "$ROOT"
 
@@ -24,7 +33,8 @@ timestamp() {
 }
 
 log_msg() {
-  local line="[$(timestamp)] $*"
+  local line
+  line="[$(timestamp)] $*"
   echo "$line" | tee -a "$LOG_FILE"
 }
 
@@ -131,7 +141,7 @@ if [[ -n "$existing_pid" ]]; then
   if [[ -n "$status_raw" ]]; then
     # Parse metadata using python inline
     runtime_data=$(python3 -c "import json, sys; data=json.load(sys.stdin); rt=data.get('runtime', {}); print('|'.join([str(rt.get(k, '')) for k in ['app', 'commit', 'pid']]))" <<< "$status_raw")
-    IFS='|' read -r rt_app rt_commit rt_pid <<< "$runtime_data"
+    IFS='|' read -r rt_app rt_commit _rt_pid <<< "$runtime_data"
     
     if [[ "$rt_app" == "fusion_reader_v2" ]]; then
       if [[ "$rt_commit" == "$current_commit" ]]; then
@@ -183,7 +193,7 @@ log_msg "Profile env: ${FUSION_READER_PROFILE:-default}"
 log_msg "PID file: ${PID_FILE}"
 log_msg "Persistent log: ${LOG_FILE}"
 
-nohup python3 scripts/fusion_reader_v2_server.py >>"$LOG_FILE" 2>&1 &
+nohup "$PYTHON_BIN" -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 &
 server_pid=$!
 
 if ! printf '%s\n' "$server_pid" >"$PID_FILE" 2>/dev/null; then

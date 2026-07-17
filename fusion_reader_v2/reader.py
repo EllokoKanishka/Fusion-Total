@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import re
 import time
-import os
 from dataclasses import dataclass, field
 
+from .config import environment_value
 
-DEFAULT_CHUNK_MIN_CHARS = int(os.environ.get("FUSION_READER_CHUNK_MIN_CHARS", "1200"))
-DEFAULT_CHUNK_TARGET_CHARS = int(os.environ.get("FUSION_READER_CHUNK_TARGET_CHARS", "2200"))
-DEFAULT_CHUNK_MAX_CHARS = int(os.environ.get("FUSION_READER_CHUNK_MAX_CHARS", "3200"))
+DEFAULT_CHUNK_MIN_CHARS = int(environment_value("FUSION_READER_CHUNK_MIN_CHARS", "1200") or "1200")
+DEFAULT_CHUNK_TARGET_CHARS = int(environment_value("FUSION_READER_CHUNK_TARGET_CHARS", "2200") or "2200")
+DEFAULT_CHUNK_MAX_CHARS = int(environment_value("FUSION_READER_CHUNK_MAX_CHARS", "3200") or "3200")
 
 
 @dataclass
@@ -86,7 +86,9 @@ def split_paragraph_units(paragraph: str, max_chars: int) -> list[ReadingUnit]:
             if current:
                 units.append(ReadingUnit(current, boundary="sentence"))
                 current = ""
-            units.extend(ReadingUnit(text, boundary="sentence") for text in split_long_sentence(sentence, max_chars=max_chars))
+            units.extend(
+                ReadingUnit(text, boundary="sentence") for text in split_long_sentence(sentence, max_chars=max_chars)
+            )
             continue
         if current and len(current) + 1 + len(sentence) > max_chars:
             units.append(ReadingUnit(current, boundary="sentence"))
@@ -192,7 +194,6 @@ def pack_reading_units(units: list[ReadingUnit], min_chars: int, target_chars: i
 
     if len(chunks) >= 2:
         tail_text = join_units(chunks[-1])
-        prev_text = join_units(chunks[-2])
         if len(tail_text) < min_chars and len(join_units(chunks[-2] + chunks[-1])) <= max_chars:
             chunks[-2].extend(chunks[-1])
             chunks.pop()

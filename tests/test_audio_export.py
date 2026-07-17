@@ -21,6 +21,7 @@ from tests.helpers import (
     make_reading_document,
 )
 
+
 def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -28,6 +29,7 @@ def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01) -> bool:
             return True
         time.sleep(interval)
     return bool(predicate())
+
 
 class TrackingLock:
     def __init__(self) -> None:
@@ -89,7 +91,9 @@ class AudioExportTests(unittest.TestCase):
             self.assertTrue(root.exists())
         self.assertFalse(root.exists())
 
-    def _assert_single_final_export(self, mode: str, *, title: str, chunks: list[str], export_kwargs: dict | None = None, setup=None) -> None:
+    def _assert_single_final_export(
+        self, mode: str, *, title: str, chunks: list[str], export_kwargs: dict | None = None, setup=None
+    ) -> None:
         export_kwargs = dict(export_kwargs or {})
         with managed_test_app(tts=SyntheticWavTTSProvider()) as app:
             root = Path(app._test_root)
@@ -783,7 +787,9 @@ class AudioExportTests(unittest.TestCase):
 
             barrier = threading.Barrier(3)
             with guard_background_work_queries(app):
-                reset_thread = threading.Thread(target=run_reset, args=(app, barrier, stale_future), name="reset-prefetch-thread")
+                reset_thread = threading.Thread(
+                    target=run_reset, args=(app, barrier, stale_future), name="reset-prefetch-thread"
+                )
                 shutdown_thread = threading.Thread(target=run_shutdown, args=(app, barrier), name="shutdown-thread")
                 reset_thread.start()
                 shutdown_thread.start()
@@ -886,7 +892,10 @@ class AudioExportTests(unittest.TestCase):
             self.assertEqual(len(shutdown_results), 2)
             self.assertTrue(all(result["state"] == "closed" for result in shutdown_results))
             self.assertEqual(app._background_work_shutdown_context.started, True)
-            self.assertEqual(len(app._background_work_shutdown_context.shutdown_threads), len(app._background_work_shutdown_context.executors))
+            self.assertEqual(
+                len(app._background_work_shutdown_context.shutdown_threads),
+                len(app._background_work_shutdown_context.executors),
+            )
             close_test_app(app)
             self.assertFalse(root.exists())
 
@@ -972,7 +981,10 @@ class AudioExportTests(unittest.TestCase):
             for i in range(2):
                 p = root / f"{i}.wav"
                 with wave.open(str(p), "wb") as f:
-                    f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000); f.writeframes(b"\0"*1600)
+                    f.setnchannels(1)
+                    f.setsampwidth(2)
+                    f.setframerate(16000)
+                    f.writeframes(b"\0" * 1600)
                 inputs.append(p)
             out = root / "out.wav"
             concat_wav_files(inputs, out)
@@ -996,14 +1008,16 @@ class AudioExportTests(unittest.TestCase):
             out = root / "ffmpeg_out.wav"
             created_list_files: list[Path] = []
 
-            def fake_run(cmd, check, stdout, stderr, text):
+            def fake_run(cmd, **_kwargs):
                 list_path = Path(cmd[cmd.index("-i") + 1])
                 created_list_files.append(list_path)
                 out.touch()
                 return mock.Mock()
 
-            with mock.patch("fusion_reader_v2.audio_export.shutil.which", return_value="/usr/bin/ffmpeg"), \
-                 mock.patch("fusion_reader_v2.audio_export.subprocess.run", side_effect=fake_run):
+            with (
+                mock.patch("fusion_reader_v2.audio_export.shutil.which", return_value="/usr/bin/ffmpeg"),
+                mock.patch("fusion_reader_v2.audio_export.run_owned", side_effect=fake_run),
+            ):
                 method = concat_wav_files([first, second], out)
             self.assertEqual(method, "ffmpeg")
             self.assertTrue(out.exists())

@@ -11,7 +11,26 @@ class ClosureBacklogV2Tests(unittest.TestCase):
 
     def test_closure_records_contracts_and_boundaries(self):
         text = Path("docs/CLOSURE_AND_BACKLOG_V2.md").read_text(encoding="utf-8")
-        for token in ("P0", "P1", "P2", "Fuera de alcance", "8010", "7851", "7852", "7853", "7854", "8021", "11434", "8080", "auto", "server", "cli", "verify es read-only", "smoke es no invasivo", "reconciliar metadata"):
+        for token in (
+            "P0",
+            "P1",
+            "P2",
+            "Fuera de alcance",
+            "8010",
+            "7851",
+            "7852",
+            "7853",
+            "7854",
+            "8021",
+            "11434",
+            "8080",
+            "auto",
+            "server",
+            "cli",
+            "verify es read-only",
+            "smoke es no invasivo",
+            "reconciliar metadata",
+        ):
             self.assertIn(token, text)
         self.assertIn("No hay bloqueos P0 confirmados", text)
         self.assertIn("no que todos los\nservicios locales estén siempre encendidos", text)

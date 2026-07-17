@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+import signal
+import tempfile
+from dataclasses import replace
+from pathlib import Path
+
+from fusion_reader_v2.composition import create_http_server
+from fusion_reader_v2.config import create_settings
+from tests.helpers import SyntheticWavTTSProvider, test_app
+
+
+def main() -> None:
+    tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_e2e_")
+    root = Path(tempdir.name)
+    app = test_app(
+        tts=SyntheticWavTTSProvider(output_root=root / "tts"),
+        root=root,
+        register_cleanup=False,
+    )
+    settings = create_settings(
+        environ={
+            "HOME": str(root),
+            "FUSION_READER_RUNTIME_ROOT": str(root / "runtime"),
+            "FUSION_READER_LIBRARY_ROOT": str(root / "library"),
+            "FUSION_READER_DOWNLOADS_ROOT": str(root / "downloads"),
+        }
+    )
+    settings = replace(settings, ports=replace(settings.ports, api=0))
+    server = create_http_server(app, settings)
+
+    def stop(_signum: int, _frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    print(f"READY {server.server_address[1]}", flush=True)
+    try:
+        server.serve_forever(poll_interval=0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        app.shutdown_background_work(timeout=10.0)
+        tempdir.cleanup()
+
+
+if __name__ == "__main__":
+    main()

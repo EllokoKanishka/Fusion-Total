@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -104,8 +103,7 @@ def snapshot_for(current_chunk: str) -> dict:
             ],
         },
         "document_chunks": [
-            {"chunk_number": idx + 1, "text": chunk.strip()}
-            for idx, chunk in enumerate(DOCUMENT_TEXT.split("\n\n"))
+            {"chunk_number": idx + 1, "text": chunk.strip()} for idx, chunk in enumerate(DOCUMENT_TEXT.split("\n\n"))
         ],
         "reference_documents": [],
         "laboratory_focus": {},
@@ -137,12 +135,16 @@ class GemmaLocalProvider(ChatProvider):
             )
         self.model.eval()
 
-    def chat(self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None) -> ChatResult:
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
         started = time.perf_counter()
         max_new_tokens = int(num_predict or 384)
         rendered_messages = []
         for item in messages:
-            role = "assistant" if item.get("role") == "assistant" else "user" if item.get("role") == "user" else "system"
+            role = (
+                "assistant" if item.get("role") == "assistant" else "user" if item.get("role") == "user" else "system"
+            )
             rendered_messages.append({"role": role, "content": str(item.get("content") or "")})
         prompt = self.tokenizer.apply_chat_template(
             rendered_messages,
@@ -160,7 +162,7 @@ class GemmaLocalProvider(ChatProvider):
                 eos_token_id=self.tokenizer.eos_token_id,
                 pad_token_id=self.tokenizer.eos_token_id,
             )
-        generated = output[0][inputs["input_ids"].shape[1]:]
+        generated = output[0][inputs["input_ids"].shape[1] :]
         answer = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
         return ChatResult(
             ok=bool(answer),
@@ -265,7 +267,9 @@ def main() -> int:
         default=["qwen", "gemma_ollama"],
     )
     parser.add_argument("--gemma-device", choices=["auto", "cpu"], default="auto")
-    parser.add_argument("--modes", nargs="+", choices=["normal", "thinking", "supreme"], default=["normal", "thinking", "supreme"])
+    parser.add_argument(
+        "--modes", nargs="+", choices=["normal", "thinking", "supreme"], default=["normal", "thinking", "supreme"]
+    )
     args = parser.parse_args()
 
     report = {
@@ -273,7 +277,9 @@ def main() -> int:
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "gemma_dir": str(Path(args.gemma_dir).resolve()),
         "gemma_device": args.gemma_device,
-        "results": [run_suite(provider_name, args.gemma_dir, args.gemma_device, args.modes) for provider_name in args.providers],
+        "results": [
+            run_suite(provider_name, args.gemma_dir, args.gemma_device, args.modes) for provider_name in args.providers
+        ],
     }
     rendered = json.dumps(report, ensure_ascii=True, indent=2)
     if args.out:

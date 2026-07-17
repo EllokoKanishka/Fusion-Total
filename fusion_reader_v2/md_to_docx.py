@@ -6,70 +6,254 @@ from pathlib import Path
 from collections import Counter
 
 SPANISH_FUNCTION_WORDS_V4 = {
-    "a", "al", "ante", "bajo", "con", "contra", "de", "del", "desde", "durante",
-    "e", "el", "ella", "ellas", "ellos", "en", "entre", "ha", "he", "hasta",
-    "la", "las", "le", "lo", "los", "me", "mi", "mis", "ni", "no", "o", "para",
-    "por", "que", "se", "si", "sin", "sobre", "son", "su", "sus", "te", "tu",
-    "un", "una", "unas", "uno", "unos", "y", "ya",
+    "a",
+    "al",
+    "ante",
+    "bajo",
+    "con",
+    "contra",
+    "de",
+    "del",
+    "desde",
+    "durante",
+    "e",
+    "el",
+    "ella",
+    "ellas",
+    "ellos",
+    "en",
+    "entre",
+    "ha",
+    "he",
+    "hasta",
+    "la",
+    "las",
+    "le",
+    "lo",
+    "los",
+    "me",
+    "mi",
+    "mis",
+    "ni",
+    "no",
+    "o",
+    "para",
+    "por",
+    "que",
+    "se",
+    "si",
+    "sin",
+    "sobre",
+    "son",
+    "su",
+    "sus",
+    "te",
+    "tu",
+    "un",
+    "una",
+    "unas",
+    "uno",
+    "unos",
+    "y",
+    "ya",
 }
 
 PROTECTED_TERMS_V4 = {
-    "Ars", "Magica", "Ars Magica", "Bonisagus", "Bjornaer", "Quaesitor",
-    "Quaesitores", "Intellego", "Creo", "Muto", "Perdo", "Rego", "Corpus",
-    "Mentem", "Animal", "Aquam", "Auram", "Ignem", "Terram", "Vim", "Jerbiton",
-    "Flambeau", "Tremere", "Tytalus", "Verditius", "Criamon", "Merinita",
-    "Miscellanea", "Ex Miscellanea", "Hermes", "Hermética", "Hermetica",
-    "Voluntas", "Blackthorn", "Semitae", "Schola", "Pythagoranis", "Ungulus",
-    "Cistercienses", "Rievaulx", "Stonehenge", "Guernicus", "Mercere",
-    "Trianoma", "Antoninus", "Jocelin", "Fulk", "Wizards",
+    "Ars",
+    "Magica",
+    "Ars Magica",
+    "Bonisagus",
+    "Bjornaer",
+    "Quaesitor",
+    "Quaesitores",
+    "Intellego",
+    "Creo",
+    "Muto",
+    "Perdo",
+    "Rego",
+    "Corpus",
+    "Mentem",
+    "Animal",
+    "Aquam",
+    "Auram",
+    "Ignem",
+    "Terram",
+    "Vim",
+    "Jerbiton",
+    "Flambeau",
+    "Tremere",
+    "Tytalus",
+    "Verditius",
+    "Criamon",
+    "Merinita",
+    "Miscellanea",
+    "Ex Miscellanea",
+    "Hermes",
+    "Hermética",
+    "Hermetica",
+    "Voluntas",
+    "Blackthorn",
+    "Semitae",
+    "Schola",
+    "Pythagoranis",
+    "Ungulus",
+    "Cistercienses",
+    "Rievaulx",
+    "Stonehenge",
+    "Guernicus",
+    "Mercere",
+    "Trianoma",
+    "Antoninus",
+    "Jocelin",
+    "Fulk",
+    "Wizards",
 }
 
 # Backward-compatible name used by older tests.
 PROTECTED_TERMS = {term for term in PROTECTED_TERMS_V4 if " " not in term}
 
 VALID_LONG_SPANISH_WORDS_V4 = {
-    "administración", "administracion", "acontecimiento", "acontecimientos",
-    "adelante", "adiestramiento", "afortunadamente", "agradecimientos",
-    "alternativamente", "aparentemente",
-    "apropiadamente", "automáticamente", "automaticamente", "característica",
-    "características", "caracteristica", "caracteristicas", "completamente",
-    "comportamiento", "considerablemente", "constantemente", "descubrimiento",
-    "descubrimientos", "desgraciadamente", "especialidades", "especialmente",
-    "específicamente", "especificamente", "experimentación", "experimentacion",
-    "delante", "deliberadamente", "emocionalmente", "entretenimiento",
-    "experimentador", "extremadamente", "excepcionalmente", "frecuentemente",
-    "increíblemente", "increiblemente", "independientemente",
-    "individualmente", "inevitablemente", "inherentemente", "inmediatamente", "instantáneamente",
-    "instantaneamente", "intuitivamente", "laboratorio", "ligeramente",
-    "naturalmente", "necesariamente", "ocasionalmente", "particularmente",
-    "penalizaciones", "permanentemente", "personalidades", "principalmente",
-    "posteriormente", "progresivamente", "reconocimiento", "representación", "representacion",
-    "representaciones", "representantes", "responsabilidad", "restablecimiento",
-    "respectivamente", "simultáneamente", "simultaneamente", "suficientemente",
-    "verdaderamente", "voluntariamente", "envejecimiento", "encantamientos",
-    "emplazamientos", "complementarios", "requerimientos", "pronunciamientos",
-    "sobrenaturales", "incandescentes", "inconsistencias", "relacionándose", "relacionandose",
-    "modelos", "adelard",
+    "administración",
+    "administracion",
+    "acontecimiento",
+    "acontecimientos",
+    "adelante",
+    "adiestramiento",
+    "afortunadamente",
+    "agradecimientos",
+    "alternativamente",
+    "aparentemente",
+    "apropiadamente",
+    "automáticamente",
+    "automaticamente",
+    "característica",
+    "características",
+    "caracteristica",
+    "caracteristicas",
+    "completamente",
+    "comportamiento",
+    "considerablemente",
+    "constantemente",
+    "descubrimiento",
+    "descubrimientos",
+    "desgraciadamente",
+    "especialidades",
+    "especialmente",
+    "específicamente",
+    "especificamente",
+    "experimentación",
+    "experimentacion",
+    "delante",
+    "deliberadamente",
+    "emocionalmente",
+    "entretenimiento",
+    "experimentador",
+    "extremadamente",
+    "excepcionalmente",
+    "frecuentemente",
+    "increíblemente",
+    "increiblemente",
+    "independientemente",
+    "individualmente",
+    "inevitablemente",
+    "inherentemente",
+    "inmediatamente",
+    "instantáneamente",
+    "instantaneamente",
+    "intuitivamente",
+    "laboratorio",
+    "ligeramente",
+    "naturalmente",
+    "necesariamente",
+    "ocasionalmente",
+    "particularmente",
+    "penalizaciones",
+    "permanentemente",
+    "personalidades",
+    "principalmente",
+    "posteriormente",
+    "progresivamente",
+    "reconocimiento",
+    "representación",
+    "representacion",
+    "representaciones",
+    "representantes",
+    "responsabilidad",
+    "restablecimiento",
+    "respectivamente",
+    "simultáneamente",
+    "simultaneamente",
+    "suficientemente",
+    "verdaderamente",
+    "voluntariamente",
+    "envejecimiento",
+    "encantamientos",
+    "emplazamientos",
+    "complementarios",
+    "requerimientos",
+    "pronunciamientos",
+    "sobrenaturales",
+    "incandescentes",
+    "inconsistencias",
+    "relacionándose",
+    "relacionandose",
+    "modelos",
+    "adelard",
 }
 
 OCR_CANONICAL_WORDS_V4 = {
-    "accion": "acción", "ademas": "además", "algun": "algún", "ano": "año",
-    "anos": "años", "apendice": "apéndice", "asi": "así", "automaticamente": "automáticamente",
-    "capitulo": "capítulo", "caracteristica": "característica",
-    "caracteristicas": "características", "cogia": "cogía", "cogio": "cogió",
-    "comence": "comencé", "companerismo": "compañerismo", "companero": "compañero",
-    "companeros": "compañeros", "coordinacion": "coordinación", "dano": "daño",
-    "despues": "después", "disenado": "diseñado", "diseniado": "diseñado",
-    "disenio": "diseño", "edicion": "edición", "energia": "energía",
-    "habia": "había", "habian": "habían", "habria": "habría", "hechizo": "hechizo",
-    "indice": "índice", "introduccion": "introducción", "latín": "latín",
-    "magica": "mágica", "magicas": "mágicas", "maquetacion": "maquetación",
-    "mecanica": "mecánica", "mitica": "mítica", "mistico": "místico",
-    "misticos": "místicos", "murio": "murió", "narracion": "narración",
-    "numero": "número", "observé": "observé", "ocurrio": "ocurrió",
-    "puntuacion": "puntuación", "senor": "señor", "senordemil": "señor de mil",
-    "tambien": "también", "tecnica": "técnica", "tecnicas": "técnicas",
-    "traduccion": "traducción", "volvi": "volví",
+    "accion": "acción",
+    "ademas": "además",
+    "algun": "algún",
+    "ano": "año",
+    "anos": "años",
+    "apendice": "apéndice",
+    "asi": "así",
+    "automaticamente": "automáticamente",
+    "capitulo": "capítulo",
+    "caracteristica": "característica",
+    "caracteristicas": "características",
+    "cogia": "cogía",
+    "cogio": "cogió",
+    "comence": "comencé",
+    "companerismo": "compañerismo",
+    "companero": "compañero",
+    "companeros": "compañeros",
+    "coordinacion": "coordinación",
+    "dano": "daño",
+    "despues": "después",
+    "disenado": "diseñado",
+    "diseniado": "diseñado",
+    "disenio": "diseño",
+    "edicion": "edición",
+    "energia": "energía",
+    "habia": "había",
+    "habian": "habían",
+    "habria": "habría",
+    "hechizo": "hechizo",
+    "indice": "índice",
+    "introduccion": "introducción",
+    "latín": "latín",
+    "magica": "mágica",
+    "magicas": "mágicas",
+    "maquetacion": "maquetación",
+    "mecanica": "mecánica",
+    "mitica": "mítica",
+    "mistico": "místico",
+    "misticos": "místicos",
+    "murio": "murió",
+    "narracion": "narración",
+    "numero": "número",
+    "observé": "observé",
+    "ocurrio": "ocurrió",
+    "puntuacion": "puntuación",
+    "senor": "señor",
+    "senordemil": "señor de mil",
+    "tambien": "también",
+    "tecnica": "técnica",
+    "tecnicas": "técnicas",
+    "traduccion": "traducción",
+    "volvi": "volví",
 }
 
 EXACT_GLUED_REPAIRS_V4 = {
@@ -193,12 +377,13 @@ EXACT_GLUED_REPAIRS_V4 = {
     "todosloshechizos": "todos los hechizos",
 }
 
+
 def remove_image_placeholders(markdown: str) -> str:
     """Remove all image-related placeholders and markers."""
-    markdown = re.sub(r'!\[.*?\]\(.*?\)', '', markdown)
-    markdown = re.sub(r'<img.*?>', '', markdown, flags=re.IGNORECASE | re.DOTALL)
-    markdown = re.sub(r'<!--.*?image.*?-->', '', markdown, flags=re.IGNORECASE)
-    markdown = re.sub(r'data:image\/[a-zA-Z]*;base64,[a-zA-Z0-9+/=]*', '', markdown)
+    markdown = re.sub(r"!\[.*?\]\(.*?\)", "", markdown)
+    markdown = re.sub(r"<img.*?>", "", markdown, flags=re.IGNORECASE | re.DOTALL)
+    markdown = re.sub(r"<!--.*?image.*?-->", "", markdown, flags=re.IGNORECASE)
+    markdown = re.sub(r"data:image\/[a-zA-Z]*;base64,[a-zA-Z0-9+/=]*", "", markdown)
     return markdown
 
 
@@ -362,7 +547,7 @@ def normalize_spanish_ocr_v4(text: str) -> tuple[str, dict]:
 
     def magica_repl(match):
         start = max(0, match.start() - 5)
-        if text[start:match.end()].lower().endswith("ars magica"):
+        if text[start : match.end()].lower().endswith("ars magica"):
             return match.group(0)
         return _preserve_initial_case_v4(match.group(0), "mágica")
 
@@ -372,7 +557,12 @@ def normalize_spanish_ocr_v4(text: str) -> tuple[str, dict]:
     def temporal_ano(match):
         return _preserve_initial_case_v4(match.group(0), "año")
 
-    text, count = re.subn(r"\bano\b(?=\s+(?:de|en|\d|mi|su|nuestro|octavo|primer|segundo|tercer))", temporal_ano, text, flags=re.IGNORECASE)
+    text, count = re.subn(
+        r"\bano\b(?=\s+(?:de|en|\d|mi|su|nuestro|octavo|primer|segundo|tercer))",
+        temporal_ano,
+        text,
+        flags=re.IGNORECASE,
+    )
     metrics["accent_fixes"] += count
     return text, metrics
 
@@ -381,6 +571,7 @@ def normalize_common_ocr_errors(text: str) -> str:
     """Apply conservative corrections to common OCR mistakes."""
     text, _metrics = normalize_spanish_ocr_v4(text)
     return text
+
 
 def _is_valid_long_word_v4(token: str) -> bool:
     return _fold_spanish_v4(token) in VALID_LONG_FOLDED_V4
@@ -395,11 +586,36 @@ def _is_suspicious_glued_token_v4(token: str) -> bool:
     if re.search(r"[a-záéíóúüñ][A-ZÁÉÍÓÚÜÑ]", token):
         return True
     strong_patterns = (
-        "dela", "delas", "delos", "enel", "enla", "enlas", "enlos", "queha",
-        "queel", "queme", "quelos", "quelas", "conel", "conla", "conlos",
-        "paraque", "porel", "porla", "desdeentonces", "demil", "ymedijo",
-        "almonasterio", "dondehe", "comonovicio", "lasreglas", "resultadoes",
-        "vuelvea", "sentidocomun", "artesmagicas", "poderesmisticos",
+        "dela",
+        "delas",
+        "delos",
+        "enel",
+        "enla",
+        "enlas",
+        "enlos",
+        "queha",
+        "queel",
+        "queme",
+        "quelos",
+        "quelas",
+        "conel",
+        "conla",
+        "conlos",
+        "paraque",
+        "porel",
+        "porla",
+        "desdeentonces",
+        "demil",
+        "ymedijo",
+        "almonasterio",
+        "dondehe",
+        "comonovicio",
+        "lasreglas",
+        "resultadoes",
+        "vuelvea",
+        "sentidocomun",
+        "artesmagicas",
+        "poderesmisticos",
     )
     if any(pattern in folded for pattern in strong_patterns):
         return True
@@ -452,9 +668,10 @@ def segment_glued_token_v4(token: str, wordlist: set[str] | None = None) -> tupl
     best: list[tuple[float, list[str]] | None] = [None] * (n + 1)
     best[0] = (0.0, [])
     for i in range(n):
-        if best[i] is None:
+        candidate = best[i]
+        if candidate is None:
             continue
-        score, parts = best[i]
+        score, parts = candidate
         for j in range(i + 1, min(n, i + 18) + 1):
             piece = folded[i:j]
             if piece not in wordlist:
@@ -472,11 +689,13 @@ def segment_glued_token_v4(token: str, wordlist: set[str] | None = None) -> tupl
             cut_penalty = max(0, len(new_parts) - 1) * 2.7
             one_two = sum(1 for p in new_parts if len(_fold_spanish_v4(p)) <= 2)
             new_score = score + part_score - cut_penalty - (one_two * 0.7)
-            if best[j] is None or new_score > best[j][0]:
+            previous = best[j]
+            if previous is None or new_score > previous[0]:
                 best[j] = (new_score, new_parts)
-    if best[n] is None:
+    final = best[n]
+    if final is None:
         return token, False, 0.0
-    score, parts = best[n]
+    score, parts = final
     if len(parts) < 2:
         return token, False, 0.0
     short_parts = sum(1 for p in parts if len(_fold_spanish_v4(p)) <= 2)
@@ -522,7 +741,7 @@ def _split_connector_span_v4(token: str) -> tuple[str, bool]:
         if index < 0:
             continue
         before = token[:index]
-        after = token[index + len(pattern):]
+        after = token[index + len(pattern) :]
         if not before and not after:
             return _preserve_initial_case_v4(token, replacement), True
         if before and len(before) < 3:
@@ -585,9 +804,7 @@ def repair_glued_words_v4(text: str) -> tuple[str, dict]:
     metrics["suspicious_after"] = after["suspicious_count"]
     if metrics["suspicious_before"]:
         metrics["suspicious_reduction_percent"] = (
-            (metrics["suspicious_before"] - metrics["suspicious_after"])
-            / metrics["suspicious_before"]
-            * 100.0
+            (metrics["suspicious_before"] - metrics["suspicious_after"]) / metrics["suspicious_before"] * 100.0
         )
     return text, metrics
 
@@ -597,11 +814,13 @@ def repair_glued_words(text: str) -> str:
     repaired, _metrics = repair_glued_words_v4(text)
     return repaired
 
+
 def fix_punctuation_spacing(text: str) -> str:
     """Add spaces after punctuation when missing."""
-    text = re.sub(r'([,:;])([a-zA-ZáéíóúÁÉÍÓÚñÑ])', r'\1 \2', text)
-    text = re.sub(r'(\.)([a-zA-ZáéíóúÁÉÍÓÚñÑ]{2,})', r'\1 \2', text)
+    text = re.sub(r"([,:;])([a-zA-ZáéíóúÁÉÍÓÚñÑ])", r"\1 \2", text)
+    text = re.sub(r"(\.)([a-zA-ZáéíóúÁÉÍÓÚñÑ]{2,})", r"\1 \2", text)
     return text
+
 
 def remove_repeated_running_headers(lines: list[str]) -> list[str]:
     """Detect and remove headers/footers that repeat across pages."""
@@ -609,10 +828,7 @@ def remove_repeated_running_headers(lines: list[str]) -> list[str]:
         return lines
     counts = Counter(line.strip() for line in lines if line.strip() and len(line.strip()) < 50)
     running_headers = {line for line, count in counts.items() if count > 2}
-    header_patterns = [
-        r'Ars Magica', r'introducción', r'personajes', r'alianza',
-        r'\d+$'
-    ]
+    header_patterns = [r"Ars Magica", r"introducción", r"personajes", r"alianza", r"\d+$"]
     cleaned_lines = []
     for line in lines:
         stripped = line.strip()
@@ -631,15 +847,16 @@ def remove_repeated_running_headers(lines: list[str]) -> list[str]:
             cleaned_lines.append(line)
     return cleaned_lines
 
+
 def sanitize_markdown(content: str):
     """Orchestrate the editorial cleanup of Markdown."""
     content = remove_image_placeholders(content)
     content, _metrics = repair_glued_words_v4(content)
     content = fix_punctuation_spacing(content)
-    
+
     lines = content.splitlines()
     lines = remove_repeated_running_headers(lines)
-    
+
     cleaned_lines = []
     for line in lines:
         stripped = line.strip()
@@ -648,16 +865,17 @@ def sanitize_markdown(content: str):
             continue
         if stripped.startswith("![Image]") or stripped.startswith("![Table]"):
             continue
-        if len(stripped) > 80 and re.match(r'^[a-zA-Z0-9+/=]+$', stripped):
+        if len(stripped) > 80 and re.match(r"^[a-zA-Z0-9+/=]+$", stripped):
             continue
-        if len(stripped) == 1 and ord(stripped[0]) > 0x007F and not re.match(r'[¡¿áéíóúÁÉÍÓÚñÑüÜ]', stripped):
+        if len(stripped) == 1 and ord(stripped[0]) > 0x007F and not re.match(r"[¡¿áéíóúÁÉÍÓÚñÑüÜ]", stripped):
             continue
-        line = line.replace("&amp;", "&").replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">")
+        line = line.replace("&amp;", "&").replace("&quot;", '"').replace("&lt;", "<").replace("&gt;", ">")
         cleaned_lines.append(line)
-        
+
     result = "\n".join(cleaned_lines)
-    result = re.sub(r'\n{3,}', '\n\n', result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
     return result
+
 
 def convert_md_to_docx(md_path: Path, docx_path: Path):
     if not md_path.exists():
@@ -676,10 +894,10 @@ def convert_md_to_docx(md_path: Path, docx_path: Path):
         sys.exit(1)
     content = sanitize_markdown(raw_content)
     doc = Document()
-    if 'Normal' in doc.styles:
-        style = doc.styles['Normal']
+    if "Normal" in doc.styles:
+        style = doc.styles["Normal"]
         font = style.font
-        font.name = 'Calibri'
+        font.name = "Calibri"
         font.size = Pt(11)
     lines = content.splitlines()
     for line in lines:
@@ -695,16 +913,18 @@ def convert_md_to_docx(md_path: Path, docx_path: Path):
         elif line_clean.startswith("#### "):
             doc.add_heading(line_clean[5:], level=3)
         elif line_clean.startswith("- ") or line_clean.startswith("* "):
-            doc.add_paragraph(line_clean[2:], style='List Bullet')
-        elif re.match(r'^\d+\. ', line_clean):
-            text = re.sub(r'^\d+\. ', '', line_clean)
-            doc.add_paragraph(text, style='List Number')
+            doc.add_paragraph(line_clean[2:], style="List Bullet")
+        elif re.match(r"^\d+\. ", line_clean):
+            text = re.sub(r"^\d+\. ", "", line_clean)
+            doc.add_paragraph(text, style="List Number")
         elif line_clean.startswith("|") and "|" in line_clean[1:]:
-            if re.match(r'^[ \|:\-]+$', line_clean):
+            if re.match(r"^[ \|:\-]+$", line_clean):
                 continue
             p = doc.add_paragraph(line_clean)
-            try: p.style = 'Quote'
-            except: pass
+            try:
+                p.style = "Quote"
+            except (KeyError, ValueError):
+                pass
         else:
             doc.add_paragraph(line_clean)
     try:
@@ -713,6 +933,7 @@ def convert_md_to_docx(md_path: Path, docx_path: Path):
     except Exception as e:
         print(f"Error saving DOCX: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

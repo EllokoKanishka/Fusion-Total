@@ -28,12 +28,16 @@ logs/
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
 venv/
 ENV/
 .envrc
 .venv-lucy-voz
 .pytest_cache/
+.coverage
+coverage.xml
+coverage.json
 .codex
 .codex/
 
@@ -70,6 +74,8 @@ output_playwright_*.png
 cmd_pipe
 
 .playwright-cli/
+playwright-report/
+test-results/
 state/
 DOCS/
 scratch/

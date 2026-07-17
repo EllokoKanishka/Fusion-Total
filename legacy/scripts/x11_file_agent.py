@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Archived desktop file agent; not part of Fusion Reader v2."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -12,9 +14,7 @@ import sys
 import time
 from typing import Any, Tuple
 
-IPC_DIR = os.environ.get(
-    "X11_FILE_IPC_DIR", "/home/lucy-ubuntu/Lucy_Workspace/infra/ipc"
-)
+IPC_DIR = os.environ.get("X11_FILE_IPC_DIR", "/home/lucy-ubuntu/Lucy_Workspace/infra/ipc")
 
 IPC = pathlib.Path(IPC_DIR)
 INBOX = IPC / "inbox"

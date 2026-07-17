@@ -80,7 +80,10 @@ class TestVoiceSttManager(unittest.TestCase):
                 os.environ["DIRECT_CHAT_STT_BARGE_ANY"] = prev
 
     @patch("openclaw_direct_chat._save_voice_state")
-    @patch("openclaw_direct_chat._load_voice_state", return_value={"enabled": False, "speaker": "Ana Florence", "speaker_wav": ""})
+    @patch(
+        "openclaw_direct_chat._load_voice_state",
+        return_value={"enabled": False, "speaker": "Ana Florence", "speaker_wav": ""},
+    )
     @patch.object(direct_chat, "_STT_MANAGER")
     def test_set_voice_enabled_routes_stt_manager(self, mock_manager, _mock_load, _mock_save) -> None:
         direct_chat._set_voice_enabled(True, session_id="sess_a")
@@ -90,7 +93,10 @@ class TestVoiceSttManager(unittest.TestCase):
         mock_manager.disable.assert_called_once()
 
     @patch("openclaw_direct_chat._save_voice_state")
-    @patch("openclaw_direct_chat._load_voice_state", return_value={"enabled": False, "speaker": "Ana Florence", "speaker_wav": ""})
+    @patch(
+        "openclaw_direct_chat._load_voice_state",
+        return_value={"enabled": False, "speaker": "Ana Florence", "speaker_wav": ""},
+    )
     @patch.object(direct_chat, "_STT_MANAGER")
     def test_set_voice_enabled_ignores_stt_start_errors(self, mock_manager, _mock_load, _mock_save) -> None:
         mock_manager.enable.side_effect = RuntimeError("boom")
@@ -481,9 +487,11 @@ class TestVoiceSttManager(unittest.TestCase):
     def test_voice_chat_bridge_process_items_calls_submit_once_for_chat_text(self) -> None:
         seen = []
         prev_submit = direct_chat._voice_chat_submit_backend
+
         def _fake_submit(sid, text, ts=0.0):
             seen.append((sid, text, ts))
             return True
+
         try:
             direct_chat._voice_chat_submit_backend = _fake_submit  # type: ignore
             out = direct_chat._voice_chat_bridge_process_items(
@@ -501,9 +509,11 @@ class TestVoiceSttManager(unittest.TestCase):
     def test_voice_chat_bridge_process_items_merges_recent_chat_text_fragments(self) -> None:
         seen = []
         prev_submit = direct_chat._voice_chat_submit_backend
+
         def _fake_submit(sid, text, ts=0.0):
             seen.append((sid, text, ts))
             return True
+
         try:
             direct_chat._voice_chat_submit_backend = _fake_submit  # type: ignore
             out = direct_chat._voice_chat_bridge_process_items(
@@ -768,7 +778,9 @@ class TestVoiceSttManager(unittest.TestCase):
             direct_chat._stt_voice_text_normalize("hoy del conflicto entre iran y esto"),
             "hoy del conflicto entre iran y eeuu",
         )
-        self.assertEqual(direct_chat._stt_voice_text_normalize("siglo de vida de la maria"), "ciclo de vida de la mariposa")
+        self.assertEqual(
+            direct_chat._stt_voice_text_normalize("siglo de vida de la maria"), "ciclo de vida de la mariposa"
+        )
         self.assertEqual(
             direct_chat._stt_voice_text_normalize("de que obra son las noticias"),
             "de que hora son las noticias",
@@ -835,8 +847,12 @@ class TestVoiceSttManager(unittest.TestCase):
                 direct_chat.HISTORY_DIR = Path(td)
                 direct_chat.HISTORY_DIR.mkdir(parents=True, exist_ok=True)
                 direct_chat._chat_events_reset("sess_poll")
-                first = direct_chat._chat_events_append("sess_poll", role="user", content="hola", source="stt_voice", ts=1.0)
-                second = direct_chat._chat_events_append("sess_poll", role="assistant", content="ok", source="model", ts=1.1)
+                first = direct_chat._chat_events_append(
+                    "sess_poll", role="user", content="hola", source="stt_voice", ts=1.0
+                )
+                second = direct_chat._chat_events_append(
+                    "sess_poll", role="assistant", content="ok", source="model", ts=1.1
+                )
                 all_items = direct_chat._chat_events_poll("sess_poll", after_seq=0, limit=20)
                 self.assertEqual(int(all_items.get("seq", 0) or 0), int(second.get("seq", 0) or 0))
                 self.assertEqual(len(all_items.get("items", [])), 2)
@@ -912,7 +928,9 @@ class TestVoiceSttManager(unittest.TestCase):
 
     @patch("openclaw_direct_chat._set_voice_status")
     @patch("openclaw_direct_chat._stop_playback_process")
-    def test_request_tts_stop_sets_event_and_updates_bargein_stats(self, mock_stop_playback, mock_set_voice_status) -> None:
+    def test_request_tts_stop_sets_event_and_updates_bargein_stats(
+        self, mock_stop_playback, mock_set_voice_status
+    ) -> None:
         prev_stop_event = direct_chat._TTS_STOP_EVENT
         prev_stream = direct_chat._TTS_PLAYING_STREAM_ID
         prev_stats = dict(direct_chat._BARGEIN_STATS)

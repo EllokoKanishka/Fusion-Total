@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   applyControlState,
   createBusyControlState,
-} = require('../scripts/fusion_reader_v2_busy_controls.js');
+} = require('../fusion_reader_v2/web/static/busy_controls.js');
 
 function makeElements() {
   return {

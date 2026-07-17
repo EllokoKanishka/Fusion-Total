@@ -24,10 +24,9 @@ class TestUtil(unittest.TestCase):
 
     def test_parse_json_object(self) -> None:
         self.assertEqual(parse_json_object('{"ok": true}'), {"ok": True})
-        self.assertEqual(parse_json_object("xx {\"a\": 1} yy"), {"a": 1})
+        self.assertEqual(parse_json_object('xx {"a": 1} yy'), {"a": 1})
         self.assertIsNone(parse_json_object("[]"))
 
 
 if __name__ == "__main__":
     unittest.main()
-

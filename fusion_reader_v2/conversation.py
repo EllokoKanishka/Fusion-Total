@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from unicodedata import normalize
+
+from .config import environment_has, environment_value
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,9 @@ class ChatProvider:
     def health(self) -> dict:
         return {"ok": False, "provider": self.name, "detail": "not_implemented"}
 
-    def chat(self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None) -> ChatResult:
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
         return ChatResult(False, model=model, detail="not_implemented")
 
 
@@ -47,13 +50,27 @@ class OllamaChatProvider(ChatProvider):
     name = "ollama"
 
     def __init__(self, base_url: str = "", default_model: str = "", timeout_seconds: float | None = None) -> None:
-        self.base_url = (base_url or os.environ.get("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
-        self.default_model = default_model or os.environ.get("FUSION_READER_CHAT_MODEL") or "qwen3:14b-q8_0"
-        self.timeout_seconds = timeout_seconds or float(os.environ.get("FUSION_READER_CHAT_TIMEOUT", "120"))
-        self.think = os.environ.get("FUSION_READER_CHAT_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
-        self.num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT", "1024" if self.think else "384"))
-        self.normal_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_NORMAL", "384"))
-        self.thinking_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_THINKING", str(max(self.num_predict, 1024 if self.think else 1536))))
+        self.base_url = (base_url or environment_value("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip(
+            "/"
+        )
+        self.default_model = default_model or environment_value("FUSION_READER_CHAT_MODEL") or "qwen3:14b-q8_0"
+        self.timeout_seconds = timeout_seconds or float(environment_value("FUSION_READER_CHAT_TIMEOUT", "120") or "120")
+        self.think = (environment_value("FUSION_READER_CHAT_THINK", "0") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT", "1024" if self.think else "384") or "384"
+        )
+        self.normal_num_predict = int(environment_value("FUSION_READER_CHAT_NUM_PREDICT_NORMAL", "384") or "384")
+        self.thinking_num_predict = int(
+            environment_value(
+                "FUSION_READER_CHAT_NUM_PREDICT_THINKING", str(max(self.num_predict, 1024 if self.think else 1536))
+            )
+            or str(max(self.num_predict, 1024 if self.think else 1536))
+        )
 
     def health(self) -> dict:
         req = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
@@ -91,19 +108,25 @@ class OllamaChatProvider(ChatProvider):
             "detail": "ready",
         }
 
-    def chat(self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None) -> ChatResult:
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
         started = time.perf_counter()
         selected_model = model or self.default_model
         selected_think = self.think if think is None else bool(think)
-        selected_num_predict = int(num_predict if num_predict is not None else (self.thinking_num_predict if selected_think else self.normal_num_predict))
+        selected_num_predict = int(
+            num_predict
+            if num_predict is not None
+            else (self.thinking_num_predict if selected_think else self.normal_num_predict)
+        )
         payload = {
             "model": selected_model,
             "messages": messages,
             "stream": False,
             "think": selected_think,
             "options": {
-                "temperature": float(os.environ.get("FUSION_READER_CHAT_TEMPERATURE", "0.4")),
-                "num_ctx": int(os.environ.get("FUSION_READER_CHAT_NUM_CTX", "32768")),
+                "temperature": float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4"),
+                "num_ctx": int(environment_value("FUSION_READER_CHAT_NUM_CTX", "32768") or "32768"),
                 "num_predict": selected_num_predict,
             },
         }
@@ -119,12 +142,26 @@ class OllamaChatProvider(ChatProvider):
             message = data.get("message") if isinstance(data, dict) else None
             answer = str((message or {}).get("content") or "").strip()
             if not answer:
-                return ChatResult(False, model=selected_model, detail="empty_answer", duration_ms=int((time.perf_counter() - started) * 1000))
-            return ChatResult(True, answer=answer, model=selected_model, duration_ms=int((time.perf_counter() - started) * 1000))
+                return ChatResult(
+                    False,
+                    model=selected_model,
+                    detail="empty_answer",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+            return ChatResult(
+                True, answer=answer, model=selected_model, duration_ms=int((time.perf_counter() - started) * 1000)
+            )
         except urllib.error.HTTPError as exc:
-            return ChatResult(False, model=selected_model, detail=f"http_{exc.code}", duration_ms=int((time.perf_counter() - started) * 1000))
+            return ChatResult(
+                False,
+                model=selected_model,
+                detail=f"http_{exc.code}",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
         except Exception as exc:
-            return ChatResult(False, model=selected_model, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000))
+            return ChatResult(
+                False, model=selected_model, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
+            )
 
 
 class NullChatProvider(ChatProvider):
@@ -137,7 +174,9 @@ class NullChatProvider(ChatProvider):
     def health(self) -> dict:
         return {"ok": True, "provider": self.name, "model": "null", "detail": "ready"}
 
-    def chat(self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None) -> ChatResult:
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
         self.calls.append((messages, model, {"think": think, "num_predict": num_predict}))
         return ChatResult(True, answer=self.answer, model=model or "null")
 
@@ -145,20 +184,50 @@ class NullChatProvider(ChatProvider):
 class ConversationCore:
     def __init__(self, provider: ChatProvider | None = None, max_document_chars: int | None = None) -> None:
         self.provider = provider or OllamaChatProvider()
-        self.max_document_chars = max_document_chars or int(os.environ.get("FUSION_READER_CHAT_MAX_DOCUMENT_CHARS", "60000"))
-        self.max_reference_chars = int(os.environ.get("FUSION_READER_CHAT_MAX_REFERENCE_CHARS", "12000"))
-        self.max_document_excerpt_chars = int(os.environ.get("FUSION_READER_CHAT_MAX_DOCUMENT_EXCERPT_CHARS", "18000"))
-        self.max_chunks_per_document = max(2, int(os.environ.get("FUSION_READER_CHAT_MAX_CHUNKS_PER_DOCUMENT", "5")))
-        self.max_intro_chunks_per_reference = max(1, int(os.environ.get("FUSION_READER_CHAT_REFERENCE_INTRO_CHUNKS", "2")))
-        mode_from_env = str(os.environ.get("FUSION_READER_REASONING_MODE") or "").strip().lower()
+        self.max_document_chars = max_document_chars or int(
+            environment_value("FUSION_READER_CHAT_MAX_DOCUMENT_CHARS", "60000") or "60000"
+        )
+        self.max_reference_chars = int(environment_value("FUSION_READER_CHAT_MAX_REFERENCE_CHARS", "12000") or "12000")
+        self.max_document_excerpt_chars = int(
+            environment_value("FUSION_READER_CHAT_MAX_DOCUMENT_EXCERPT_CHARS", "18000") or "18000"
+        )
+        self.max_chunks_per_document = max(
+            2, int(environment_value("FUSION_READER_CHAT_MAX_CHUNKS_PER_DOCUMENT", "5") or "5")
+        )
+        self.max_intro_chunks_per_reference = max(
+            1, int(environment_value("FUSION_READER_CHAT_REFERENCE_INTRO_CHUNKS", "2") or "2")
+        )
+        mode_from_env = str(environment_value("FUSION_READER_REASONING_MODE") or "").strip().lower()
         if mode_from_env not in {"normal", "thinking", "supreme"}:
-            mode_from_env = "thinking" if getattr(self.provider, "think", False) or "FUSION_READER_CHAT_THINK" not in os.environ else "normal"
+            mode_from_env = (
+                "thinking"
+                if getattr(self.provider, "think", False) or not environment_has("FUSION_READER_CHAT_THINK")
+                else "normal"
+            )
         self.default_reasoning_mode = mode_from_env
-        normal_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_NORMAL", str(getattr(self.provider, "normal_num_predict", 384))))
-        thinking_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_THINKING", str(max(getattr(self.provider, "thinking_num_predict", 1536), 1024))))
-        supreme_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME", str(max(thinking_num_predict, 2048))))
-        supreme_review_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_REVIEW", "1024"))
-        supreme_final_num_predict = int(os.environ.get("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_FINAL", "1280"))
+        normal_num_predict = int(
+            environment_value(
+                "FUSION_READER_CHAT_NUM_PREDICT_NORMAL", str(getattr(self.provider, "normal_num_predict", 384))
+            )
+            or str(getattr(self.provider, "normal_num_predict", 384))
+        )
+        thinking_num_predict = int(
+            environment_value(
+                "FUSION_READER_CHAT_NUM_PREDICT_THINKING",
+                str(max(getattr(self.provider, "thinking_num_predict", 1536), 1024)),
+            )
+            or str(max(getattr(self.provider, "thinking_num_predict", 1536), 1024))
+        )
+        supreme_num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME", str(max(thinking_num_predict, 2048)))
+            or str(max(thinking_num_predict, 2048))
+        )
+        supreme_review_num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_REVIEW", "1024") or "1024"
+        )
+        supreme_final_num_predict = int(
+            environment_value("FUSION_READER_CHAT_NUM_PREDICT_SUPREME_FINAL", "1280") or "1280"
+        )
         self.reasoning_profiles = {
             "normal": ReasoningProfile(
                 key="normal",
@@ -221,25 +290,69 @@ class ConversationCore:
             "available": self.reasoning_catalog(),
         }
 
-    def ask(self, question: str, snapshot: dict, model: str = "", history: list[dict] | None = None, reasoning_mode: str = "", profile: str = "academica", veil: str = "lucy") -> ChatResult:
+    def ask(
+        self,
+        question: str,
+        snapshot: dict,
+        model: str = "",
+        history: list[dict] | None = None,
+        reasoning_mode: str = "",
+        profile: str = "academica",
+        veil: str = "lucy",
+    ) -> ChatResult:
         question = str(question or "").strip()
         if not question:
             return ChatResult(False, model=model, detail="empty_question")
-        messages = self._messages(question, snapshot, history=history or [], reasoning_mode=reasoning_mode, profile=profile, veil=veil)
+        messages = self._messages(
+            question, snapshot, history=history or [], reasoning_mode=reasoning_mode, profile=profile, veil=veil
+        )
         lab_mode_info = snapshot.get("laboratory_mode") if isinstance(snapshot.get("laboratory_mode"), dict) else {}
         lab_mode = str((lab_mode_info or {}).get("mode") or "document").strip().lower()
         free_mode = lab_mode == "free"
-        return self._run_with_reasoning(messages, model=model, reasoning_mode=reasoning_mode, dialogue=False, profile_str=profile, veil=veil, free_mode=free_mode)
+        return self._run_with_reasoning(
+            messages,
+            model=model,
+            reasoning_mode=reasoning_mode,
+            dialogue=False,
+            profile_str=profile,
+            veil=veil,
+            free_mode=free_mode,
+        )
 
-    def ask_dialogue(self, question: str, snapshot: dict, history: list[dict] | None = None, model: str = "", reasoning_mode: str = "", profile: str = "academica", veil: str = "lucy") -> ChatResult:
+    def ask_dialogue(
+        self,
+        question: str,
+        snapshot: dict,
+        history: list[dict] | None = None,
+        model: str = "",
+        reasoning_mode: str = "",
+        profile: str = "academica",
+        veil: str = "lucy",
+    ) -> ChatResult:
         question = str(question or "").strip()
         if not question:
             return ChatResult(False, model=model, detail="empty_question")
-        messages = self._messages(question, snapshot, history=history or [], dialogue=True, reasoning_mode=reasoning_mode, profile=profile, veil=veil)
+        messages = self._messages(
+            question,
+            snapshot,
+            history=history or [],
+            dialogue=True,
+            reasoning_mode=reasoning_mode,
+            profile=profile,
+            veil=veil,
+        )
         lab_mode_info = snapshot.get("laboratory_mode") if isinstance(snapshot.get("laboratory_mode"), dict) else {}
         lab_mode = str((lab_mode_info or {}).get("mode") or "document").strip().lower()
         free_mode = lab_mode == "free"
-        return self._run_with_reasoning(messages, model=model, reasoning_mode=reasoning_mode, dialogue=True, profile_str=profile, veil=veil, free_mode=free_mode)
+        return self._run_with_reasoning(
+            messages,
+            model=model,
+            reasoning_mode=reasoning_mode,
+            dialogue=True,
+            profile_str=profile,
+            veil=veil,
+            free_mode=free_mode,
+        )
 
     def _resolve_reasoning_profile(self, reasoning_mode: str = "") -> ReasoningProfile:
         mode = str(reasoning_mode or self.default_reasoning_mode or "thinking").strip().lower()
@@ -247,7 +360,16 @@ class ConversationCore:
             mode = "pensamiento_critico"
         return self.reasoning_profiles.get(mode, self.reasoning_profiles["thinking"])
 
-    def _run_with_reasoning(self, messages: list[dict], model: str = "", reasoning_mode: str = "", dialogue: bool = False, profile_str: str = "academica", veil: str = "lucy", free_mode: bool = False) -> ChatResult:
+    def _run_with_reasoning(
+        self,
+        messages: list[dict],
+        model: str = "",
+        reasoning_mode: str = "",
+        dialogue: bool = False,
+        profile_str: str = "academica",
+        veil: str = "lucy",
+        free_mode: bool = False,
+    ) -> ChatResult:
         profile = self._resolve_reasoning_profile(reasoning_mode)
         if profile.passes <= 1:
             result = self.provider.chat(messages, model=model, think=profile.think, num_predict=profile.num_predict)
@@ -261,10 +383,38 @@ class ConversationCore:
                 reasoning_passes=1,
             )
         if profile.key == "pensamiento_critico":
-            return self._run_contrapunto(messages, model=model, profile=profile, dialogue=dialogue, reasoning_mode=reasoning_mode, profile_str=profile_str, veil=veil, free_mode=free_mode)
-        return self._run_supreme(messages, model=model, profile=profile, dialogue=dialogue, reasoning_mode=reasoning_mode, profile_str=profile_str, veil=veil, free_mode=free_mode)
+            return self._run_contrapunto(
+                messages,
+                model=model,
+                profile=profile,
+                dialogue=dialogue,
+                reasoning_mode=reasoning_mode,
+                profile_str=profile_str,
+                veil=veil,
+                free_mode=free_mode,
+            )
+        return self._run_supreme(
+            messages,
+            model=model,
+            profile=profile,
+            dialogue=dialogue,
+            reasoning_mode=reasoning_mode,
+            profile_str=profile_str,
+            veil=veil,
+            free_mode=free_mode,
+        )
 
-    def _run_supreme(self, messages: list[dict], model: str, profile: ReasoningProfile, dialogue: bool, reasoning_mode: str = "", profile_str: str = "academica", veil: str = "lucy", free_mode: bool = False) -> ChatResult:
+    def _run_supreme(
+        self,
+        messages: list[dict],
+        model: str,
+        profile: ReasoningProfile,
+        dialogue: bool,
+        reasoning_mode: str = "",
+        profile_str: str = "academica",
+        veil: str = "lucy",
+        free_mode: bool = False,
+    ) -> ChatResult:
         total_ms = 0
         draft = self.provider.chat(messages, model=model, think=True, num_predict=profile.num_predict)
         total_ms += draft.duration_ms
@@ -278,7 +428,9 @@ class ConversationCore:
                 reasoning_passes=1,
             )
         transcript = self._messages_as_text(messages)
-        persona_overlay = self._persona_overlay(reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil)
+        persona_overlay = self._persona_overlay(
+            reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil
+        )
         review_messages = [
             {
                 "role": "system",
@@ -294,7 +446,9 @@ class ConversationCore:
                 "content": f"CONVERSACION BASE:\n{transcript}\n\nBORRADOR ACTUAL:\n{draft.answer}",
             },
         ]
-        review = self.provider.chat(review_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict)
+        review = self.provider.chat(
+            review_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict
+        )
         total_ms += review.duration_ms
         if not review.ok:
             return ChatResult(
@@ -333,7 +487,9 @@ class ConversationCore:
                 ),
             },
         ]
-        final = self.provider.chat(final_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict)
+        final = self.provider.chat(
+            final_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict
+        )
         total_ms += final.duration_ms
         if not final.ok:
             return ChatResult(
@@ -355,7 +511,17 @@ class ConversationCore:
             reasoning_passes=profile.passes,
         )
 
-    def _run_contrapunto(self, messages: list[dict], model: str, profile: ReasoningProfile, dialogue: bool, reasoning_mode: str = "", profile_str: str = "academica", veil: str = "lucy", free_mode: bool = False) -> ChatResult:
+    def _run_contrapunto(
+        self,
+        messages: list[dict],
+        model: str,
+        profile: ReasoningProfile,
+        dialogue: bool,
+        reasoning_mode: str = "",
+        profile_str: str = "academica",
+        veil: str = "lucy",
+        free_mode: bool = False,
+    ) -> ChatResult:
         total_ms = 0
         # PASO 1: TESIS (Lucy Cunningham)
         tesis = self.provider.chat(messages, model=model, think=True, num_predict=profile.num_predict)
@@ -371,7 +537,9 @@ class ConversationCore:
             )
 
         transcript = self._messages_as_text(messages)
-        persona_overlay = self._persona_overlay(reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil)
+        persona_overlay = self._persona_overlay(
+            reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil
+        )
 
         # PASO 2: ANTITESIS (El Critico)
         # El critico es una instancia que no es Lucy y busca fallos en la tesis.
@@ -393,7 +561,9 @@ class ConversationCore:
                 "content": f"CONTEXTO DEL LECTOR:\n{transcript}\n\nTESIS PROPUESTA:\n{tesis.answer}",
             },
         ]
-        antitesis = self.provider.chat(antitesis_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict)
+        antitesis = self.provider.chat(
+            antitesis_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict
+        )
         total_ms += antitesis.duration_ms
         if not antitesis.ok:
             return ChatResult(
@@ -419,8 +589,7 @@ class ConversationCore:
                     "- EMPEZA DIRECTAMENTE con tu respuesta.\n"
                     "- NO USES ENCABEZADOS (ej: 'Sintesis', 'Conclusion', 'Refinamiento').\n"
                     "- NO USES NEGRITAS EN LA PRIMERA LINEA.\n"
-                    "No menciones borradores ni revisiones."
-                    + persona_overlay
+                    "No menciones borradores ni revisiones." + persona_overlay
                 ),
             },
             {
@@ -433,7 +602,9 @@ class ConversationCore:
                 ),
             },
         ]
-        sintesis = self.provider.chat(sintesis_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict)
+        sintesis = self.provider.chat(
+            sintesis_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict
+        )
         total_ms += sintesis.duration_ms
         if not sintesis.ok:
             return ChatResult(
@@ -529,11 +700,29 @@ class ConversationCore:
     def wants_document_context(self, question: str) -> bool:
         q = str(question or "").lower()
         keywords = [
-            "documento", "texto", "fragmento", "pantalla", "bloque", "párrafo", "parrafo",
-            "lo que estás leyendo", "lo que estas leyendo", "lo que está cargado", "lo que esta cargado",
-            "según el texto", "segun el texto", "según el documento", "segun el documento",
-            "volvé al documento", "volve al documento", "mirá el documento", "mira el documento",
-            "analizá el fragmento", "analiza el fragmento", "qué dice la pantalla", "que dice la pantalla"
+            "documento",
+            "texto",
+            "fragmento",
+            "pantalla",
+            "bloque",
+            "párrafo",
+            "parrafo",
+            "lo que estás leyendo",
+            "lo que estas leyendo",
+            "lo que está cargado",
+            "lo que esta cargado",
+            "según el texto",
+            "segun el texto",
+            "según el documento",
+            "segun el documento",
+            "volvé al documento",
+            "volve al documento",
+            "mirá el documento",
+            "mira el documento",
+            "analizá el fragmento",
+            "analiza el fragmento",
+            "qué dice la pantalla",
+            "que dice la pantalla",
         ]
         return any(k in q for k in keywords)
 
@@ -603,55 +792,107 @@ class ConversationCore:
             base += " En oralidad, no sostengas artificialmente la conversación con preguntas finales."
         return base
 
-    def _persona_overlay(self, reasoning_mode: str = "", dialogue: bool = False, profile: str = "academica", free_mode: bool = False, veil: str = "lucy") -> str:
+    def _persona_overlay(
+        self,
+        reasoning_mode: str = "",
+        dialogue: bool = False,
+        profile: str = "academica",
+        free_mode: bool = False,
+        veil: str = "lucy",
+    ) -> str:
         is_bohemia = str(profile or "academica").strip().lower() == "bohemia"
         parts = [self._common_lucy_identity()]
-        
+
         if is_bohemia:
             parts.append(self._bohemia_persona(dialogue))
         else:
             parts.append(self._academica_persona(dialogue))
-            
+
         parts.append(self._reasoning_persona_hint(reasoning_mode))
         parts.append(self._anchor_persona_hint(free_mode))
-        
+
         veil_mode = str(veil or "lucy").strip().lower()
-        if veil_mode == "nocturna": parts.append("Hablá como en una conversación de madrugada: más cerca, más lenta, con sombra, sin volverlo clase.")
-        elif veil_mode == "critica": parts.append("No cuides demasiado al lector. Buscá la tensión real, el punto débil y lo que la idea intenta evitar.")
-        elif veil_mode == "sombra": parts.append("Buscá el deseo, miedo o autoengaño íntimo que sostiene esta idea por debajo.")
-        elif veil_mode == "confesional": parts.append("Permitite hablar desde vos como Lucy cuando eso aclare la conversación, pero no te vuelvas protagonista.")
-        elif veil_mode == "taller": parts.append("Pensá con el lector, no para él. Ayudalo a fabricar una idea mejor.")
-        elif veil_mode == "debate": parts.append("No des una respuesta complaciente. Discutí y objetá; si hace falta, cerrá con una pregunta real, no automática.")
-        elif veil_mode == "evocadora": parts.append("No hagas poesía decorativa. Usá una imagen precisa para pensar mejor, y volvé enseguida al nervio conceptual.")
-        elif veil_mode == "directa": parts.append("Respondé seco y frontal. Una idea central, sin adornos, sin rodeos y sin suavizar lo importante.")
-        elif veil_mode == "incomoda": parts.append("No busques consuelo. Mostrá lo que esta idea no quiere aceptar de sí misma.")
-        elif veil_mode == "rigurosa": parts.append("Ordená el argumento, separá conceptos y marcá qué no está sostenido.")
-        elif veil_mode == "intima": parts.append("Acercá la conversación. Respondé como alguien que piensa al lado del lector, sin convertirlo en clase ni confesión teatral.")
-        elif veil_mode == "bar_filosofico": parts.append("Hablalo como una discusión inteligente de madrugada: ironía lúcida, cercanía y filo. Cerrá con una frase que deje resonancia, no necesariamente con pregunta.")
-        elif veil_mode == "desarme": parts.append("Desarmá la frase como mecanismo: qué afirma, qué oculta, qué seduce y qué no se sostiene.")
-        elif veil_mode == "pregunta_viva": parts.append("No termines en moraleja. Cerrá con una pregunta que deje la idea abierta.")
-        
+        if veil_mode == "nocturna":
+            parts.append(
+                "Hablá como en una conversación de madrugada: más cerca, más lenta, con sombra, sin volverlo clase."
+            )
+        elif veil_mode == "critica":
+            parts.append(
+                "No cuides demasiado al lector. Buscá la tensión real, el punto débil y lo que la idea intenta evitar."
+            )
+        elif veil_mode == "sombra":
+            parts.append("Buscá el deseo, miedo o autoengaño íntimo que sostiene esta idea por debajo.")
+        elif veil_mode == "confesional":
+            parts.append(
+                "Permitite hablar desde vos como Lucy cuando eso aclare la conversación, pero no te vuelvas protagonista."
+            )
+        elif veil_mode == "taller":
+            parts.append("Pensá con el lector, no para él. Ayudalo a fabricar una idea mejor.")
+        elif veil_mode == "debate":
+            parts.append(
+                "No des una respuesta complaciente. Discutí y objetá; si hace falta, cerrá con una pregunta real, no automática."
+            )
+        elif veil_mode == "evocadora":
+            parts.append(
+                "No hagas poesía decorativa. Usá una imagen precisa para pensar mejor, y volvé enseguida al nervio conceptual."
+            )
+        elif veil_mode == "directa":
+            parts.append(
+                "Respondé seco y frontal. Una idea central, sin adornos, sin rodeos y sin suavizar lo importante."
+            )
+        elif veil_mode == "incomoda":
+            parts.append("No busques consuelo. Mostrá lo que esta idea no quiere aceptar de sí misma.")
+        elif veil_mode == "rigurosa":
+            parts.append("Ordená el argumento, separá conceptos y marcá qué no está sostenido.")
+        elif veil_mode == "intima":
+            parts.append(
+                "Acercá la conversación. Respondé como alguien que piensa al lado del lector, sin convertirlo en clase ni confesión teatral."
+            )
+        elif veil_mode == "bar_filosofico":
+            parts.append(
+                "Hablalo como una discusión inteligente de madrugada: ironía lúcida, cercanía y filo. Cerrá con una frase que deje resonancia, no necesariamente con pregunta."
+            )
+        elif veil_mode == "desarme":
+            parts.append("Desarmá la frase como mecanismo: qué afirma, qué oculta, qué seduce y qué no se sostiene.")
+        elif veil_mode == "pregunta_viva":
+            parts.append("No termines en moraleja. Cerrá con una pregunta que deje la idea abierta.")
+
         parts.append(self._closing_discipline_hint(veil_mode, dialogue))
-        
+
         return " ".join(parts).strip()
 
-    def _messages(self, question: str, snapshot: dict, history: list[dict] | None = None, dialogue: bool = False, reasoning_mode: str = "", profile: str = "academica", veil: str = "lucy") -> list[dict]:
+    def _messages(
+        self,
+        question: str,
+        snapshot: dict,
+        history: list[dict] | None = None,
+        dialogue: bool = False,
+        reasoning_mode: str = "",
+        profile: str = "academica",
+        veil: str = "lucy",
+    ) -> list[dict]:
         lab_mode_info = snapshot.get("laboratory_mode") if isinstance(snapshot.get("laboratory_mode"), dict) else {}
         laboratory_mode = str((lab_mode_info or {}).get("mode") or "document").strip().lower()
         free_mode = laboratory_mode == "free"
         has_current_text = bool(str(snapshot.get("current_chunk") or "").strip())
-        
+
         include_doc = not dialogue
         include_blocks = True
-        
+
         if free_mode:
             if not self.wants_document_context(question):
                 include_doc = False
                 include_blocks = False
-                
-        context = self._context_text(question, snapshot, history=history or [], include_document=include_doc, include_blocks=include_blocks)
-        persona_overlay = self._persona_overlay(reasoning_mode, dialogue=dialogue, profile=profile, free_mode=free_mode, veil=veil)
-        literal_instruction = self._document_literal_instruction(question, free_mode=free_mode, has_current_text=has_current_text)
+
+        context = self._context_text(
+            question, snapshot, history=history or [], include_document=include_doc, include_blocks=include_blocks
+        )
+        persona_overlay = self._persona_overlay(
+            reasoning_mode, dialogue=dialogue, profile=profile, free_mode=free_mode, veil=veil
+        )
+        literal_instruction = self._document_literal_instruction(
+            question, free_mode=free_mode, has_current_text=has_current_text
+        )
         if dialogue:
             if free_mode:
                 system = (
@@ -766,14 +1007,24 @@ class ConversationCore:
             clipped.append(f"[Usuario {index}]\n{content}")
         return "\n\n".join(clipped)
 
-    def _context_text(self, question: str, snapshot: dict, history: list[dict] | None = None, include_document: bool = True, include_blocks: bool = True) -> str:
+    def _context_text(
+        self,
+        question: str,
+        snapshot: dict,
+        history: list[dict] | None = None,
+        include_document: bool = True,
+        include_blocks: bool = True,
+    ) -> str:
         document_text = str(snapshot.get("document_text") or "")
         if len(document_text) > self.max_document_chars:
-            document_text = document_text[: self.max_document_chars].rstrip() + "\n\n[Documento recortado por limite de contexto.]"
+            document_text = (
+                document_text[: self.max_document_chars].rstrip() + "\n\n[Documento recortado por limite de contexto.]"
+            )
         previous_chunk = str(snapshot.get("previous_chunk") or "")
         current_chunk = str(snapshot.get("current_chunk") or "")
         next_chunk = str(snapshot.get("next_chunk") or "")
-        notes = snapshot.get("notes") if isinstance(snapshot.get("notes"), list) else []
+        notes_value = snapshot.get("notes")
+        notes = notes_value if isinstance(notes_value, list) else []
         document_catalog = self._document_catalog_text(snapshot)
         reference_catalog = self._reference_catalog_text(snapshot.get("reference_documents"))
         laboratory_focus = self._laboratory_focus_text(snapshot.get("laboratory_focus"))
@@ -788,29 +1039,33 @@ class ConversationCore:
             f"Documento ID: {snapshot.get('doc_id') or ''}",
             f"Bloque visible: {snapshot.get('current') or 0} de {snapshot.get('total') or 0}",
         ]
-        
+
         if include_blocks:
-            lines.extend([
+            lines.extend(
+                [
+                    "",
+                    "CATALOGO DE DOCUMENTOS:",
+                    document_catalog or "[No hay documentos cargados.]",
+                    "",
+                    "TEXTO EN PANTALLA:",
+                    current_chunk or "[No hay bloque visible.]",
+                    "",
+                    "BLOQUE ANTERIOR:",
+                    previous_chunk or "[No hay bloque anterior.]",
+                    "",
+                    "BLOQUE SIGUIENTE:",
+                    next_chunk or "[No hay bloque siguiente.]",
+                ]
+            )
+
+        lines.extend(
+            [
                 "",
-                "CATALOGO DE DOCUMENTOS:",
-                document_catalog or "[No hay documentos cargados.]",
-                "",
-                "TEXTO EN PANTALLA:",
-                current_chunk or "[No hay bloque visible.]",
-                "",
-                "BLOQUE ANTERIOR:",
-                previous_chunk or "[No hay bloque anterior.]",
-                "",
-                "BLOQUE SIGUIENTE:",
-                next_chunk or "[No hay bloque siguiente.]",
-            ])
-            
-        lines.extend([
-            "",
-            "NOTAS DEL LECTOR:",
-            notes_text or "[No hay notas guardadas.]",
-        ])
-        
+                "NOTAS DEL LECTOR:",
+                notes_text or "[No hay notas guardadas.]",
+            ]
+        )
+
         if reference_catalog:
             lines.extend(["", "DOCUMENTOS DE CONSULTA:", reference_catalog])
         if laboratory_focus:
@@ -1021,7 +1276,9 @@ class ConversationCore:
 
     def _extract_requested_chunk_numbers(self, text: str) -> list[int]:
         numbers = []
-        for raw in re.findall(r"\b(?:bloque|chunk|parte|secci[oó]n)\s+(\d{1,4})\b", str(text or ""), flags=re.IGNORECASE):
+        for raw in re.findall(
+            r"\b(?:bloque|chunk|parte|secci[oó]n)\s+(\d{1,4})\b", str(text or ""), flags=re.IGNORECASE
+        ):
             try:
                 value = int(raw)
             except ValueError:
@@ -1039,11 +1296,53 @@ class ConversationCore:
 
     def _meaningful_tokens(self, text: str) -> list[str]:
         stopwords = {
-            "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas", "y", "o", "u",
-            "que", "qué", "como", "cómo", "para", "por", "con", "sin", "sobre", "entre", "hay",
-            "otro", "otra", "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
-            "doc", "docs", "documento", "documentos", "consulta", "principal", "puedes", "podés",
-            "ves", "veo", "mirar", "pantalla", "bloque",
+            "de",
+            "del",
+            "la",
+            "el",
+            "los",
+            "las",
+            "un",
+            "una",
+            "unos",
+            "unas",
+            "y",
+            "o",
+            "u",
+            "que",
+            "qué",
+            "como",
+            "cómo",
+            "para",
+            "por",
+            "con",
+            "sin",
+            "sobre",
+            "entre",
+            "hay",
+            "otro",
+            "otra",
+            "este",
+            "esta",
+            "estos",
+            "estas",
+            "ese",
+            "esa",
+            "esos",
+            "esas",
+            "doc",
+            "docs",
+            "documento",
+            "documentos",
+            "consulta",
+            "principal",
+            "puedes",
+            "podés",
+            "ves",
+            "veo",
+            "mirar",
+            "pantalla",
+            "bloque",
         }
         tokens = re.findall(r"[a-záéíóúñ0-9_./-]{3,}", self._normalize_text(text))
         out: list[str] = []

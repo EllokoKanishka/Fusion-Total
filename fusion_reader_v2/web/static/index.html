@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fusion Reader v2</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="left-sidebar">
+      <h1>Cargar Texto</h1>
+      <p class="sub">Arrastrá un archivo o buscalo en la PC.</p>
+      <div id="dropzone" class="upload-zone" tabindex="0" role="button" aria-label="Cargar archivo de texto">
+        <div class="upload-icon">+</div>
+        <strong>Soltá tu documento acá</strong>
+        <span>TXT, MD, PDF, DOCX, ODT, RTF y más.</span>
+        <button id="chooseFileBtn" class="primary compact-btn" type="button">Buscar Archivo</button>
+        <input id="fileInput" class="file-input" type="file" accept=".txt,.md,.markdown,.pdf,.doc,.docm,.docx,.dot,.dotx,.odt,.ott,.sxw,.pages,.rtf,.html,.htm,.csv,.log,text/plain,text/markdown,application/pdf,application/vnd.oasis.opendocument.text,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword">
+      </div>
+      <div class="row">
+        <label class="toggle upload-toggle"><input id="autoReadToggle" type="checkbox" checked> Leer al cargar</label>
+        <button id="pdfToWordTool" class="compact-btn" type="button" title="Convertir PDF a DOCX y guardar en Descargas">PDF → Word</button>
+        <input id="pdfToWordInput" class="file-input" type="file" accept=".pdf,application/pdf">
+      </div>
+      <div class="row pdf-download-row">
+        <p id="pdfToWordInfo" class="upload-info no-margin"></p>
+        <a id="pdfToWordDownload" href="#" class="upload-info download-link is-hidden" download>Descargar</a>
+      </div>
+      <label class="toggle upload-toggle"><input id="referenceModeToggle" type="checkbox"> Cargar este archivo como consulta</label>
+      <p class="upload-info upload-hint">Por defecto, el archivo entra como documento principal. La consulta se agrega sólo si activás esta opción para esa carga.</p>
+      <p id="uploadInfo" class="upload-info">Todavía no cargaste ningún texto.</p>
+      <progress id="importProgress" class="progress-native" max="100" value="0" aria-label="Progreso de importación"></progress>
+      <button id="prepareBtn" class="compact-btn" type="button">Preparar documento</button>
+      <button id="cancelPrepareBtn" class="compact-btn" type="button">Cancelar preparación</button>
+      <button id="clearDocBtn" class="compact-btn danger-btn clear-document-btn" type="button">Limpiar documento</button>
+      <p id="prepareInfo" class="upload-info">Audio sin preparar.</p>
+      <progress id="prepareProgress" class="progress-native" max="100" value="0" aria-label="Progreso de preparación"></progress>
+      <details class="audio-export-panel" open>
+        <summary>Exportar audio</summary>
+        <div class="audio-export-grid">
+          <select id="audioExportMode" class="compact-select" aria-label="Modo de exportación de audio">
+            <option value="current">Bloque actual</option>
+            <option value="block">Bloque específico</option>
+            <option value="range">Rango</option>
+            <option value="full">Documento completo</option>
+          </select>
+          <div id="audioExportBlockWrap" class="audio-export-inline single audio-export-hidden">
+            <input id="audioExportBlockInput" class="compact-input" type="number" min="1" value="1" aria-label="Bloque específico">
+          </div>
+          <div id="audioExportRangeWrap" class="audio-export-inline audio-export-hidden">
+            <input id="audioExportStartInput" class="compact-input" type="number" min="1" value="1" aria-label="Bloque inicial">
+            <input id="audioExportEndInput" class="compact-input" type="number" min="1" value="1" aria-label="Bloque final">
+          </div>
+          <div class="audio-export-actions">
+            <button id="audioExportBtn" class="compact-btn" type="button">Generar</button>
+            <button id="audioExportCancelBtn" class="compact-btn" type="button">Cancelar</button>
+          </div>
+          <p id="audioExportInfo" class="upload-info">Sin exportación de audio activa.</p>
+          <a id="audioExportDownload" href="#" class="upload-info download-link is-hidden" download>Descargar WAV</a>
+        </div>
+      </details>
+      <details class="notes-panel" open>
+        <summary id="notesSummary">Notas del documento</summary>
+        <textarea id="noteInput" class="note-input" placeholder="Escribí una nota para el bloque actual..."></textarea>
+        <button id="saveNoteBtn" class="primary compact-btn" type="button">Guardar nota</button>
+        <p id="notesInfo" class="upload-info">Sin notas todavía.</p>
+        <div id="notesList" class="note-list"></div>
+      </details>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="title">
+          <strong id="docTitle">Ningún documento activo</strong>
+          <span id="docMeta">Bloque 0 de 0</span>
+        </div>
+        <div class="header-selectors">
+          <select id="profileSelect" class="compact-select" aria-label="Perfil">
+            <option value="academica">Académica</option>
+            <option value="bohemia">Bohemia</option>
+          </select>
+          <select id="veilSelect" class="compact-select" aria-label="Velo"></select>
+          <select id="voiceSelect" class="compact-select" aria-label="Voz"></select>
+        </div>
+        <div id="ttsChip" class="status"><span id="ttsDot" class="dot"></span><span id="ttsStatus">TTS sin comprobar</span></div>
+        <div id="sttChip" class="status"><span id="sttDot" class="dot"></span><span id="sttStatus">STT sin comprobar</span></div>
+      </header>
+
+      <section class="reader">
+        <div id="chunk" class="chunk empty">Subí un TXT o MD para empezar.</div>
+      </section>
+
+      <section class="controls">
+        <div class="row">
+          <button id="prevBtn" class="compact-btn">Anterior</button>
+          <button id="readBtn" class="primary compact-btn">Leer</button>
+          <button id="repeatBtn" class="compact-btn">Repetir</button>
+          <button id="nextBtn" class="compact-btn">Siguiente</button>
+          <input id="jumpInput" class="compact-input" type="number" min="1" value="1" aria-label="Bloque">
+          <button id="jumpBtn" class="compact-btn">Ir</button>
+          <label class="toggle compact-toggle"><input id="continuousToggle" type="checkbox"> Continuo</label>
+        </div>
+        <audio id="player" class="slim-audio" controls></audio>
+        <div id="log" class="log">Lista para cargar.</div>
+      </section>
+    </main>
+
+    <section class="lab">
+      <h2>Laboratorio</h2>
+      <div id="labFocus" class="lab-focus"><strong>Foco del laboratorio</strong>Sin foco activo.</div>
+      <div id="chatLog" class="chat-log" aria-live="polite">
+        <div class="chat-msg system">Cargá un documento y preguntame por lo que está en pantalla.</div>
+      </div>
+      <textarea id="chatInput" class="chat-input" placeholder="Escribí sobre el texto actual..."></textarea>
+      <div class="lab-toolbar">
+        <button id="sendChatBtn" class="primary compact-btn">Enviar</button>
+        <button id="clearLabHistoryBtn" class="compact-btn" type="button">Borrar historial</button>
+        <button id="dialogueBtn" class="primary compact-btn">Dialogar</button>
+        <button id="freeModeBtn" class="mode-toggle-btn compact-btn" type="button">Modo libre</button>
+        <div class="reasoning-tabs" aria-label="Modo de razonamiento">
+          <button id="reasoningNormalBtn" class="reasoning-tab" type="button">Normal</button>
+          <button id="reasoningThinkingBtn" class="reasoning-tab" type="button">Pensar</button>
+          <button id="reasoningSupremeBtn" class="reasoning-tab" type="button">Supremo</button>
+          <button id="reasoningPensamientoCriticoBtn" class="reasoning-tab" type="button">Pensamiento crítico</button>
+        </div>
+        <div id="dialogueInfo" class="dialogue-info">Diálogo apagado.</div>
+        <div id="reasoningCaption" class="reasoning-caption">Pensamiento activo.</div>
+      </div>
+      <audio id="dialoguePlayer"></audio>
+    </section>
+    <aside class="right-sidebar" aria-label="Panel lateral derecho">
+      <div class="reference-panel">
+        <div class="reference-section">
+          <div class="reference-label">Lectura activa</div>
+          <details id="mainDocInfo" class="reference-card reference-card-main">
+            <summary>
+              <span class="reference-title" id="mainDocTitle">Ningún documento principal</span>
+              <span class="reference-caret" aria-hidden="true">▾</span>
+            </summary>
+            <div class="reference-content">
+              <strong>Documento principal</strong>
+              <span id="mainDocMeta" class="reference-meta">Sin lectura activa.</span>
+            </div>
+          </details>
+        </div>
+        <div class="reference-section">
+          <div>
+            <h2>Consulta</h2>
+            <p class="sub">El lector sigue leyendo el principal. Estos textos sólo apoyan el laboratorio.</p>
+          </div>
+          <div>
+            <strong>Documentos de consulta</strong>
+            <div id="referenceList" class="reference-list">
+              <div class="reference-empty">Todavía no cargaste documentos de consulta.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

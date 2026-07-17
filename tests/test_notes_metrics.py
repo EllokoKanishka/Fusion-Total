@@ -1,13 +1,14 @@
 import unittest
 import tempfile
-import json
-import os
 from pathlib import Path
 from fusion_reader_v2 import ConversationCore, NullChatProvider
+from fusion_reader_v2.metrics import VoiceMetric, VoiceMetricsStore
 from tests.helpers import (
     test_app,
     NullTTSProvider,
 )
+from tests.helpers import web_source
+
 
 class NotesMetricsTests(unittest.TestCase):
     def test_notes_are_persisted_to_json_file(self):
@@ -17,7 +18,7 @@ class NotesMetricsTests(unittest.TestCase):
         app.create_note("Nota de prueba", 0)
         notes_file = root / "notes" / "doc1.json"
         self.assertTrue(notes_file.exists())
-        
+
     def test_notes_can_be_filtered_by_document(self):
         app = test_app()
         app.load_text("doc1", "D1", "C1", prefetch=False)
@@ -26,7 +27,6 @@ class NotesMetricsTests(unittest.TestCase):
         app.create_note("N2", 0)
         self.assertEqual(len(app.list_notes(doc_id="doc1")["items"]), 1)
         self.assertEqual(app.list_notes(doc_id="doc1")["items"][0]["text"], "N1")
-
 
     def test_notes_include_timestamp(self):
         app = test_app()
@@ -68,6 +68,29 @@ class NotesMetricsTests(unittest.TestCase):
         v1 = next(m for m in metrics["items"] if m["voice"] == "v1.wav")
         self.assertEqual(v1["count"], 1)
 
+    def test_voice_metrics_are_versioned_and_size_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "metrics.jsonl"
+            store = VoiceMetricsStore(path, max_bytes=1024)
+            for index in range(100):
+                store.record(
+                    VoiceMetric(
+                        event="read",
+                        ok=True,
+                        provider="fake",
+                        cached=False,
+                        voice="voice.wav",
+                        language="es",
+                        ready_ms=index,
+                        synthesis_ms=index,
+                        text_chars=100,
+                    )
+                )
+            self.assertLessEqual(path.stat().st_size, 1024)
+            rows = store.recent(limit=200)
+            self.assertTrue(rows)
+            self.assertTrue(all(row["schema_version"] == 1 for row in rows))
+
     def test_clear_laboratory_history_removes_chat_and_dialogue_context(self):
         chat_provider = NullChatProvider("L.")
         app = test_app()
@@ -82,20 +105,6 @@ class NotesMetricsTests(unittest.TestCase):
         self.assertNotIn("Pasted", prompt)
 
     def test_server_exposes_laboratory_history_reset_button_and_endpoint(self):
-        server = Path("scripts/fusion_reader_v2_server.py").read_text(encoding="utf-8")
+        server = web_source()
         self.assertIn("clearLabHistoryBtn", server)
         self.assertIn("/api/laboratory/reset", server)
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(NotesMetricsTests, (
-    "test_note_command_understands_natural_document_notes_phrase",
-    "test_note_command_understands_take_note_language",
-    "test_note_request_without_content_does_not_reach_llm",
-    "test_notes_get_compact_labels_and_can_be_renamed",
-    "test_notes_persist_by_document_and_chunk",
-    "test_notes_update_delete_and_chat_command",
-    "test_voice_metrics_are_persisted",
-    "test_voice_metrics_group_by_document_and_chunk",
-    "test_voice_metrics_summary_groups_by_provider",
-))

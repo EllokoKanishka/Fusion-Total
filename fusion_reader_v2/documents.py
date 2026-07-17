@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import html
+import io
 import csv
 import functools
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,6 +17,8 @@ from xml.etree import ElementTree
 
 from PIL import Image, ImageFilter, ImageOps
 
+from .config import environment_value
+from .owned_subprocess import run_owned
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".text", ".csv", ".log"}
 HTML_SUFFIXES = {".html", ".htm"}
@@ -25,14 +27,38 @@ PDF_SUFFIXES = {".pdf"}
 DOCX_SUFFIXES = {".docx"}
 ODT_SUFFIXES = {".odt", ".ott"}
 OFFICE_SUFFIXES = {".doc", ".docm", ".dot", ".dotx", ".odt", ".ott", ".sxw", ".pages"}
-SUPPORTED_SUFFIXES = TEXT_SUFFIXES | HTML_SUFFIXES | RTF_SUFFIXES | PDF_SUFFIXES | DOCX_SUFFIXES | ODT_SUFFIXES | OFFICE_SUFFIXES
+OFFICE_TEMP_SUFFIXES = {
+    ".doc": ".doc",
+    ".docm": ".docm",
+    ".dot": ".dot",
+    ".dotx": ".dotx",
+    ".odt": ".odt",
+    ".ott": ".ott",
+    ".pages": ".pages",
+    ".sxw": ".sxw",
+}
+SUPPORTED_SUFFIXES = (
+    TEXT_SUFFIXES | HTML_SUFFIXES | RTF_SUFFIXES | PDF_SUFFIXES | DOCX_SUFFIXES | ODT_SUFFIXES | OFFICE_SUFFIXES
+)
 OCR_MIN_CONF = 45.0
 OCR_WORD_MIN_CONF = 35.0
-OCR_DPI = int(os.environ.get("FUSION_READER_OCR_DPI", "170"))
-OCR_WORKERS = max(1, int(os.environ.get("FUSION_READER_OCR_WORKERS", "4")))
+OCR_DPI = int(environment_value("FUSION_READER_OCR_DPI", "170") or "170")
+OCR_WORKERS = max(1, int(environment_value("FUSION_READER_OCR_WORKERS", "4") or "4"))
+
+
+@dataclass(frozen=True)
+class ArchiveLimits:
+    max_entries: int = 2048
+    max_entry_bytes: int = 32 * 1024 * 1024
+    max_total_bytes: int = 128 * 1024 * 1024
+    max_compression_ratio: float = 200.0
+    max_xml_bytes: int = 32 * 1024 * 1024
+    max_text_chars: int = 32 * 1024 * 1024
+
+
+DEFAULT_ARCHIVE_LIMITS = ArchiveLimits()
 OCR_STOPWORDS = set(
-    "de la el en que y a los las un una se con no por para del al es me mi su lo como le mas más o si pero esta está fue ha he este nuestro señor"
-    .split()
+    "de la el en que y a los las un una se con no por para del al es me mi su lo como le mas más o si pero esta está fue ha he este nuestro señor".split()
 )
 OCR_SPACING_FIXES = {
     "L a": "La",
@@ -99,7 +125,9 @@ class ImportedDocument:
     raw_text: str = ""
 
 
-def report_progress(progress: ProgressCallback | None, stage: str, current: int = 0, total: int = 0, message: str = "") -> None:
+def report_progress(
+    progress: ProgressCallback | None, stage: str, current: int = 0, total: int = 0, message: str = ""
+) -> None:
     if not progress:
         return
     try:
@@ -108,15 +136,21 @@ def report_progress(progress: ProgressCallback | None, stage: str, current: int 
         return
 
 
-def import_document_bytes(filename: str, data: bytes, mime: str = "", progress: ProgressCallback | None = None) -> ImportedDocument:
+def import_document_bytes(
+    filename: str, data: bytes, mime: str = "", progress: ProgressCallback | None = None
+) -> ImportedDocument:
     with tempfile.TemporaryDirectory(prefix="fusion_import_bytes_") as tmp:
         safe_name = safe_filename(filename)
-        path = Path(tmp) / safe_name
+        # The original name is metadata only. Keeping it out of the temporary
+        # path makes the filesystem boundary independent from caller input.
+        path = Path(tmp) / "document.upload"
         path.write_bytes(data)
         return import_document_path(safe_name, path, mime=mime, progress=progress)
 
 
-def import_document_path(filename: str, path: Path | str, mime: str = "", progress: ProgressCallback | None = None) -> ImportedDocument:
+def import_document_path(
+    filename: str, path: Path | str, mime: str = "", progress: ProgressCallback | None = None
+) -> ImportedDocument:
     safe_name = safe_filename(filename)
     source = Path(path)
     suffix = Path(safe_name).suffix.lower()
@@ -133,7 +167,7 @@ def import_document_path(filename: str, path: Path | str, mime: str = "", progre
             data = source.read_bytes()
         return data
 
-    if suffix in TEXT_SUFFIXES or (not suffix and looks_like_text(data)):
+    if suffix in TEXT_SUFFIXES or (not suffix and looks_like_text(read_data())):
         report_progress(progress, "converting", 0, 0, "Leyendo texto directo...")
         text = decode_text(read_data())
         report_progress(progress, "converted", 1, 1, "Texto directo listo.")
@@ -189,7 +223,8 @@ def imported(filename: str, text: str, source_type: str, detail: str, raw_text: 
 
 
 def safe_filename(filename: str) -> str:
-    name = Path(str(filename or "documento")).name.strip() or "documento"
+    raw = str(filename or "documento").replace("\\", "/")
+    name = os.path.basename(raw).strip() or "documento"
     return re.sub(r"[\x00-\x1f]+", "_", name)
 
 
@@ -265,28 +300,68 @@ def rtf_to_text(text: str) -> str:
     return text
 
 
-def docx_to_text(data: bytes) -> str:
-    with tempfile.TemporaryDirectory(prefix="fusion_docx_") as tmp:
-        path = Path(tmp) / "document.docx"
-        path.write_bytes(data)
-        with zipfile.ZipFile(path) as zf:
-            xml = zf.read("word/document.xml")
+def _safe_archive_xml(data: bytes, required: str, limits: ArchiveLimits) -> bytes:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if len(entries) > limits.max_entries:
+                raise ValueError("document_archive_too_large")
+            total = 0
+            required_info: zipfile.ZipInfo | None = None
+            for info in entries:
+                path = Path(info.filename.replace("\\", "/"))
+                if info.is_dir() or path.is_absolute() or ".." in path.parts:
+                    raise ValueError("document_archive_invalid")
+                if info.flag_bits & 0x1:
+                    raise ValueError("document_archive_invalid")
+                if info.file_size > limits.max_entry_bytes:
+                    raise ValueError("document_archive_too_large")
+                total += info.file_size
+                if total > limits.max_total_bytes:
+                    raise ValueError("document_archive_too_large")
+                ratio = info.file_size / max(1, info.compress_size)
+                if ratio > limits.max_compression_ratio:
+                    raise ValueError("document_archive_ratio_exceeded")
+                if info.filename == required:
+                    required_info = info
+            if required_info is None:
+                raise ValueError("document_archive_invalid")
+            if required_info.file_size > limits.max_xml_bytes:
+                raise ValueError("document_xml_too_large")
+            xml = archive.read(required_info)
+            if len(xml) > limits.max_xml_bytes:
+                raise ValueError("document_xml_too_large")
+            return xml
+    except ValueError:
+        raise
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile, RuntimeError, KeyError) as exc:
+        raise ValueError("document_archive_invalid") from exc
+
+
+def _bounded_document_text(lines: list[str], limits: ArchiveLimits) -> str:
+    text = "\n\n".join(lines)
+    if len(text) > limits.max_text_chars:
+        raise ValueError("document_text_too_large")
+    return text
+
+
+def docx_to_text(data: bytes, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS) -> str:
+    xml = _safe_archive_xml(data, "word/document.xml", limits)
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-        parts = [node.text or "" for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")]
+        parts = [
+            node.text or ""
+            for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
+        ]
         line = "".join(parts).strip()
         if line:
             lines.append(line)
-    return "\n\n".join(lines)
+    return _bounded_document_text(lines, limits)
 
 
-def odt_to_text(data: bytes) -> str:
-    with tempfile.TemporaryDirectory(prefix="fusion_odt_") as tmp:
-        path = Path(tmp) / "document.odt"
-        path.write_bytes(data)
-        with zipfile.ZipFile(path) as zf:
-            xml = zf.read("content.xml")
+def odt_to_text(data: bytes, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS) -> str:
+    xml = _safe_archive_xml(data, "content.xml", limits)
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     text_ns = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
@@ -295,7 +370,7 @@ def odt_to_text(data: bytes) -> str:
             line = "".join(node.itertext()).strip()
             if line:
                 lines.append(line)
-    return "\n\n".join(lines)
+    return _bounded_document_text(lines, limits)
 
 
 def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = None) -> tuple[str, str, str]:
@@ -305,7 +380,9 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
     report_progress(progress, "pdf_text", 0, 0, "Buscando texto interno del PDF...")
     with tempfile.TemporaryDirectory(prefix="fusion_pdf_text_") as tmp:
         out = Path(tmp) / "document.txt"
-        result = subprocess.run([tool, "-layout", "-enc", "UTF-8", str(path), str(out)], capture_output=True, text=True, timeout=180)
+        result = run_owned(
+            [tool, "-layout", "-enc", "UTF-8", str(path), str(out)], capture_output=True, text=True, timeout=180
+        )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "pdftotext_failed").strip()
             raise ValueError(detail)
@@ -464,7 +541,7 @@ def clean_pdf_text(text: str) -> str:
     body = normalize_raw_text(text)
     if not body:
         return ""
-    body = re.sub(rf"(?<=\w)-\n(?=\w)", "", body)
+    body = re.sub(r"(?<=\w)-\n(?=\w)", "", body)
     lines = body.split("\n")
     paragraphs: list[str] = []
     current = ""
@@ -491,7 +568,10 @@ def clean_pdf_text(text: str) -> str:
             current = stripped
     if current:
         paragraphs.append(current.strip())
-    cleaned = "\n\n".join(_repair_split_words(paragraph) if not PDF_PAGE_MARKER_RE.fullmatch(paragraph) else paragraph for paragraph in paragraphs)
+    cleaned = "\n\n".join(
+        _repair_split_words(paragraph) if not PDF_PAGE_MARKER_RE.fullmatch(paragraph) else paragraph
+        for paragraph in paragraphs
+    )
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return normalize_text(cleaned)
 
@@ -504,7 +584,7 @@ def pdf_page_count(path: Path) -> int:
     tool = shutil.which("pdfinfo")
     if not tool:
         return 0
-    result = subprocess.run([tool, str(path)], capture_output=True, text=True, timeout=30)
+    result = run_owned([tool, str(path)], capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
         return 0
     match = re.search(r"^Pages:\s+(\d+)", result.stdout, flags=re.MULTILINE)
@@ -532,7 +612,9 @@ def ocr_pdf_to_text(path: Path, progress: ProgressCallback | None = None) -> str
             report_progress(progress, "ocr", completed, pages, f"OCR página {completed} de {pages}.")
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="fusion-reader-ocr") as executor:
-            futures = [executor.submit(ocr_pdf_page_to_text, path, page, pdftoppm, tesseract) for page in range(1, pages + 1)]
+            futures = [
+                executor.submit(ocr_pdf_page_to_text, path, page, pdftoppm, tesseract) for page in range(1, pages + 1)
+            ]
             page_items = []
             for future in as_completed(futures):
                 page_items.append(future.result())
@@ -549,7 +631,7 @@ def ocr_pdf_page_to_text(path: Path, page: int, pdftoppm: str, tesseract: str) -
     with tempfile.TemporaryDirectory(prefix=f"fusion_pdf_ocr_{page}_") as tmp:
         root = Path(tmp)
         prefix = root / "page"
-        render = subprocess.run(
+        render = run_owned(
             [pdftoppm, "-f", str(page), "-l", str(page), "-r", str(OCR_DPI), "-png", str(path), str(prefix)],
             capture_output=True,
             text=True,
@@ -600,7 +682,7 @@ def save_ocr_crop(image: Image.Image, box: tuple[int, int, int, int], target: Pa
 
 
 def run_tesseract_plain(tesseract: str, image_path: Path) -> str:
-    result = subprocess.run(
+    result = run_owned(
         [tesseract, str(image_path), "stdout", "-l", "spa+eng", "--oem", "1", "--psm", "6"],
         capture_output=True,
         text=True,
@@ -695,10 +777,7 @@ def postprocess_ocr_text(text: str) -> str:
 
 
 def stopword_ratio(text: str) -> float:
-    words = [
-        word.lower().strip(".,;:!?¡¿()[]\"“”‘’")
-        for word in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}", text)
-    ]
+    words = [word.lower().strip('.,;:!?¡¿()[]"“”‘’') for word in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}", text)]
     if not words:
         return 0.0
     return sum(word in OCR_STOPWORDS for word in words) / len(words)
@@ -728,11 +807,18 @@ def ocr_lines_from_tsv(tsv: str) -> list[dict]:
         if not keep_ocr_word(text):
             continue
         try:
-            key = (int(row.get("block_num") or 0), int(row.get("par_num") or 0), int(row.get("line_num") or 0), int(row.get("top") or 0))
+            key = (
+                int(row.get("block_num") or 0),
+                int(row.get("par_num") or 0),
+                int(row.get("line_num") or 0),
+                int(row.get("top") or 0),
+            )
             left = int(row.get("left") or 0)
         except ValueError:
             continue
-        item = groups.setdefault(key, {"block": key[0], "par": key[1], "line": key[2], "top": key[3], "words": [], "confs": []})
+        item = groups.setdefault(
+            key, {"block": key[0], "par": key[1], "line": key[2], "top": key[3], "words": [], "confs": []}
+        )
         item["words"].append((left, text))
         item["confs"].append(conf)
 
@@ -743,13 +829,15 @@ def ocr_lines_from_tsv(tsv: str) -> list[dict]:
         if not text:
             continue
         confs = item["confs"]
-        out.append({
-            "block": item["block"],
-            "par": item["par"],
-            "line": item["line"],
-            "text": text,
-            "conf": sum(confs) / max(1, len(confs)),
-        })
+        out.append(
+            {
+                "block": item["block"],
+                "par": item["par"],
+                "line": item["line"],
+                "text": text,
+                "conf": sum(confs) / max(1, len(confs)),
+            }
+        )
     return out
 
 
@@ -904,9 +992,11 @@ def office_to_text(filename: str, data: bytes) -> str:
         raise ValueError("libreoffice_not_found")
     with tempfile.TemporaryDirectory(prefix="fusion_office_") as tmp:
         root = Path(tmp)
-        src = root / safe_filename(filename)
+        requested_suffix = Path(safe_filename(filename)).suffix.lower()
+        suffix = OFFICE_TEMP_SUFFIXES.get(requested_suffix, ".doc")
+        src = root / f"document{suffix}"
         src.write_bytes(data)
-        result = subprocess.run(
+        result = run_owned(
             [tool, "--headless", "--convert-to", "txt:Text", "--outdir", str(root), str(src)],
             capture_output=True,
             text=True,

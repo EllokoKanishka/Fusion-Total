@@ -9,6 +9,7 @@ from tests.helpers import (
     make_reading_sections,
 )
 
+
 class ConversationTests(unittest.TestCase):
     def test_reasoning_mode_defaults_to_thinking_when_env_is_not_forcing_normal(self):
         previous_mode = os.environ.get("FUSION_READER_REASONING_MODE")
@@ -19,8 +20,10 @@ class ConversationTests(unittest.TestCase):
             app = test_app()
             self.assertEqual(app.reasoning_status()["mode"], "thinking")
         finally:
-            if previous_mode is not None: os.environ["FUSION_READER_REASONING_MODE"] = previous_mode
-            if previous_think is not None: os.environ["FUSION_READER_CHAT_THINK"] = previous_think
+            if previous_mode is not None:
+                os.environ["FUSION_READER_REASONING_MODE"] = previous_mode
+            if previous_think is not None:
+                os.environ["FUSION_READER_CHAT_THINK"] = previous_think
 
     def test_reasoning_mode_switch_persists_across_restart(self):
         root = Path(tempfile.mkdtemp())
@@ -156,7 +159,12 @@ class ConversationTests(unittest.TestCase):
         out = app.chat("Analizá este fragmento.")
         self.assertTrue(out["ok"])
         self.assertEqual(out["reasoning_passes"], 3)
-        found_auditor = any("Auditor" in m["content"] or "Critico" in m["content"] for call in chat_provider.calls for m in call[0] if m["role"] == "system")
+        found_auditor = any(
+            "Auditor" in m["content"] or "Critico" in m["content"]
+            for call in chat_provider.calls
+            for m in call[0]
+            if m["role"] == "system"
+        )
         self.assertTrue(found_auditor)
 
     def test_contrapunto_does_not_break_supreme(self):
@@ -244,7 +252,9 @@ class ConversationTests(unittest.TestCase):
                 ("Consulta tres", "Mas texto."),
             ),
         )
-        out = app.chat("Andá al bloque 1 de Desgrabaciones.docx y buscá dónde habla de YouTube y ese bloque qué dice exactamente.")
+        out = app.chat(
+            "Andá al bloque 1 de Desgrabaciones.docx y buscá dónde habla de YouTube y ese bloque qué dice exactamente."
+        )
         self.assertTrue(out["ok"])
         self.assertEqual(out["detail"], "search_matches")
         self.assertEqual(out["current"], app.laboratory_focus_status()["chunk_number"])
@@ -474,14 +484,3 @@ class ConversationTests(unittest.TestCase):
         app.set_reasoning_mode("thinking")
         app.chat("H")
         self.assertIn("Abrí preguntas solo si son realmente necesarias", chat_provider.calls[0][0][0]["content"])
-
-from tests.helpers import attach_legacy_tests
-
-attach_legacy_tests(ConversationTests, (
-    "test_chat_document_search_stays_local_even_when_bridge_exists",
-    "test_chat_explicit_academic_search_activates_external_research",
-    "test_chat_explicit_external_research_uses_openclaw_bridge",
-    "test_chat_laboratory_reference_uses_l_note_even_with_document_loaded",
-    "test_chat_normal_question_does_not_activate_external_research",
-    "test_chat_note_without_document_becomes_laboratory_note",
-))

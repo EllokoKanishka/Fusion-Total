@@ -9,6 +9,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import environment_copy, environment_value
+from .owned_subprocess import run_owned
+
 
 @dataclass(frozen=True)
 class ExternalResearchResult:
@@ -30,7 +33,9 @@ class ExternalResearchBridge:
     name = "external_research"
 
     def research(self, request: str, snapshot: dict | None = None) -> ExternalResearchResult:
-        return ExternalResearchResult(False, detail="not_implemented", provider=self.name, query=str(request or "").strip())
+        return ExternalResearchResult(
+            False, detail="not_implemented", provider=self.name, query=str(request or "").strip()
+        )
 
 
 class NullExternalResearchBridge(ExternalResearchBridge):
@@ -61,13 +66,31 @@ class OpenClawResearchBridge(ExternalResearchBridge):
         agent: str = "",
         timeout_seconds: float | None = None,
         enabled: bool | None = None,
+        retry_attempts: int | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
-        self.command = command or os.environ.get("FUSION_READER_OPENCLAW_BIN") or str(Path.home() / ".openclaw" / "bin" / "openclaw")
-        self.agent = agent or os.environ.get("FUSION_READER_OPENCLAW_AGENT") or "fusion-research"
-        self.timeout_seconds = float(timeout_seconds if timeout_seconds is not None else os.environ.get("FUSION_READER_OPENCLAW_TIMEOUT", "90"))
-        self.retry_attempts = max(1, int(os.environ.get("FUSION_READER_OPENCLAW_RETRIES", "2")))
+        self.command = (
+            command
+            or environment_value("FUSION_READER_OPENCLAW_BIN")
+            or str(Path.home() / ".openclaw" / "bin" / "openclaw")
+        )
+        self.agent = agent or environment_value("FUSION_READER_OPENCLAW_AGENT") or "fusion-research"
+        self.timeout_seconds = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else environment_value("FUSION_READER_OPENCLAW_TIMEOUT", "90") or "90"
+        )
+        self.retry_attempts = max(
+            1,
+            int(
+                retry_attempts
+                if retry_attempts is not None
+                else environment_value("FUSION_READER_OPENCLAW_RETRIES", "2") or "2"
+            ),
+        )
+        self.environment = dict(environment) if environment is not None else None
         if enabled is None:
-            raw_enabled = os.environ.get("FUSION_READER_OPENCLAW_ENABLED", "1").strip().lower()
+            raw_enabled = (environment_value("FUSION_READER_OPENCLAW_ENABLED", "1") or "1").strip().lower()
             self.enabled = raw_enabled not in {"0", "false", "no", "off"}
         else:
             self.enabled = bool(enabled)
@@ -103,7 +126,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 query=query,
             )
         prompt = self._build_prompt(query, snapshot or {})
-        env = os.environ.copy()
+        env = dict(self.environment) if self.environment is not None else environment_copy()
         env["PATH"] = f"{Path.home() / '.openclaw' / 'bin'}:{env.get('PATH', '')}"
         last_error: ExternalResearchResult | None = None
         for attempt in range(1, self.retry_attempts + 1):
@@ -119,7 +142,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 prompt,
             ]
             try:
-                proc = subprocess.run(
+                proc = run_owned(
                     cmd,
                     capture_output=True,
                     text=True,
@@ -174,7 +197,8 @@ class OpenClawResearchBridge(ExternalResearchBridge):
 
     def _build_prompt(self, request: str, snapshot: dict) -> str:
         context_lines = []
-        main_document = snapshot.get("main_document") if isinstance(snapshot.get("main_document"), dict) else {}
+        main_document_value = snapshot.get("main_document")
+        main_document = main_document_value if isinstance(main_document_value, dict) else {}
         if main_document:
             title = str(main_document.get("title") or "").strip()
             if title:
@@ -182,7 +206,8 @@ class OpenClawResearchBridge(ExternalResearchBridge):
         current_chunk = self._clip(snapshot.get("current_chunk") or "", 420)
         if current_chunk:
             context_lines.append(f"Bloque actual: {current_chunk}")
-        focus = snapshot.get("laboratory_focus") if isinstance(snapshot.get("laboratory_focus"), dict) else {}
+        focus_value = snapshot.get("laboratory_focus")
+        focus = focus_value if isinstance(focus_value, dict) else {}
         if focus:
             focus_title = str(focus.get("title") or "").strip()
             focus_text = self._clip(focus.get("text") or "", 340)
@@ -192,7 +217,8 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                 )
             if focus_text:
                 context_lines.append(f"Texto focal: {focus_text}")
-        laboratory_mode = snapshot.get("laboratory_mode") if isinstance(snapshot.get("laboratory_mode"), dict) else {}
+        laboratory_mode_value = snapshot.get("laboratory_mode")
+        laboratory_mode = laboratory_mode_value if isinstance(laboratory_mode_value, dict) else {}
         context_lines.append(f"Modo de laboratorio: {laboratory_mode.get('mode') or 'document'}")
         context_block = "\n".join(f"- {line}" for line in context_lines if line)
         return (
@@ -207,14 +233,24 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             f"Pedido del usuario:\n{request}"
         )
 
-    def _result_from_payload(self, payload: dict, query: str, raw_text: str, duration_ms: int) -> ExternalResearchResult:
-        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
-        agent_meta = meta.get("agentMeta") if isinstance(meta.get("agentMeta"), dict) else {}
+    def _result_from_payload(
+        self, payload: dict, query: str, raw_text: str, duration_ms: int
+    ) -> ExternalResearchResult:
+        result_value = payload.get("result")
+        result = result_value if isinstance(result_value, dict) else {}
+        meta_value = result.get("meta")
+        meta = meta_value if isinstance(meta_value, dict) else {}
+        agent_meta_value = meta.get("agentMeta")
+        agent_meta = agent_meta_value if isinstance(agent_meta_value, dict) else {}
         provider = str(agent_meta.get("provider") or self.name)
         model = str(agent_meta.get("model") or self.agent)
-        payloads = result.get("payloads") if isinstance(result.get("payloads"), list) else []
-        text_parts = [str(item.get("text") or "").strip() for item in payloads if isinstance(item, dict) and str(item.get("text") or "").strip()]
+        payloads_value = result.get("payloads")
+        payloads = payloads_value if isinstance(payloads_value, list) else []
+        text_parts = [
+            str(item.get("text") or "").strip()
+            for item in payloads
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
         combined_text = "\n".join(text_parts).strip()
         inner = self._extract_json_payload(combined_text)
         parsed = inner if isinstance(inner, dict) else {}
@@ -231,7 +267,9 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             if not detail:
                 detail = "bridge_rate_limit" if "rate limit" in combined_lower else "bridge_error"
         if not summary:
-            summary = combined_text or ("Investigacion externa completada." if ok else "No pude completar la investigacion externa.")
+            summary = combined_text or (
+                "Investigacion externa completada." if ok else "No pude completar la investigacion externa."
+            )
         if not ok:
             summary, detail = self._humanize_failure(summary, detail, combined_text or raw_text)
         answer = self._format_answer(query, summary, findings, sources, suggested, ok=ok)
@@ -253,7 +291,13 @@ class OpenClawResearchBridge(ExternalResearchBridge):
 
     def _should_retry(self, result: ExternalResearchResult) -> bool:
         detail = str(result.detail or "").strip().lower()
-        if detail in {"bridge_gateway_restart", "bridge_invalid_json", "bridge_workspace_busy", "bridge_exit_1", "bridge_exit_2"}:
+        if detail in {
+            "bridge_gateway_restart",
+            "bridge_invalid_json",
+            "bridge_workspace_busy",
+            "bridge_exit_1",
+            "bridge_exit_2",
+        }:
             return True
         raw = str(result.raw_text or "").lower()
         transient_markers = (
@@ -269,7 +313,12 @@ class OpenClawResearchBridge(ExternalResearchBridge):
     def _humanize_failure(self, summary: str, detail: str, raw_text: str) -> tuple[str, str]:
         clean_detail = str(detail or "").strip().lower()
         raw_lower = str(raw_text or "").lower()
-        if clean_detail == "bridge_rate_limit" or "rate limit" in raw_lower or "quota" in raw_lower or "429" in raw_lower:
+        if (
+            clean_detail == "bridge_rate_limit"
+            or "rate limit" in raw_lower
+            or "quota" in raw_lower
+            or "429" in raw_lower
+        ):
             return (
                 "Salí a investigar afuera, pero OpenClaw/Gemini está temporalmente limitado por cuota o rate limit. La integración quedó activa; probá de nuevo en un rato.",
                 "bridge_rate_limit",
@@ -291,7 +340,9 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             detail or "external_research_failed",
         )
 
-    def _format_answer(self, query: str, summary: str, findings: list[str], sources: list[dict], suggested: str, *, ok: bool) -> str:
+    def _format_answer(
+        self, query: str, summary: str, findings: list[str], sources: list[dict], suggested: str, *, ok: bool
+    ) -> str:
         lines = []
         if ok:
             lines.append(f"Sali a investigar afuera sobre: {query}.")
@@ -301,14 +352,14 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             lines.append(summary)
         if findings:
             lines.append("Hallazgos:")
-            for item in findings[:5]:
-                lines.append(f"- {item}")
+            for finding in findings[:5]:
+                lines.append(f"- {finding}")
         if sources:
             lines.append("Fuentes:")
-            for item in sources[:5]:
-                title = str(item.get("title") or "Fuente").strip()
-                url = str(item.get("url") or "").strip()
-                note = str(item.get("note") or "").strip()
+            for source in sources[:5]:
+                title = str(source.get("title") or "Fuente").strip()
+                url = str(source.get("url") or "").strip()
+                note = str(source.get("note") or "").strip()
                 chunk = title
                 if note:
                     chunk += f" | {note}"
@@ -321,7 +372,9 @@ class OpenClawResearchBridge(ExternalResearchBridge):
 
     def _format_spoken_answer(self, summary: str, findings: list[str], *, ok: bool) -> str:
         pieces = []
-        pieces.append(summary if summary else ("Investigacion externa lista." if ok else "La investigacion externa fallo."))
+        pieces.append(
+            summary if summary else ("Investigacion externa lista." if ok else "La investigacion externa fallo.")
+        )
         if findings:
             pieces.append(" ".join(findings[:2]))
         text = " ".join(piece.strip() for piece in pieces if piece.strip())

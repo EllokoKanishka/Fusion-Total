@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Archived general-assistant helper; not part of Fusion Reader v2.
 set -euo pipefail
 export PATH="$HOME/.openclaw/bin:$PATH"
 

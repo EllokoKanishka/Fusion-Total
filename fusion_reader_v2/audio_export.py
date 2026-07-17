@@ -8,6 +8,8 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .owned_subprocess import run_owned
+
 from .pdf_to_docx import find_downloads_dir
 
 
@@ -54,11 +56,30 @@ class AudioExportJob:
     error: str = ""
     snapshot: AudioExportSnapshot | None = field(default=None, repr=False)
 
+    @property
+    def terminal(self) -> bool:
+        return self.state in {"done", "cancelled", "error"}
+
+    @property
+    def updated_at(self) -> float:
+        return float(self.finished_at or self.started_at)
+
     def to_dict(self) -> dict:
+        progress = int(self.completed_blocks * 100 / self.total_blocks) if self.total_blocks else 0
         return {
             "ok": self.state in {"queued", "running", "done", "cancelled"},
             "job_id": self.job_id,
+            "id": self.job_id,
+            "type": "audio_export",
             "state": self.state,
+            "created_at": self.started_at,
+            "updated_at": self.updated_at,
+            "progress": progress,
+            "terminal": self.terminal,
+            "cancel_requested": self.state in {"canceling", "cancelled"},
+            "error_code": self.error,
+            "error_detail": self.detail if self.state == "error" else "",
+            "output": {"path": self.output_path, "filename": self.filename} if self.output_path else {},
             "title": self.title,
             "start_block": self.start_block,
             "end_block": self.end_block,
@@ -143,8 +164,9 @@ def _concat_wav_with_ffmpeg(inputs: list[Path], output: Path) -> str:
         encoding="utf-8",
     )
     try:
-        subprocess.run(
+        run_owned(
             [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(output)],
+            timeout=180,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
