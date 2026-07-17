@@ -30,6 +30,7 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 - status, current read, repeat through `read_current`, and navigation;
 - preparation start/status/cancel;
 - audio export start/status/cancel/download;
+- media transcription/translation start/status/cancel/mount/download;
 - voice catalog, selection, and synthetic test;
 - notes CRUD;
 - document chat and explicit external research;
@@ -77,6 +78,21 @@ the same reader UI.
 `start_offset`. It loads a transient main document through the normal reader
 pipeline and exposes `document.transient=true`; the source text is deliberately
 excluded from the recoverable session snapshot.
+
+Media routes:
+
+- `POST /api/media/transcribe`: multipart `file`; transcripción y PDF.
+- `POST /api/media/translate`: multipart `file`; suma castellano, PDF y WAV.
+- `GET /api/media/status[/<job_id>]`: último job o job específico.
+- `POST /api/media/cancel/<job_id>`: cancelación cooperativa.
+- `POST /api/media/mount/<job_id>`: monta el texto terminado como documento principal.
+- `GET /api/media/download/<job_id>/{pdf|translated-pdf|audio}`: artefacto validado.
+
+Los jobs usan estados `queued`, `running`, `canceling`, `done`, `cancelled` y
+`error`; devuelven sólo preview y conteos, no la transcripción completa. Hay un
+único job multimedia activo. La carga default máxima es 2 GiB
+(`FUSION_READER_MEDIA_MAX_BYTES`) y el timeout default es 2 horas
+(`FUSION_READER_MEDIA_TIMEOUT_SECONDS`).
 
 ## System Boundaries
 

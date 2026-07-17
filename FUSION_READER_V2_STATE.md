@@ -49,6 +49,10 @@ y laboratorio, no como dependencia del producto v2.
 - shutdown espera threads/futures propios y se puede reintentar.
 - `Texto rápido` carga texto pegado en el `ReaderSession` normal, permite iniciar
   desde el cursor y no persiste el contenido ni lo agrega a la biblioteca.
+- `Audio y video` vive en el panel derecho y comparte un pipeline local: FFmpeg
+  normaliza a FLAC, Whisper transcribe con idioma y tiempos, ReportLab genera
+  PDF y, opcionalmente, Ollama traduce al castellano antes de reutilizar el TTS
+  y la voz seleccionada para exportar WAV.
 
 ## Persistencia
 

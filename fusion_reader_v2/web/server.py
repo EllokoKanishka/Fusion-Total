@@ -226,6 +226,7 @@ class Handler(BaseHTTPRequestHandler):
         self,
         field_name: str = "file",
         max_bytes: int | None = None,
+        limit_error: str = "pdf_too_large",
     ) -> tuple[str, str, Path]:
         content_type = self.headers.get("Content-Type", "") or ""
         match = re.search(r'boundary="?([^";]+)"?', content_type)
@@ -236,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("missing_file_data")
         limit = self.settings.limits.pdf_max_bytes if max_bytes is None else int(max_bytes)
         if length > limit:
-            raise ValueError("pdf_too_large")
+            raise ValueError(limit_error)
         boundary = match.group(1).encode("utf-8")
         opening = b"--" + boundary
         remaining = length
@@ -328,6 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                 "js/preparation.mjs": "text/javascript; charset=utf-8",
                 "js/audio_export.mjs": "text/javascript; charset=utf-8",
                 "js/notes.mjs": "text/javascript; charset=utf-8",
+                "js/media.mjs": "text/javascript; charset=utf-8",
             }
             content_type = allowed.get(filename)
             asset = STATIC_ROOT / filename
@@ -377,6 +379,7 @@ class Handler(BaseHTTPRequestHandler):
                     "js/preparation.mjs",
                     "js/audio_export.mjs",
                     "js/notes.mjs",
+                    "js/media.mjs",
                 }
                 or not asset.is_file()
             ):

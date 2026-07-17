@@ -31,7 +31,14 @@ def error_response(exc: Exception, request_id: str) -> tuple[int, dict]:
         code = _safe_code(str(exc), "invalid_request")
         status = (
             413
-            if code in {"request_body_too_large", "upload_too_large", "pdf_too_large", "base64_upload_too_large"}
+            if code
+            in {
+                "request_body_too_large",
+                "upload_too_large",
+                "pdf_too_large",
+                "media_too_large",
+                "base64_upload_too_large",
+            }
             else 400
         )
         detail = "La solicitud no cumple el contrato de la API."

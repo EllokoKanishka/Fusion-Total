@@ -18,6 +18,7 @@ def _web_source() -> str:
         Path("fusion_reader_v2/web/static/js/preparation.mjs"),
         Path("fusion_reader_v2/web/static/js/audio_export.mjs"),
         Path("fusion_reader_v2/web/static/js/notes.mjs"),
+        Path("fusion_reader_v2/web/static/js/media.mjs"),
         Path("fusion_reader_v2/web/static/styles.css"),
     )
     return "\\n".join(path.read_text(encoding="utf-8") for path in paths)

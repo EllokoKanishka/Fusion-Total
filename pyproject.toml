@@ -11,6 +11,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
   "Pillow>=12.3.0,<13",
   "python-docx>=1.2,<2",
+  "reportlab>=4.4,<5",
 ]
 
 [project.optional-dependencies]

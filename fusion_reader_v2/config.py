@@ -167,6 +167,8 @@ class LimitSettings:
     upload_max_bytes: int = 128 * 1024 * 1024
     quick_text_max_chars: int = 2_000_000
     pdf_max_bytes: int = 500 * 1024 * 1024
+    media_max_bytes: int = 2 * 1024 * 1024 * 1024
+    media_timeout_seconds: float = 2 * 60 * 60
     job_ttl_seconds: int = 6 * 60 * 60
     job_max_items: int = 256
     cache_max_bytes: int = 8 * 1024 * 1024 * 1024
@@ -268,6 +270,18 @@ def create_settings(
             upload_max_bytes=_integer(env, "FUSION_READER_UPLOAD_MAX_BYTES", 128 * 1024 * 1024, minimum=1),
             quick_text_max_chars=_integer(env, "FUSION_READER_QUICK_TEXT_MAX_CHARS", 2_000_000, minimum=1),
             pdf_max_bytes=_integer(env, "FUSION_READER_PDF_MAX_BYTES", 500 * 1024 * 1024, minimum=1),
+            media_max_bytes=_integer(
+                env,
+                "FUSION_READER_MEDIA_MAX_BYTES",
+                2 * 1024 * 1024 * 1024,
+                minimum=1,
+            ),
+            media_timeout_seconds=_floating(
+                env,
+                "FUSION_READER_MEDIA_TIMEOUT_SECONDS",
+                2 * 60 * 60,
+                minimum=1.0,
+            ),
             job_ttl_seconds=_integer(env, "FUSION_READER_JOB_TTL_SECONDS", 6 * 60 * 60, minimum=1),
             job_max_items=_integer(env, "FUSION_READER_JOB_MAX_ITEMS", 256, minimum=1),
             cache_max_bytes=_integer(env, "FUSION_READER_CACHE_MAX_BYTES", 8 * 1024 * 1024 * 1024, minimum=1),

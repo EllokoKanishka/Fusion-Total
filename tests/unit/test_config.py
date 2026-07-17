@@ -46,6 +46,16 @@ class ConfigurationTests(unittest.TestCase):
         settings = create_settings(environ={"FUSION_READER_QUICK_TEXT_MAX_CHARS": "54321"})
         self.assertEqual(settings.limits.quick_text_max_chars, 54321)
 
+    def test_media_limits_are_explicit_and_configurable(self) -> None:
+        settings = create_settings(
+            environ={
+                "FUSION_READER_MEDIA_MAX_BYTES": "987654321",
+                "FUSION_READER_MEDIA_TIMEOUT_SECONDS": "4321",
+            }
+        )
+        self.assertEqual(settings.limits.media_max_bytes, 987654321)
+        self.assertEqual(settings.limits.media_timeout_seconds, 4321)
+
     def test_reserved_tts_ports_are_rejected(self) -> None:
         for port in (7852, 7854):
             with self.subTest(port=port), self.assertRaises(ConfigurationError):

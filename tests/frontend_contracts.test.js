@@ -9,7 +9,8 @@ const app = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/boot
 const preparation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/preparation.mjs'), 'utf8');
 const audioExport = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/audio_export.mjs'), 'utf8');
 const notes = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/notes.mjs'), 'utf8');
-const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}`;
+const media = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/media.mjs'), 'utf8');
+const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}\n${media}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
@@ -32,6 +33,8 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/notes/create',
     '/api/dialogue/turn',
     '/api/tools/pdf-to-docx',
+    '/api/media/transcribe',
+    '/api/media/translate',
   ]) {
     assert.ok(frontend.includes(endpoint), `missing endpoint ${endpoint}`);
   }
@@ -44,6 +47,7 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="audioExportMode"[^>]+aria-label=/);
   assert.match(html, /id="quickTextInput"[^>]+aria-label="Texto rápido para leer"/);
   assert.match(html, /id="quickTextInfo"[^>]+aria-live="polite"/);
+  assert.match(html, /id="mediaInfo"[^>]+aria-live="polite"/);
 });
 
 test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {
@@ -51,6 +55,7 @@ test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {
   assert.match(app, /activeReadController\.abort\(\)/);
   assert.match(app, /preparation\.dispose\(\)/);
   assert.match(app, /audioExport\.dispose\(\)/);
+  assert.match(app, /mediaController\.dispose\(\)/);
   assert.match(app, /clearDialogueTimers\(dialogue\)/);
   assert.match(app, /getTracks\(\)\.forEach\(track => track\.stop\(\)\)/);
 });

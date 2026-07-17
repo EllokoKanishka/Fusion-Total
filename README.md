@@ -21,6 +21,8 @@ loopback por defecto.
 
 - carga TXT, MD, PDF, DOCX y ODT;
 - lectura inmediata de texto pegado, temporal y sin persistencia automática;
+- transcripción local de audio/video a PDF montable;
+- traducción local al castellano y exportación WAV con la voz elegida;
 - segmentación natural, lectura, repetición y navegación;
 - TTS con cache acotada y prefetch;
 - preparación y exportación WAV cancelables;

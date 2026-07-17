@@ -9,6 +9,7 @@ from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_pos
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
+from fusion_reader_v2.web.routes.media import handle_media_get, handle_media_post
 
 
 @dataclass(frozen=True)
@@ -39,11 +40,12 @@ class Router:
             lambda: handle_notes_get(responder, path, raw_path),
             lambda: handle_dialogue_get(responder, path),
             lambda: handle_tools_get(responder, path, raw_path),
+            lambda: handle_media_get(responder, path),
         )
         return any(handler() for handler in handlers)
 
     def dispatch_raw_post(self, responder, path: str) -> bool:
-        return handle_tools_post(responder, path)
+        return handle_tools_post(responder, path) or handle_media_post(responder, path)
 
     def dispatch_post(self, responder, path: str, payload: dict) -> bool:
         handlers = (
@@ -52,6 +54,7 @@ class Router:
             lambda: handle_preparation_post(responder, path, payload),
             lambda: handle_reading_post(responder, path, payload),
             lambda: handle_notes_post(responder, path, payload),
+            lambda: handle_media_post(responder, path, payload),
         )
         return any(handler() for handler in handlers)
 
@@ -77,6 +80,7 @@ def create_router() -> Router:
         "/api/notes",
         "/api/dialogue/status",
         "/api/import-status",
+        "/api/media/status",
     )
     get_prefixes = (
         "/static/",
@@ -85,6 +89,8 @@ def create_router() -> Router:
         "/api/tools/pdf-to-docx/download/",
         "/api/audio-export/status/",
         "/api/audio-export/download/",
+        "/api/media/status/",
+        "/api/media/download/",
     )
     post_exact = (
         "/api/tools/pdf-to-docx",
@@ -119,11 +125,18 @@ def create_router() -> Router:
         "/api/voice/test",
         "/api/chat",
     )
-    post_prefixes = ("/api/tools/pdf-to-docx/cancel/", "/api/audio-export/cancel/")
+    post_prefixes = (
+        "/api/tools/pdf-to-docx/cancel/",
+        "/api/audio-export/cancel/",
+        "/api/media/cancel/",
+        "/api/media/mount/",
+    )
+    raw_post_exact = ("/api/media/transcribe", "/api/media/translate", "/api/tools/pdf-to-docx")
     routes = [Route("GET", path, path) for path in get_exact]
     routes.extend(Route("GET", path, path, prefix=True) for path in get_prefixes)
     routes.extend(Route("HEAD", path, path) for path in ("/", "/health", "/api/status"))
     routes.extend(Route("HEAD", path, path, prefix=True) for path in ("/static/", "/audio/"))
     routes.extend(Route("POST", path, path) for path in post_exact)
+    routes.extend(Route("POST", path, path) for path in raw_post_exact)
     routes.extend(Route("POST", path, path, prefix=True) for path in post_prefixes)
     return Router(tuple(routes))
