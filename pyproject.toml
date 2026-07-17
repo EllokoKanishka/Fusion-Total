@@ -9,7 +9,7 @@ description = "Local-first neural voice conversational reader"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  "Pillow>=12.1.1,<13",
+  "Pillow>=12.3.0,<13",
   "python-docx>=1.2,<2",
 ]
 
