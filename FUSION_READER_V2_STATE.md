@@ -1,6 +1,6 @@
 # Fusion Reader v2: estado de continuidad
 
-Fecha: 2026-07-12
+Fecha: 2026-07-17
 Versión del paquete: `2.0.0`
 
 ## Norte
@@ -23,11 +23,12 @@ cargar, navegar o leer.
 - lifecycle: `fusion_reader_v2/services/lifecycle.py`;
 - persistencia: `fusion_reader_v2/services/persistence.py` y
   `session_persistence.py`;
+- preparación: `fusion_reader_v2/services/preparation.py` conserva ownership de todos sus workers hasta que terminan;
 - exportación: `fusion_reader_v2/services/audio_export.py`;
 - notas: `fusion_reader_v2/services/notes.py`;
 - jobs acotados: `fusion_reader_v2/domain/jobs.py`;
 - HTTP: `fusion_reader_v2/web/server.py`;
-- assets: `fusion_reader_v2/web/static/`;
+- assets: `fusion_reader_v2/web/static/`, incluidos los módulos ES dentro de la wheel;
 - operación: `fusionctl`.
 
 `scripts/fusion_reader_v2_server.py` conserva el arranque histórico sin construir
@@ -37,13 +38,13 @@ y laboratorio, no como dependencia del producto v2.
 ## Contratos operativos
 
 - API/UI local: `127.0.0.1:8010`;
+- HTTP es exclusivamente loopback: `localhost`, `127.0.0.1` y `::1`; cualquier bind remoto se rechaza;
 - TTS GPU: `127.0.0.1:7853`, sólo con owner `fusion_reader_v2` válido;
 - TTS CPU: `127.0.0.1:7851`;
 - `7852` no se usa; `7854` está reservado a Doctora/Antigravity;
 - STT: `auto` prefiere server `8021` y cae a CLI;
 - investigación: activación explícita, SearXNG primero, OpenClaw
   `fusion-research` después, nunca `main`;
-- HTTP remoto requiere opt-in y token;
 - cache, uploads, cuerpos y registros de jobs tienen límites explícitos;
 - shutdown espera threads/futures propios y se puede reintentar.
 
@@ -55,10 +56,12 @@ preservan con sufijo `.corrupt.<timestamp>` y el lector degrada a defaults.
 
 ## Validación vigente
 
-La consolidación se valida desde un venv Python 3.12 limpio con unittest, branch
+La consolidación se valida con Python 3.11 y 3.12 mediante unittest, branch
 coverage, Ruff, mypy, py_compile, Node, Playwright, stress, auditoría de
-dependencias, scripts de aislamiento y smoke read-only. Los resultados exactos
-están en `docs/CONSOLIDATION_FINAL_2026-07-12.md` y `docs/audits/`.
+dependencias, scripts de aislamiento y smoke read-only. CI también construye e
+inspecciona una wheel no editable para comprobar que la interfaz y sus módulos
+ES estén empaquetados. Los resultados exactos viven en el PR y en los documentos
+de auditoría fechados.
 
 Los defaults locales heredados y sus overrides permanecen auditados en
 `docs/LOCAL_DEFAULTS_V2.md`; el cierre/backlog anterior se conserva en
