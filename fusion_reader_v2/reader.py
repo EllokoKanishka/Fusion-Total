@@ -46,6 +46,28 @@ def split_text(
     return pack_reading_units(units, min_chars=min_chars, target_chars=target_chars, max_chars=max_chars)
 
 
+def chunk_index_for_offset(text: str, chunks: list[str], offset: int) -> int:
+    """Map a source-text cursor offset to the closest generated reading chunk."""
+    if not chunks:
+        return 0
+    source = str(text or "")
+    clamped = max(0, min(int(offset or 0), len(source)))
+    if clamped <= 0:
+        return 0
+
+    # Chunking normalizes line breaks and repeated whitespace. Comparing the
+    # same flattened representation keeps the browser cursor useful without
+    # mutating the original ephemeral text stored in the virtual document.
+    prefix_length = len(re.sub(r"\s+", " ", source[:clamped]).strip())
+    consumed = 0
+    for index, chunk in enumerate(chunks):
+        chunk_length = len(re.sub(r"\s+", " ", str(chunk or "")).strip())
+        if prefix_length < consumed + chunk_length:
+            return index
+        consumed += chunk_length + 1
+    return len(chunks) - 1
+
+
 def normalize_chunk_limits(
     max_chars: int | None = None,
     min_chars: int | None = None,

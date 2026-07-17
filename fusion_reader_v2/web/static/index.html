@@ -9,8 +9,23 @@
 <body>
   <div class="app">
     <aside class="left-sidebar">
-      <h1>Cargar Texto</h1>
-      <p class="sub">Arrastrá un archivo o buscalo en la PC.</p>
+      <h1>Lecturas</h1>
+      <p class="sub">Pegá un fragmento para leerlo ya o cargá un documento.</p>
+      <details class="quick-text-panel" open>
+        <summary>Texto rápido</summary>
+        <p class="upload-info quick-text-hint">Temporal: no se guarda en la biblioteca ni vuelve después de reiniciar.</p>
+        <textarea id="quickTextInput" class="quick-text-input" placeholder="Pegá acá el texto que querés escuchar..." aria-label="Texto rápido para leer"></textarea>
+        <div class="quick-text-actions">
+          <button id="quickReadStartBtn" class="primary compact-btn" type="button">Leer desde inicio</button>
+          <button id="quickReadCursorBtn" class="compact-btn" type="button">Leer desde cursor</button>
+          <button id="quickClearBtn" class="compact-btn" type="button">Limpiar</button>
+        </div>
+        <p id="quickTextInfo" class="upload-info" aria-live="polite">0 caracteres. Nada se guardará automáticamente.</p>
+      </details>
+      <div class="document-upload-heading">
+        <strong>Cargar documento</strong>
+        <span>Arrastrá un archivo o buscalo en la PC.</span>
+      </div>
       <div id="dropzone" class="upload-zone" tabindex="0" role="button" aria-label="Cargar archivo de texto">
         <div class="upload-icon">+</div>
         <strong>Soltá tu documento acá</strong>

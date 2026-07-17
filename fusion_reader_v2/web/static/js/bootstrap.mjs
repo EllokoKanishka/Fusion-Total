@@ -204,6 +204,65 @@ function setImportProgress(percent) {
   els.importProgress.value = value;
 }
 
+function updateQuickTextInfo(message = '') {
+  const characters = String(els.quickTextInput && els.quickTextInput.value || '').length;
+  els.quickTextInfo.textContent = message || `${characters.toLocaleString('es-AR')} caracteres. Nada se guardará automáticamente.`;
+}
+
+function quickTextIsActive() {
+  const main = status && status.main_document && typeof status.main_document === 'object' ? status.main_document : {};
+  return String(main.source_type || status && status.document && status.document.source_type || '') === 'quick_text';
+}
+
+async function loadQuickText(fromCursor = false) {
+  const text = String(els.quickTextInput.value || '');
+  if (!text.trim()) {
+    updateQuickTextInfo('Pegá algún texto antes de leer.');
+    els.quickTextInput.focus();
+    return;
+  }
+  const startOffset = fromCursor ? Number(els.quickTextInput.selectionStart || 0) : 0;
+  const releaseBusy = beginBusyLease();
+  try {
+    resetAudioLifecycle('Reemplazando la lectura activa por texto temporal.');
+    const data = await api('/api/quick-text', {
+      text,
+      title: 'Texto pegado',
+      start_offset: startOffset,
+    });
+    renderStatus(data);
+    const quick = data.quick_text || {};
+    updateQuickTextInfo(`${Number(quick.characters || text.length).toLocaleString('es-AR')} caracteres · ${data.total || 0} bloques · temporal.`);
+    log(`Texto rápido listo desde el bloque ${quick.start_chunk || data.current || 1}. Generando voz...`);
+    await readCurrent();
+  } catch (err) {
+    const max = err && err.data && err.data.max_characters;
+    updateQuickTextInfo(max ? `El límite es ${Number(max).toLocaleString('es-AR')} caracteres.` : `No pude cargar el texto: ${err.message}`);
+    log(`No pude leer el texto pegado: ${err.message}`);
+  } finally {
+    releaseBusy();
+  }
+}
+
+async function clearQuickText() {
+  els.quickTextInput.value = '';
+  updateQuickTextInfo();
+  resetAudioLifecycle('Texto rápido descartado.');
+  if (!quickTextIsActive()) {
+    return;
+  }
+  const releaseBusy = beginBusyLease();
+  try {
+    const data = await api('/api/document/clear', {});
+    renderStatus(data);
+    log('Texto rápido eliminado; no quedó una copia persistente.');
+  } catch (err) {
+    log(`No pude limpiar el texto rápido: ${err.message}`);
+  } finally {
+    releaseBusy();
+  }
+}
+
 
 
 function voiceLabel(filename) {
@@ -524,8 +583,9 @@ function documentHeaderState(data) {
     };
   }
   if (documentActive && title) {
+    const sourceType = String(item.source_type || data && data.main_document && data.main_document.source_type || '');
     return {
-      title: `Documento — ${title}`,
+      title: sourceType === 'quick_text' ? `Texto rápido — ${title}` : `Documento — ${title}`,
       meta: `Bloque ${current || 0} de ${total || 0}`,
       chunk: data && data.text ? data.text : 'Subí un documento para empezar.'
     };
@@ -1655,6 +1715,10 @@ async function sendDialogueAudio(blob, mimeType) {
 }
 
 els.prevBtn.addEventListener('click', () => navigate('/api/previous'));
+els.quickReadStartBtn.addEventListener('click', () => loadQuickText(false));
+els.quickReadCursorBtn.addEventListener('click', () => loadQuickText(true));
+els.quickClearBtn.addEventListener('click', clearQuickText);
+els.quickTextInput.addEventListener('input', () => updateQuickTextInfo());
 els.nextBtn.addEventListener('click', () => navigate('/api/next'));
 els.repeatBtn.addEventListener('click', readCurrent);
 els.readBtn.addEventListener('click', readCurrent);

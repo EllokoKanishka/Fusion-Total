@@ -165,6 +165,7 @@ class ProviderSettings:
 @dataclass(frozen=True)
 class LimitSettings:
     upload_max_bytes: int = 128 * 1024 * 1024
+    quick_text_max_chars: int = 2_000_000
     pdf_max_bytes: int = 500 * 1024 * 1024
     job_ttl_seconds: int = 6 * 60 * 60
     job_max_items: int = 256
@@ -265,6 +266,7 @@ def create_settings(
         ),
         limits=LimitSettings(
             upload_max_bytes=_integer(env, "FUSION_READER_UPLOAD_MAX_BYTES", 128 * 1024 * 1024, minimum=1),
+            quick_text_max_chars=_integer(env, "FUSION_READER_QUICK_TEXT_MAX_CHARS", 2_000_000, minimum=1),
             pdf_max_bytes=_integer(env, "FUSION_READER_PDF_MAX_BYTES", 500 * 1024 * 1024, minimum=1),
             job_ttl_seconds=_integer(env, "FUSION_READER_JOB_TTL_SECONDS", 6 * 60 * 60, minimum=1),
             job_max_items=_integer(env, "FUSION_READER_JOB_MAX_ITEMS", 256, minimum=1),

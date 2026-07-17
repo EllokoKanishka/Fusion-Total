@@ -29,6 +29,9 @@ Componentes principales:
 Propiedades:
 
 - no depende del LLM;
+- acepta texto pegado como documento virtual `quick_text` dentro del mismo
+  `ReaderSession`; conserva el original sólo en memoria, permite comenzar desde
+  el inicio o desde el cursor y nunca lo restaura tras reiniciar;
 - cachea audio por texto + voz + idioma;
 - usa prefetch alrededor del cursor;
 - puede preparar documento completo en background.

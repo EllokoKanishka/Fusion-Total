@@ -1,4 +1,5 @@
 const ELEMENT_IDS = [
+  'quickTextInput', 'quickReadStartBtn', 'quickReadCursorBtn', 'quickClearBtn', 'quickTextInfo',
   'dropzone', 'chooseFileBtn', 'fileInput', 'uploadInfo', 'importProgress', 'autoReadToggle',
   'pdfToWordTool', 'pdfToWordInput', 'pdfToWordInfo', 'pdfToWordDownload', 'referenceModeToggle',
   'prepareBtn', 'cancelPrepareBtn', 'clearDocBtn', 'prepareInfo', 'prepareProgress', 'audioExportMode',

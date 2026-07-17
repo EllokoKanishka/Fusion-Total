@@ -26,6 +26,34 @@ class ReadingResponder(Protocol):
 
 
 def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -> bool:
+    if path == "/api/quick-text":
+        text = str(payload.get("text") or "")
+        if not text.strip():
+            responder._json(400, {"ok": False, "error": "empty_quick_text"})
+            return True
+        if len(text) > responder.settings.limits.quick_text_max_chars:
+            responder._json(
+                413,
+                {
+                    "ok": False,
+                    "error": "quick_text_too_large",
+                    "max_characters": responder.settings.limits.quick_text_max_chars,
+                },
+            )
+            return True
+        try:
+            start_offset = int(payload.get("start_offset") or 0)
+        except (TypeError, ValueError):
+            responder._json(400, {"ok": False, "error": "invalid_start_offset"})
+            return True
+        result = responder.app.load_quick_text(
+            text,
+            title=str(payload.get("title") or "Texto pegado"),
+            start_offset=start_offset,
+            prefetch=False,
+        )
+        responder._json(200, result)
+        return True
     if path == "/api/load":
         role = str(payload.get("role") or "main")
         if payload.get("book_id"):

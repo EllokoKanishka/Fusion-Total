@@ -20,6 +20,7 @@ loopback por defecto.
 ## Capacidades
 
 - carga TXT, MD, PDF, DOCX y ODT;
+- lectura inmediata de texto pegado, temporal y sin persistencia automática;
 - segmentación natural, lectura, repetición y navegación;
 - TTS con cache acotada y prefetch;
 - preparación y exportación WAV cancelables;

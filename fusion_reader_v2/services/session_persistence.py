@@ -60,12 +60,16 @@ class SessionPersistenceService:
             return
         status = self.session.status()
         preferences = self.get_preferences()
+        current_source_path, current_source_type = self.get_main_source()
+        selected_source_path = str(source_path or current_source_path or "")
+        selected_source_type = str(source_type or current_source_type or "")
+        transient_document = selected_source_type == "quick_text"
         payload = {
-            "doc_id": str(status.get("doc_id") or ""),
-            "title": str(status.get("title") or ""),
-            "cursor": int(status.get("cursor") or 0),
-            "current": int(status.get("current") or 0),
-            "total": int(status.get("total") or 0),
+            "doc_id": "" if transient_document else str(status.get("doc_id") or ""),
+            "title": "" if transient_document else str(status.get("title") or ""),
+            "cursor": 0 if transient_document else int(status.get("cursor") or 0),
+            "current": 0 if transient_document else int(status.get("current") or 0),
+            "total": 0 if transient_document else int(status.get("total") or 0),
             "updated_ts": time.time(),
             "reasoning_mode": preferences.reasoning_mode,
             "laboratory_mode": preferences.laboratory_mode,
@@ -83,20 +87,18 @@ class SessionPersistenceService:
                 for item in self.references.values()
             ],
         }
-        current_source_path, current_source_type = self.get_main_source()
-        selected_source_path = str(source_path or current_source_path or "")
-        selected_source_type = str(source_type or current_source_type or "")
-        if selected_source_path:
-            payload["source_path"] = selected_source_path
-        if selected_source_type:
-            payload["source_type"] = selected_source_type
-        if text is not None:
-            payload["text"] = str(text)
-        else:
-            previous = self.read()
-            for key in ("source_path", "source_type", "text"):
-                if previous.get(key):
-                    payload[key] = str(previous[key])
+        if not transient_document:
+            if selected_source_path:
+                payload["source_path"] = selected_source_path
+            if selected_source_type:
+                payload["source_type"] = selected_source_type
+            if text is not None:
+                payload["text"] = str(text)
+            else:
+                previous = self.read()
+                for key in ("source_path", "source_type", "text"):
+                    if previous.get(key):
+                        payload[key] = str(previous[key])
         self.store.write(payload)
 
     def read(self) -> dict:

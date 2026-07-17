@@ -27,7 +27,7 @@ from .metrics import VoiceMetric, VoiceMetricsStore
 from .notes import ReaderNotesStore
 from .local_web_bridge import default_external_research_bridge
 from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
-from .reader import Document, ReaderSession
+from .reader import Document, ReaderSession, chunk_index_for_offset
 from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider
 from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
@@ -787,6 +787,44 @@ class FusionReaderV2:
             self.prefetch_current()
         return self.status()
 
+    def load_quick_text(
+        self,
+        text: str,
+        title: str = "Texto pegado",
+        start_offset: int = 0,
+        prefetch: bool = False,
+    ) -> dict:
+        original = str(text or "")
+        if not original.strip():
+            return {"ok": False, "error": "empty_quick_text"}
+        self._begin_document_lifecycle()
+        self._laboratory_focus = {}
+        digest = hashlib.sha256(f"{time.time_ns()}:{original}".encode("utf-8")).hexdigest()[:16]
+        document = Document.from_text(
+            f"quick-{digest}", str(title or "Texto pegado").strip() or "Texto pegado", original
+        )
+        status = self.session.load(document)
+        selected_chunk = chunk_index_for_offset(original, document.chunks, start_offset)
+        if document.chunks:
+            self.session.cursor = selected_chunk
+            self.session.updated_ts = time.time()
+        self._main_source_path = ""
+        self._main_source_type = "quick_text"
+        self._reference_documents.pop(str(status.get("doc_id") or ""), None)
+        # Persist preferences and references while deliberately writing no
+        # recoverable copy of this transient document.
+        self._persist_session_state(source_type="quick_text")
+        if prefetch:
+            self.prefetch_current()
+        out = self.status()
+        out["quick_text"] = {
+            "transient": True,
+            "characters": len(original),
+            "start_offset": max(0, min(int(start_offset or 0), len(original))),
+            "start_chunk": selected_chunk + 1 if document.chunks else 0,
+        }
+        return out
+
     def load_file(self, path: str | Path, prefetch: bool = True) -> dict:
         p = Path(path)
         text = p.read_text(encoding="utf-8")
@@ -1065,6 +1103,8 @@ class FusionReaderV2:
             "title": document_title,
             "current": document_current,
             "total": document_total,
+            "source_type": self._main_source_type if document_loaded else "",
+            "transient": bool(document_loaded and self._main_source_type == "quick_text"),
         }
         out["anchor"] = {
             "mode": "free" if anchor_mode == "free" else "document",

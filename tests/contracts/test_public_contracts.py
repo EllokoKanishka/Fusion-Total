@@ -12,6 +12,7 @@ from tests.helpers import managed_test_app
 PUBLIC_METHOD_PARAMETERS = {
     "status": (),
     "load_text": ("doc_id", "title", "text", "prefetch", "source_path", "source_type"),
+    "load_quick_text": ("text", "title", "start_offset", "prefetch"),
     "load_file": ("path", "prefetch"),
     "clear_document": (),
     "add_reference_text": ("doc_id", "title", "text", "source_path", "source_type"),

@@ -26,6 +26,7 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 `FusionReaderV2` remains the application facade. Its public groups are:
 
 - document load, clear, reference, and promotion;
+- transient quick-text load without automatic session or library persistence;
 - status, current read, repeat through `read_current`, and navigation;
 - preparation start/status/cancel;
 - audio export start/status/cancel/download;
@@ -71,6 +72,11 @@ The v2 routes listed in `docs/ARCHITECTURE.md` remain supported. Health is
 split into liveness and readiness without removing `/health`, `/api/status`, or
 `/api/build`. Static assets may move out of Python, but `/` continues serving
 the same reader UI.
+
+`POST /api/quick-text` accepts `text`, optional `title`, and optional
+`start_offset`. It loads a transient main document through the normal reader
+pipeline and exposes `document.transient=true`; the source text is deliberately
+excluded from the recoverable session snapshot.
 
 ## System Boundaries
 
