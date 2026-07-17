@@ -41,6 +41,14 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.goto(baseURL);
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
 
+  await page.locator('#quickTextInput').fill('Fragmento temporal para leer sin crear un archivo.');
+  await page.locator('#quickReadStartBtn').click();
+  await expect(page.locator('#docTitle')).toContainText('Texto rápido — Texto pegado');
+  await expect(page.locator('#quickTextInfo')).toContainText('temporal');
+  await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(1);
+  await page.locator('#quickClearBtn').click();
+  await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
+
   await page.locator('#fileInput').setInputFiles({
     name: 'e2e.txt',
     mimeType: 'text/plain',

@@ -84,6 +84,57 @@ h2 {
   margin: 5px 0 12px;
   overflow-wrap: anywhere;
 }
+.quick-text-panel {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b0e0d;
+  padding: 9px 10px 10px;
+}
+.quick-text-panel summary {
+  cursor: pointer;
+  color: var(--accent-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+.quick-text-hint {
+  margin: 7px 0;
+}
+.quick-text-input {
+  width: 100%;
+  min-height: 150px;
+  max-height: 38vh;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #070909;
+  color: var(--text);
+  line-height: 1.45;
+  padding: 9px 10px;
+}
+.quick-text-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.quick-text-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+.document-upload-heading {
+  display: grid;
+  gap: 3px;
+  margin: 14px 0 8px;
+}
+.document-upload-heading strong {
+  color: var(--accent-2);
+  font-size: 13px;
+}
+.document-upload-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
 .upload-zone {
   width: 100%;
   border: 1px solid var(--line);

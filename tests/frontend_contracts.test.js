@@ -23,6 +23,7 @@ test('frontend owns abortable reads and one export poller', () => {
 test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions', () => {
   for (const endpoint of [
     '/api/read',
+    '/api/quick-text',
     '/api/next',
     '/api/document/clear',
     '/api/prepare/start',
@@ -41,6 +42,8 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="chatLog"[^>]+aria-live="polite"/);
   assert.match(html, /id="voiceSelect"[^>]+aria-label="Voz"/);
   assert.match(html, /id="audioExportMode"[^>]+aria-label=/);
+  assert.match(html, /id="quickTextInput"[^>]+aria-label="Texto rápido para leer"/);
+  assert.match(html, /id="quickTextInfo"[^>]+aria-live="polite"/);
 });
 
 test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {

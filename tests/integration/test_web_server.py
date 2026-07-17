@@ -231,6 +231,39 @@ class WebServerIntegrationTests(unittest.TestCase):
                     self.assertEqual(payload["error"], error)
                     self.assertTrue(payload["request_id"])
 
+    def test_quick_text_endpoint_is_transient_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            text = "Primero " + ("alpha " * 420) + "\n\nSegundo " + ("beta " * 420)
+
+            status, loaded = self._request(
+                base,
+                "/api/quick-text",
+                {"text": text, "start_offset": text.index("Segundo")},
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(loaded["document"]["transient"])
+            self.assertEqual(loaded["document"]["source_type"], "quick_text")
+            self.assertEqual(loaded["quick_text"]["start_chunk"], 2)
+
+            state = json.loads((root / "app" / "session_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["doc_id"], "")
+            self.assertNotIn("text", state)
+
+            oversized = "x" * (server.context.settings.limits.quick_text_max_chars + 1)
+            request = urllib.request.Request(
+                base + "/api/quick-text",
+                data=json.dumps({"text": oversized}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=5.0)
+            self.assertEqual(raised.exception.code, 413)
+            self.assertEqual(json.loads(raised.exception.read())["error"], "quick_text_too_large")
+
     def test_daily_api_route_matrix_and_downloads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp), synthetic_tts=True)

@@ -42,6 +42,10 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(settings.paths.cache, (runtime / "audio_cache").resolve())
             self.assertFalse(runtime.exists())
 
+    def test_quick_text_limit_is_explicit_and_configurable(self) -> None:
+        settings = create_settings(environ={"FUSION_READER_QUICK_TEXT_MAX_CHARS": "54321"})
+        self.assertEqual(settings.limits.quick_text_max_chars, 54321)
+
     def test_reserved_tts_ports_are_rejected(self) -> None:
         for port in (7852, 7854):
             with self.subTest(port=port), self.assertRaises(ConfigurationError):

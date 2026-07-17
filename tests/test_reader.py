@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from concurrent.futures import Future
 from fusion_reader_v2 import split_text
-from fusion_reader_v2.reader import Document
+from fusion_reader_v2.reader import Document, chunk_index_for_offset
 from tests.helpers import (
     test_app,
     NullTTSProvider,
@@ -15,6 +15,44 @@ from tests.helpers import (
 
 
 class ReaderTests(unittest.TestCase):
+    def test_cursor_offset_maps_to_generated_reading_chunk(self):
+        first = "Primero " + ("alpha " * 420)
+        second = "Segundo " + ("beta " * 420)
+        third = "Tercero " + ("gamma " * 420)
+        text = "\n\n".join((first, second, third))
+        document = Document.from_text("quick", "Texto pegado", text)
+
+        index = chunk_index_for_offset(text, document.chunks, text.index("Segundo"))
+
+        self.assertEqual(index, 1)
+        self.assertIn("Segundo", document.chunks[index])
+
+    def test_quick_text_uses_reader_session_and_cursor_without_persisting(self):
+        root = Path(tempfile.mkdtemp())
+        first = "Primero " + ("alpha " * 420)
+        second = "Segundo " + ("beta " * 420)
+        text = f"{first}\n\n{second}"
+        app = test_app(root=root)
+
+        loaded = app.load_quick_text(text, start_offset=text.index("Segundo"))
+
+        self.assertTrue(loaded["ok"])
+        self.assertTrue(loaded["document"]["transient"])
+        self.assertEqual(loaded["document"]["source_type"], "quick_text")
+        self.assertEqual(loaded["main_document"]["source_type"], "quick_text")
+        self.assertEqual(loaded["current"], 2)
+        self.assertIn("Segundo", loaded["text"])
+        self.assertEqual(loaded["quick_text"]["characters"], len(text))
+
+        # Navigation and preference effects persist normally, but never smuggle
+        # the transient source text into the recoverable session snapshot.
+        app.previous()
+        state = (root / "session_state.json").read_text(encoding="utf-8")
+        self.assertNotIn("Primero", state)
+        self.assertNotIn("Segundo", state)
+        reopened = test_app(root=root)
+        self.assertEqual(reopened.status()["doc_id"], "")
+
     def test_split_text_packs_short_paragraphs_into_page_sized_chunks(self):
         paragraph = (
             "La realidad parece una costumbre compartida, pero cada lectura la fuerza a declararse de nuevo "

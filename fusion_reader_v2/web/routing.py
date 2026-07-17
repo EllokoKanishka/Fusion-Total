@@ -91,6 +91,7 @@ def create_router() -> Router:
         "/api/import-file/start",
         "/api/import-file",
         "/api/load",
+        "/api/quick-text",
         "/api/import",
         "/api/reference/promote",
         "/api/reference/remove",

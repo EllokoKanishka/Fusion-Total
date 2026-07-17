@@ -47,6 +47,8 @@ y laboratorio, no como dependencia del producto v2.
   `fusion-research` después, nunca `main`;
 - cache, uploads, cuerpos y registros de jobs tienen límites explícitos;
 - shutdown espera threads/futures propios y se puede reintentar.
+- `Texto rápido` carga texto pegado en el `ReaderSession` normal, permite iniciar
+  desde el cursor y no persiste el contenido ni lo agrega a la biblioteca.
 
 ## Persistencia
 
