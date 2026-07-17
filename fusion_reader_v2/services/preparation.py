@@ -42,7 +42,7 @@ def new_prepare_status() -> dict:
 
 
 class PreparationService:
-    """Owns whole-document audio preparation state and worker lifecycle."""
+    """Owns whole-document audio preparation state and every worker until exit."""
 
     def __init__(
         self,
@@ -71,6 +71,7 @@ class PreparationService:
         self.lock = threading.Lock()
         self.cancel_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self._workers: dict[threading.Thread, threading.Event] = {}
         self.generation = 0
         self.state = new_prepare_status()
 
@@ -83,6 +84,7 @@ class PreparationService:
             if not self.background_is_open_locked():
                 return {"ok": False, "error": "service_shutting_down"}
             with self.lock:
+                self._prune_workers_locked()
                 if not self.background_is_open_locked():
                     return {"ok": False, "error": "service_shutting_down"}
                 if self.thread and self.thread.is_alive():
@@ -104,13 +106,15 @@ class PreparationService:
                     "started_ts": now,
                     "updated_ts": now,
                 }
-                self.thread = threading.Thread(
-                    target=self._worker,
+                thread = threading.Thread(
+                    target=self._run_worker,
                     args=(document.doc_id, start, generation, document_generation, cancel_event),
-                    name="fusion-reader-v2-prepare",
-                    daemon=True,
+                    name=f"fusion-reader-v2-prepare-{generation}",
+                    daemon=False,
                 )
-                self.thread.start()
+                self.thread = thread
+                self._workers[thread] = cancel_event
+                thread.start()
                 return dict(self.state)
 
     def cancel(self, message: str = "Cancelando preparación...") -> dict:
@@ -126,17 +130,79 @@ class PreparationService:
         with self.lock:
             return dict(self.state)
 
-    def reset(self) -> None:
-        self.cancel_event.set()
+    def active_threads(self) -> tuple[threading.Thread, ...]:
         with self.lock:
+            return self._active_threads_locked()
+
+    def reset(self) -> None:
+        with self.lock:
+            self._cancel_all_workers_locked()
             self.generation += 1
             self.state = new_prepare_status()
             self.cancel_event = threading.Event()
             self.thread = None
+            self._prune_workers_locked()
 
     def begin_shutdown(self) -> threading.Thread | None:
-        self.cancel("Cancelando preparación...")
-        return self.thread
+        with self.lock:
+            self._cancel_all_workers_locked()
+            if self.state.get("status") == "running":
+                self.state["status"] = "canceling"
+                self.state["message"] = "Cancelando preparación..."
+                self.state["updated_ts"] = time.time()
+            workers = self._active_threads_locked()
+        if not workers:
+            return None
+        if len(workers) == 1:
+            return workers[0]
+        waiter = threading.Thread(
+            target=self._join_workers,
+            args=(workers,),
+            name="fusion-reader-v2-prepare-shutdown",
+            daemon=False,
+        )
+        waiter.start()
+        return waiter
+
+    def _cancel_all_workers_locked(self) -> None:
+        self.cancel_event.set()
+        for cancel_event in self._workers.values():
+            cancel_event.set()
+
+    def _prune_workers_locked(self) -> None:
+        for worker in tuple(self._workers):
+            if not worker.is_alive():
+                self._workers.pop(worker, None)
+        if self.thread is not None and not self.thread.is_alive():
+            self.thread = None
+
+    def _active_threads_locked(self) -> tuple[threading.Thread, ...]:
+        self._prune_workers_locked()
+        return tuple(worker for worker in self._workers if worker.is_alive())
+
+    @staticmethod
+    def _join_workers(workers: tuple[threading.Thread, ...]) -> None:
+        for worker in workers:
+            worker.join()
+
+    def _run_worker(
+        self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event
+    ) -> None:
+        worker = threading.current_thread()
+        try:
+            self._worker(doc_id, start, generation, document_generation, cancel_event)
+        except Exception as exc:
+            self._finish(
+                "error",
+                self.human_error(type(exc).__name__),
+                failed=1,
+                generation=generation,
+            )
+        finally:
+            with self.lock:
+                self._workers.pop(worker, None)
+                if self.thread is worker:
+                    self.thread = None
 
     def _worker(
         self, doc_id: str, start: str, generation: int, document_generation: int, cancel_event: threading.Event
@@ -187,9 +253,31 @@ class PreparationService:
                 )
                 return
             text = current.chunks[index]
-            if self.cache.get(text, voice, language):
+            artifact = self.cache.get(text, voice, language)
+            was_cached = artifact is not None
+            if artifact is None:
+                artifact = self.synthesize(text, voice, language)
+            if cancel_event.is_set():
+                self._finish(
+                    "canceled", "Preparación cancelada.", processed, total, cached, generated, failed, generation
+                )
+                return
+            current = self.session.document
+            if not current or current.doc_id != doc_id or document_generation != self.document_generation():
+                self._finish(
+                    "canceled",
+                    "Preparación detenida porque cambió el documento.",
+                    processed,
+                    total,
+                    cached,
+                    generated,
+                    failed,
+                    generation,
+                )
+                return
+            if was_cached:
                 cached += 1
-            elif self.synthesize(text, voice, language).ok:
+            elif artifact.ok:
                 generated += 1
             else:
                 failed += 1
