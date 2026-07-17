@@ -47,6 +47,9 @@ Dependencias confirmadas por imports o por ejecución directa desde el repo:
 - `python-docx`
   - `fusion_reader_v2/md_to_docx.py`
   - usada para escribir DOCX editables
+- `reportlab`
+  - `fusion_reader_v2/media.py`
+  - usada para generar PDFs de transcripciones y traducciones
 
 Estas quedan cubiertas por `requirements/fusion-reader-v2.txt`.
 
@@ -104,6 +107,9 @@ usa principalmente biblioteca estándar:
 - `ffmpeg`
   - `scripts/fusion_reader_v2_stt_server.py`
   - fallback de concatenación en `fusion_reader_v2/audio_export.py`
+- `ffprobe`
+  - `fusion_reader_v2/media.py`
+  - valida contenedores, duración y presencia de una pista de audio
 - `pdftotext`
   - `fusion_reader_v2/pdf_to_docx.py`
   - ruta rápida de PDF textual

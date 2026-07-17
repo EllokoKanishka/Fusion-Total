@@ -26,6 +26,7 @@ COMPUTE_TYPE = os.environ.get("FUSION_READER_STT_COMPUTE_TYPE", "float16")
 LANGUAGE = os.environ.get("FUSION_READER_STT_LANGUAGE", "es")
 BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_BEAM_SIZE", "1"))
 RECOVERY_BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_RECOVERY_BEAM_SIZE", str(max(2, BEAM_SIZE))))
+CONVERT_TIMEOUT_SECONDS = float(os.environ.get("FUSION_READER_STT_CONVERT_TIMEOUT_SECONDS", "1800"))
 
 
 def load_model():
@@ -58,6 +59,8 @@ def suffix_for_mime(mime: str) -> str:
         return ".wav"
     if "mpeg" in lowered or "mp3" in lowered:
         return ".mp3"
+    if "flac" in lowered:
+        return ".flac"
     return ".audio"
 
 
@@ -79,20 +82,28 @@ def convert_to_wav(source: Path, target: Path) -> tuple[bool, str, int]:
         "wav",
         str(target),
     ]
-    proc = run_owned(cmd, check=False, text=True, timeout=30)
+    proc = run_owned(cmd, check=False, text=True, timeout=CONVERT_TIMEOUT_SECONDS)
     elapsed = int((time.perf_counter() - started) * 1000)
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "ffmpeg_failed").strip(), elapsed
     return True, "", elapsed
 
 
-def _join_segments(segments) -> str:
-    parts = []
+def _segment_payload(segments) -> tuple[str, list[dict]]:
+    parts: list[str] = []
+    payload: list[dict] = []
     for segment in segments:
         text = str(getattr(segment, "text", "") or "").strip()
         if text:
             parts.append(text)
-    return " ".join(parts).strip()
+            payload.append(
+                {
+                    "start": round(float(getattr(segment, "start", 0.0) or 0.0), 3),
+                    "end": round(float(getattr(segment, "end", 0.0) or 0.0), 3),
+                    "text": text,
+                }
+            )
+    return " ".join(parts).strip(), payload
 
 
 def transcribe_wav(path: Path, language: str) -> tuple[str, int, dict]:
@@ -109,14 +120,16 @@ def transcribe_wav(path: Path, language: str) -> tuple[str, int, dict]:
             continue
         seen.add(key)
         attempt_started = time.perf_counter()
-        segments, _info = MODEL.transcribe(
+        requested_language = str(language or "").strip().lower()
+        selected_language = None if requested_language in {"", "auto", "detect"} else requested_language
+        segments, info = MODEL.transcribe(
             str(path),
-            language=language or LANGUAGE,
+            language=selected_language,
             beam_size=int(config["beam_size"]),
             vad_filter=bool(config["vad_filter"]),
             condition_on_previous_text=False,
         )
-        text = _join_segments(segments)
+        text, segment_items = _segment_payload(segments)
         attempts.append(
             {
                 "label": str(config["label"]),
@@ -128,7 +141,16 @@ def transcribe_wav(path: Path, language: str) -> tuple[str, int, dict]:
         )
         if text:
             total_ms = int((time.perf_counter() - started) * 1000)
-            return text, total_ms, {"attempts": attempts, "selected": attempts[-1]}
+            return (
+                text,
+                total_ms,
+                {
+                    "attempts": attempts,
+                    "selected": attempts[-1],
+                    "detected_language": str(getattr(info, "language", "") or selected_language or ""),
+                    "segments": segment_items,
+                },
+            )
     total_ms = int((time.perf_counter() - started) * 1000)
     return "", total_ms, {"attempts": attempts, "selected": {}}
 
@@ -214,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
                 "convert_ms": convert_ms,
                 "decode_ms": decode_ms,
                 "decode_attempts": attempts,
+                "detected_language": str(decode_meta.get("detected_language") or language or ""),
+                "segments": list(decode_meta.get("segments") or []),
                 "duration_ms": duration_ms,
                 "detail": "" if text else "empty_transcript",
             },

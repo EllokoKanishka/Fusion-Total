@@ -1146,6 +1146,14 @@ class FusionReaderV2:
     def _synthesize_cached(self, text: str) -> AudioArtifact:
         return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language)
 
+    def synthesize_for_export(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
+        """Generate cache-aware audio for an explicit, non-interactive export workflow."""
+        return self._synthesize_cached_with_settings(
+            text,
+            str(voice or self.voice.voice),
+            str(language or self.voice.language),
+        )
+
     def _synthesize_cached_with_settings(
         self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None
     ) -> AudioArtifact:

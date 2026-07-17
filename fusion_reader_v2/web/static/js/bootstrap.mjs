@@ -6,6 +6,7 @@ import { collectElements } from './ui.mjs';
 import { createPreparationController } from './preparation.mjs';
 import { createAudioExportController } from './audio_export.mjs';
 import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
+import { createMediaController } from './media.mjs';
 
 const els = collectElements();
 let status = null;
@@ -39,6 +40,11 @@ const notesController = createNotesController({
 });
 const refreshNotes = notesController.refresh;
 const saveCurrentNote = notesController.save;
+const mediaController = createMediaController({
+  elements: els,
+  log,
+  refreshMainStatus: () => refresh()
+});
 
 function beginBusyLease() {
   return busyControls.beginBusyLease();
@@ -1787,6 +1793,20 @@ els.pdfToWordInput.addEventListener('change', () => {
   convertPdfToWord(els.pdfToWordInput.files && els.pdfToWordInput.files[0]);
   els.pdfToWordInput.value = '';
 });
+els.mediaTranscribeBtn.addEventListener('click', () => els.mediaTranscribeInput.click());
+els.mediaTranslateBtn.addEventListener('click', () => els.mediaTranslateInput.click());
+els.mediaTranscribeInput.addEventListener('change', () => {
+  mediaController.start('transcribe', els.mediaTranscribeInput.files && els.mediaTranscribeInput.files[0])
+    .catch(error => log(`Falló la transcripción: ${error.message}`));
+  els.mediaTranscribeInput.value = '';
+});
+els.mediaTranslateInput.addEventListener('change', () => {
+  mediaController.start('translate', els.mediaTranslateInput.files && els.mediaTranslateInput.files[0])
+    .catch(error => log(`Falló la traducción: ${error.message}`));
+  els.mediaTranslateInput.value = '';
+});
+els.mediaCancelBtn.addEventListener('click', () => mediaController.cancel().catch(error => log(error.message)));
+els.mediaMountBtn.addEventListener('click', () => mediaController.mount().catch(error => log(error.message)));
 ['dragenter', 'dragover'].forEach(name => {
   els.dropzone.addEventListener(name, event => {
     event.preventDefault();
@@ -1826,10 +1846,13 @@ window.addEventListener('beforeunload', () => {
   if (activeReadController) activeReadController.abort();
   preparation.dispose();
   audioExport.dispose();
+  mediaController.dispose();
   clearDialogueTimers(dialogue);
   if (dialogue.stream) dialogue.stream.getTracks().forEach(track => track.stop());
   try { els.player.pause(); } catch (_) {}
   try { els.dialoguePlayer.pause(); } catch (_) {}
 });
 
-refresh().then(() => refreshVoices()).catch(err => log(`Arranque incompleto: ${err.message}`));
+refresh()
+  .then(() => Promise.all([refreshVoices(), mediaController.poll()]))
+  .catch(err => log(`Arranque incompleto: ${err.message}`));

@@ -172,6 +172,37 @@
           </div>
         </div>
       </div>
+      <section class="media-tools" aria-labelledby="mediaToolsTitle">
+        <div>
+          <h1 id="mediaToolsTitle">Audio y video</h1>
+          <p class="sub">Convertí conferencias en documentos o en audio castellano.</p>
+        </div>
+        <details class="media-tool-card" open>
+          <summary>Transcribir a documento</summary>
+          <p class="upload-info">Extrae la voz, genera un PDF con marcas de tiempo y permite montarlo en el lector.</p>
+          <button id="mediaTranscribeBtn" class="primary compact-btn wide" type="button">Elegir audio o video</button>
+          <input id="mediaTranscribeInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
+        </details>
+        <details class="media-tool-card" open>
+          <summary>Traducir audio al castellano</summary>
+          <p class="upload-info">Detecta el idioma, traduce el contenido y genera un WAV con la voz seleccionada.</p>
+          <button id="mediaTranslateBtn" class="primary compact-btn wide" type="button">Elegir audio o video</button>
+          <input id="mediaTranslateInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
+        </details>
+        <div class="media-job-card">
+          <p id="mediaInfo" class="upload-info" aria-live="polite">Sin procesamiento multimedia activo.</p>
+          <progress id="mediaProgress" class="progress-native" max="100" value="0" aria-label="Progreso multimedia"></progress>
+          <div class="media-job-actions">
+            <button id="mediaCancelBtn" class="compact-btn" type="button" disabled>Cancelar</button>
+            <button id="mediaMountBtn" class="compact-btn is-hidden" type="button" disabled>Montar como documento</button>
+          </div>
+          <div class="media-downloads">
+            <a id="mediaPdfDownload" href="#" class="upload-info download-link is-hidden" download>Descargar PDF</a>
+            <a id="mediaTranslatedPdfDownload" href="#" class="upload-info download-link is-hidden" download>Descargar PDF en castellano</a>
+            <a id="mediaAudioDownload" href="#" class="upload-info download-link is-hidden" download>Descargar audio castellano</a>
+          </div>
+        </div>
+      </section>
     </aside>
   </div>
 

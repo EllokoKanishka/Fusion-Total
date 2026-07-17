@@ -10,6 +10,7 @@ from fusion_reader_v2 import FusionReaderV2
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.pdf_to_docx import JobStatus
+from fusion_reader_v2.services.media import MediaProcessingService
 from fusion_reader_v2.version import __version__
 
 
@@ -21,6 +22,7 @@ class WebContext:
     import_jobs: JobRegistry[dict] = field(init=False)
     pdf_jobs: JobRegistry[JobStatus] = field(init=False)
     pdf_downloads: JobRegistry[dict] = field(init=False)
+    media: MediaProcessingService = field(init=False)
     _threads: set[threading.Thread] = field(default_factory=set, init=False)
     _threads_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _closed: bool = field(default=False, init=False)
@@ -46,6 +48,19 @@ class WebContext:
             is_terminal=lambda _item: True,
             updated_at=lambda item: float(item.get("created_ts") or 0),
         )
+        self.media = MediaProcessingService(
+            reader=self.app,
+            stt=self.app.stt,
+            chat=self.app.conversation.provider,
+            synthesize=self.app.synthesize_for_export,
+            runtime_root=self.media_root,
+            converted_root=self.converted_root,
+            output_root=self.settings.paths.downloads,
+            spawn=self.start_thread,
+            timeout_seconds=limits.media_timeout_seconds,
+            max_items=limits.job_max_items,
+            ttl_seconds=limits.job_ttl_seconds,
+        )
 
     @property
     def library_root(self) -> Path:
@@ -62,6 +77,10 @@ class WebContext:
     @property
     def pdf_root(self) -> Path:
         return self.settings.paths.runtime / "pdf_to_word"
+
+    @property
+    def media_root(self) -> Path:
+        return self.settings.paths.runtime / "media_jobs"
 
     def start_thread(self, *, target, args: tuple, name: str) -> threading.Thread:
         def run_owned() -> None:
@@ -91,6 +110,7 @@ class WebContext:
         for import_job in self.import_jobs.snapshot().values():
             if str(import_job.get("status") or "") not in {"done", "cancelled", "error"}:
                 import_job["cancelled"] = True
+        self.media.request_shutdown()
         deadline = time.monotonic() + max(0.0, timeout)
         for thread in threads:
             remaining = deadline - time.monotonic()
@@ -131,6 +151,7 @@ class WebContext:
                     "pdf_to_docx": len(self.pdf_jobs),
                     "pdf_downloads": len(self.pdf_downloads),
                     "audio_export": status.get("audio_export", {}),
+                    "media": self.media.overview(),
                     "prepare": status.get("prepare", {}),
                 },
                 "providers": services,

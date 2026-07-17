@@ -9,6 +9,7 @@ class PythonRequirementsV2Tests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn("Pillow", text)
         self.assertIn("python-docx", text)
+        self.assertIn("reportlab", text)
         self.assertNotIn("7852", text)
         self.assertNotIn("7853", text)
         self.assertNotIn("7854", text)

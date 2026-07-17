@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+import wave
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -285,6 +287,7 @@ class WebServerIntegrationTests(unittest.TestCase):
                 "/api/references",
                 "/api/notes?current_only=1&chunk_index=0",
                 "/api/dialogue/status",
+                "/api/media/status",
             ):
                 with self.subTest(path=path):
                     self.assertEqual(self._request(base, path)[0], 200)
@@ -457,6 +460,45 @@ class WebServerIntegrationTests(unittest.TestCase):
                     threading.Event().wait(0.01)
             self.assertEqual(status["state"], "done")
 
+    def test_media_multipart_transcription_downloads_and_mounts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), synthetic_tts=True)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            audio = io.BytesIO()
+            with wave.open(audio, "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(16000)
+                output.writeframes(b"\0\0" * 1600)
+            boundary = "fusion-media-boundary"
+            body = (
+                (
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="file"; filename="conference.wav"\r\n'
+                    "Content-Type: audio/wav\r\n\r\n"
+                ).encode()
+                + audio.getvalue()
+                + f"\r\n--{boundary}--\r\n".encode()
+            )
+            request = urllib.request.Request(
+                base + "/api/media/transcribe",
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5.0) as response:
+                created = json.loads(response.read())
+            for _ in range(200):
+                _, status = self._request(base, f"/api/media/status/{created['job_id']}")
+                if status["terminal"]:
+                    break
+                threading.Event().wait(0.02)
+            self.assertEqual(status["state"], "done", status)
+            self.assertEqual(self._request(base, status["output"]["pdf"]["download_url"])[0], 200)
+            _, mounted = self._request(base, f"/api/media/mount/{created['job_id']}", {})
+            self.assertTrue(mounted["mounted"])
+            self.assertEqual(server.context.app.status()["document"]["source_type"], "media_transcript")
+
     def test_http_missing_resource_and_validation_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp), synthetic_tts=True)
@@ -470,6 +512,8 @@ class WebServerIntegrationTests(unittest.TestCase):
                 "/api/tools/pdf-to-docx/download/missing",
                 "/api/audio-export/status/missing",
                 "/api/audio-export/download/missing",
+                "/api/media/status/missing",
+                "/api/media/download/missing/pdf",
                 "/audio/missing.wav",
             ):
                 with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError):

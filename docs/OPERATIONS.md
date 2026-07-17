@@ -37,6 +37,7 @@ curl -s http://127.0.0.1:11434/api/tags
 curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
 curl -s http://127.0.0.1:8010/api/status
 curl -s http://127.0.0.1:8010/api/dialogue/status
+curl -s http://127.0.0.1:8010/api/media/status
 ```
 
 Los endpoints de Fusion ahora exponen un bloque `services` para leer rápido:
@@ -119,6 +120,20 @@ La traza de Dialogar muestra diagnóstico de captura:
 Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando silencio o el micrófono equivocado. Si hay amplitud razonable pero `hallucinated_transcript`, ajustar después umbrales/duración o revisar STT, sin tocar `Leer`.
 
 ## Si STT 8021 está caído
+
+Antes de diagnosticar STT de diálogo, recordar que las conferencias largas
+usan el mismo provider con timeout extendido. El panel `Audio y video` normaliza
+primero el archivo a FLAC mono de 16 kHz y muestra etapas separadas.
+
+Operación de medios largos:
+
+- `Transcribir a documento` produce PDF y habilita montaje;
+- `Traducir audio al castellano` suma PDF castellano y WAV;
+- los originales subidos y FLAC temporales se eliminan al terminar o fallar;
+- PDF/WAV publicados quedan en Descargas;
+- montar copia el texto a `runtime/fusion_reader_v2/imported_texts` para que la
+  sesión pueda recuperarlo;
+- el cierre normal solicita cancelación y espera el worker multimedia.
 
 Contrato: `auto` (default) usa el server sano y cae a Whisper CLI ante una
 indisponibilidad o fallo normal; no repite por CLI un resultado

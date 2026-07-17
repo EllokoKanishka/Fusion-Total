@@ -17,6 +17,13 @@ from .owned_subprocess import run_owned
 
 
 @dataclass(frozen=True)
+class TranscriptSegment:
+    start: float
+    end: float
+    text: str
+
+
+@dataclass(frozen=True)
 class TranscriptResult:
     ok: bool
     text: str = ""
@@ -24,6 +31,8 @@ class TranscriptResult:
     detail: str = ""
     duration_ms: int = 0
     timings: dict | None = None
+    detected_language: str = ""
+    segments: tuple[TranscriptSegment, ...] = ()
 
 
 class STTProvider:
@@ -135,8 +144,6 @@ class WhisperCliSTTProvider(STTProvider):
                 str(source),
                 "--model",
                 self.model,
-                "--language",
-                language or "es",
                 "--task",
                 "transcribe",
                 "--output_format",
@@ -150,6 +157,9 @@ class WhisperCliSTTProvider(STTProvider):
                 "--threads",
                 str(max(1, self.threads)),
             ]
+            requested_language = str(language or "").strip().lower()
+            if requested_language not in {"", "auto", "detect"}:
+                cmd[4:4] = ["--language", requested_language]
             try:
                 proc = run_owned(cmd, check=False, text=True, capture_output=True, timeout=self.timeout_seconds)
             except subprocess.TimeoutExpired:
@@ -278,6 +288,16 @@ class FasterWhisperServerSTTProvider(STTProvider):
             detail=str(data.get("detail") or ""),
             duration_ms=duration_ms,
             timings=timings,
+            detected_language=str(data.get("detected_language") or data.get("language") or ""),
+            segments=tuple(
+                TranscriptSegment(
+                    start=float(item.get("start") or 0.0),
+                    end=float(item.get("end") or 0.0),
+                    text=str(item.get("text") or "").strip(),
+                )
+                for item in (data.get("segments") or [])
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ),
         )
 
 

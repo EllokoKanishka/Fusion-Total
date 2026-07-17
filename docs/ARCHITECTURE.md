@@ -202,6 +202,33 @@ Propiedades:
 - no cambia la reproduccion normal, el chunking, las voces ni los puertos;
 - la seleccion irregular de bloques queda fuera de alcance en esta v1.
 
+## Procesamiento local de audio y video
+
+Componentes:
+
+- `fusion_reader_v2/media.py`: formatos, inspección, normalización, jobs y PDF;
+- `fusion_reader_v2/services/media.py`: STT, traducción, TTS, cancelación y artefactos;
+- `fusion_reader_v2/web/routes/media.py`: carga, estado, montaje y descargas;
+- `fusion_reader_v2/web/static/js/media.mjs`: panel derecho y un único poller.
+
+```text
+audio/video -> ffprobe -> FFmpeg FLAC 16 kHz mono -> Whisper
+  -> transcripción con tiempos -> PDF
+  -> [opcional] Ollama por fragmentos -> castellano -> TTS actual -> WAV
+```
+
+Propiedades:
+
+- acepta formatos comunes decodificables por FFmpeg y diagnostica archivos ilegibles;
+- captura la voz seleccionada al iniciar para evitar mezclas si la UI cambia;
+- ejecuta un solo job multimedia por vez y permite cancelación cooperativa;
+- publica PDF/WAV en Descargas mediante reserva y reemplazo seguro;
+- conserva el texto interno en runtime hasta que el usuario decide montarlo;
+- montar publica un TXT durable en `imported_texts` y lo carga en el
+  `ReaderSession` como `media_transcript` o `media_translation`;
+- no clona la voz del conferencista: usa una voz elegida de Fusion;
+- no atribuye hablantes: hay tiempos Whisper, no diarización.
+
 ## Investigación externa
 
 Componentes:
