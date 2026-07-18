@@ -103,6 +103,18 @@ class MediaHelperTests(unittest.TestCase):
         paragraphs = media.transcript_paragraphs(segments, "unused")
         self.assertEqual(paragraphs, [(2, "Primero. Segundo."), (41, "Final.")])
 
+    def test_transcript_body_omits_document_heading_and_language_metadata(self) -> None:
+        paragraphs = [(0.0, "Primero."), (65.0, "Segundo.")]
+        body = media.transcript_body_text(paragraphs)
+        document = media.transcript_document_text("Clase — Transcripción", "en", paragraphs)
+
+        self.assertEqual(body, "[00:00:00] Primero.\n\n[00:01:05] Segundo.")
+        self.assertNotIn("Clase", body)
+        self.assertNotIn("Idioma detectado:", body)
+        self.assertIn("Clase — Transcripción", document)
+        self.assertIn("Idioma detectado: en", document)
+        self.assertTrue(document.endswith(body))
+
     def test_plain_transcript_split_covers_long_words_and_sentence_packing(self) -> None:
         self.assertEqual(media._split_plain_transcript("   ", max_chars=5), [])
         self.assertEqual(media._split_plain_transcript("alpha beta gamma", max_chars=6), ["alpha", "beta", "gamma"])
