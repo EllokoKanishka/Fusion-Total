@@ -50,6 +50,13 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="mediaInfo"[^>]+aria-live="polite"/);
 });
 
+test('media downloads validate the response before saving a browser file', () => {
+  assert.match(media, /if \(!response\.ok\)/);
+  assert.match(media, /await response\.blob\(\)/);
+  assert.match(media, /anchor\.download = element\.dataset\.downloadFilename/);
+  assert.match(media, /No pude descargar el archivo:/);
+});
+
 test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {
   assert.match(app, /window\.addEventListener\('beforeunload'/);
   assert.match(app, /activeReadController\.abort\(\)/);
