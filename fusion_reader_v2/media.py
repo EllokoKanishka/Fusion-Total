@@ -230,10 +230,14 @@ def transcript_paragraphs(segments: tuple[TranscriptSegment, ...], text: str) ->
     return paragraphs
 
 
+def transcript_body_text(paragraphs: list[tuple[float, str]]) -> str:
+    return "\n\n".join(f"[{format_timestamp(start)}] {text}" for start, text in paragraphs if text).strip()
+
+
 def transcript_document_text(title: str, language: str, paragraphs: list[tuple[float, str]]) -> str:
-    lines = [title.strip() or "Transcripción", f"Idioma detectado: {language or 'desconocido'}", ""]
-    lines.extend(f"[{format_timestamp(start)}] {text}" for start, text in paragraphs if text)
-    return "\n\n".join(lines).strip()
+    heading = [title.strip() or "Transcripción", f"Idioma detectado: {language or 'desconocido'}"]
+    body = transcript_body_text(paragraphs)
+    return "\n\n".join([*heading, body] if body else heading).strip()
 
 
 def clean_text(text: str) -> str:
