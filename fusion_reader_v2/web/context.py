@@ -55,7 +55,7 @@ class WebContext:
             synthesize=self.app.synthesize_for_export,
             runtime_root=self.media_root,
             converted_root=self.converted_root,
-            output_root=self.settings.paths.downloads,
+            output_root=self.media_artifacts_root,
             spawn=self.start_thread,
             timeout_seconds=limits.media_timeout_seconds,
             max_items=limits.job_max_items,
@@ -81,6 +81,10 @@ class WebContext:
     @property
     def media_root(self) -> Path:
         return self.settings.paths.runtime / "media_jobs"
+
+    @property
+    def media_artifacts_root(self) -> Path:
+        return self.settings.paths.runtime / "media_artifacts"
 
     def start_thread(self, *, target, args: tuple, name: str) -> threading.Thread:
         def run_owned() -> None:
