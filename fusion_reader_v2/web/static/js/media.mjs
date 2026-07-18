@@ -5,18 +5,65 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
   };
   let pollingJobId = '';
   let timer = null;
+  const downloadHandlers = new Map();
 
   function setLink(element, item, fallbackLabel) {
     if (!element) return;
     if (item && item.download_url) {
       element.href = item.download_url;
+      element.dataset.downloadUrl = item.download_url;
+      element.dataset.downloadFilename = item.filename || fallbackLabel;
       element.textContent = `Descargar ${item.filename || fallbackLabel}`;
       element.classList.remove('is-hidden');
     } else {
       element.href = '#';
+      delete element.dataset.downloadUrl;
+      delete element.dataset.downloadFilename;
       element.classList.add('is-hidden');
     }
   }
+
+  async function downloadArtifact(element) {
+    const url = element && element.dataset.downloadUrl;
+    if (!url) return;
+    const response = await fetch(url);
+    if (!response.ok) {
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        // The server may return an empty or non-JSON error response.
+      }
+      throw new Error(payload.detail || payload.error || 'media_download_failed');
+    }
+    const blob = await response.blob();
+    const objectUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = element.dataset.downloadFilename || 'fusion-reader-media';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(objectUrl);
+  }
+
+  function bindDownload(element) {
+    if (!element) return;
+    const handler = event => {
+      event.preventDefault();
+      downloadArtifact(element).catch(error => {
+        if (elements.mediaInfo) elements.mediaInfo.textContent = `No pude descargar el archivo: ${error.message}`;
+      });
+    };
+    downloadHandlers.set(element, handler);
+    element.addEventListener('click', handler);
+  }
+
+  [
+    elements.mediaPdfDownload,
+    elements.mediaTranslatedPdfDownload,
+    elements.mediaAudioDownload
+  ].forEach(bindDownload);
 
   function setBusy(busy) {
     [elements.mediaTranscribeBtn, elements.mediaTranslateBtn].forEach(button => {
@@ -114,6 +161,8 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
 
   function dispose() {
     clearPoll();
+    downloadHandlers.forEach((handler, element) => element.removeEventListener('click', handler));
+    downloadHandlers.clear();
   }
 
   return { start, cancel, mount, poll, render, dispose };
