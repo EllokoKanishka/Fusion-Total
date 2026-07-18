@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Protocol
 
@@ -24,7 +27,7 @@ from fusion_reader_v2.media import (
     normalize_media_audio,
     probe_media,
     safe_media_stem,
-    transcript_document_text,
+    transcript_body_text,
     transcript_paragraphs,
     write_transcript_pdf,
 )
@@ -70,6 +73,8 @@ class MediaProcessingService:
         self.runtime_root = runtime_root
         self.converted_root = converted_root
         self.output_root = output_root
+        self.manifest_root = output_root / ".manifests"
+        self.manifest_root.mkdir(parents=True, exist_ok=True)
         self.spawn = spawn
         self.timeout_seconds = timeout_seconds
         self.lock = threading.RLock()
@@ -109,6 +114,7 @@ class MediaProcessingService:
             self.registry.add(job.job_id, job)
             self.active_job_id = job.job_id
             self.latest_job_id = job.job_id
+            self._persist_job(job)
         try:
             self.spawn(
                 target=self._worker,
@@ -129,16 +135,20 @@ class MediaProcessingService:
             self.registry.prune()
             job_id = self.active_job_id or self.latest_job_id
             job = self.jobs.get(job_id) if job_id else None
+            if not job:
+                job = self._latest_persisted_job()
             return job.to_dict() if job else self._idle_status()
 
     def status(self, job_id: str) -> dict:
         with self.lock:
-            job = self.registry.get(str(job_id or "").strip())
+            normalized = str(job_id or "").strip()
+            job = self.registry.get(normalized) or self._load_persisted_job(normalized)
             return job.to_dict() if job else {"ok": False, "error": "media_job_not_found"}
 
     def cancel(self, job_id: str) -> dict:
         with self.lock:
-            job = self.registry.get(str(job_id or "").strip())
+            normalized = str(job_id or "").strip()
+            job = self.registry.get(normalized) or self._load_persisted_job(normalized)
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
             if job.terminal:
@@ -147,11 +157,13 @@ class MediaProcessingService:
             job.state = "canceling"
             job.detail = "Cancelando procesamiento..."
             job.updated_at = time.time()
+            self._persist_job(job)
             return job.to_dict()
 
     def mount(self, job_id: str) -> dict:
         with self.lock:
-            job = self.registry.get(str(job_id or "").strip())
+            normalized = str(job_id or "").strip()
+            job = self.registry.get(normalized) or self._load_persisted_job(normalized)
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
             if job.state != "done":
@@ -186,11 +198,13 @@ class MediaProcessingService:
                 current.translated_path = str(target) if current.operation == "translate" else current.translated_path
                 current.transcript_path = str(target) if current.operation == "transcribe" else current.transcript_path
                 current.updated_at = time.time()
+                self._persist_job(current)
         return {**result, "media_job_id": job.job_id, "mounted": True}
 
     def artifact(self, job_id: str, kind: str) -> dict:
         with self.lock:
-            job = self.registry.get(str(job_id or "").strip())
+            normalized = str(job_id or "").strip()
+            job = self.registry.get(normalized) or self._load_persisted_job(normalized)
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
             paths = {
@@ -246,7 +260,7 @@ class MediaProcessingService:
             detected = str(transcript.detected_language or "").strip().lower() or "desconocido"
             paragraphs = transcript_paragraphs(transcript.segments, transcript.text)
             title = f"{Path(self._job(job_id).filename).stem} — Transcripción"
-            transcript_text = transcript_document_text(title, detected, paragraphs)
+            transcript_text = transcript_body_text(paragraphs)
             transcript_file = work_root / "transcript.txt"
             transcript_file.write_text(transcript_text, encoding="utf-8")
             self._update(
@@ -324,7 +338,7 @@ class MediaProcessingService:
             )
             translated.append((start, text if spanish else self._translate_paragraph(text, detected_language)))
         title = f"{Path(self._job(job_id).filename).stem} — Traducción al castellano"
-        translated_text = transcript_document_text(title, "es", translated)
+        translated_text = transcript_body_text(translated)
         translated_file = work_root / "translated_es.txt"
         translated_file.write_text(translated_text, encoding="utf-8")
         self._update(job_id, translated_text=translated_text, translated_path=str(translated_file))
@@ -444,6 +458,60 @@ class MediaProcessingService:
             for key, value in changes.items():
                 setattr(job, key, value)
             job.updated_at = time.time()
+            durable_fields = {
+                "state",
+                "transcript",
+                "translated_text",
+                "pdf_path",
+                "translated_pdf_path",
+                "audio_path",
+                "mounted",
+            }
+            if job.terminal or durable_fields.intersection(changes):
+                self._persist_job(job)
+
+    def _persist_job(self, job: MediaJob) -> None:
+        self.manifest_root.mkdir(parents=True, exist_ok=True)
+        target = self.manifest_root / f"{job.job_id}.json"
+        temporary = target.with_suffix(".json.part")
+        payload = {"schema": 1, "job": asdict(job)}
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+
+    def _load_persisted_job(self, job_id: str) -> MediaJob | None:
+        if not re.fullmatch(r"[0-9a-f]{16}", job_id):
+            return None
+        try:
+            payload = json.loads((self.manifest_root / f"{job_id}.json").read_text(encoding="utf-8"))
+            raw = payload.get("job") if isinstance(payload, dict) else None
+            if not isinstance(raw, dict):
+                return None
+            allowed = {item.name for item in fields(MediaJob)}
+            job = MediaJob(**{key: value for key, value in raw.items() if key in allowed})
+            if job.job_id != job_id or not job.terminal:
+                return None
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        self.registry.add(job.job_id, job)
+        self.latest_job_id = job.job_id
+        return job
+
+    def _latest_persisted_job(self) -> MediaJob | None:
+        try:
+            candidates = sorted(
+                self.manifest_root.glob("*.json"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            return None
+        for candidate in candidates:
+            job = self._load_persisted_job(candidate.stem)
+            if job:
+                return job
+        return None
 
     def _check_cancelled(self, job_id: str) -> None:
         if self._job(job_id).cancel_requested:
