@@ -65,13 +65,30 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertEqual(status["state"], "done", status)
                 self.assertTrue(Path(status["output"]["pdf"]["filename"]).suffix == ".pdf")
                 artifact = context.media.artifact(str(started["job_id"]), "pdf")
-                self.assertGreater(Path(str(artifact["path"])).stat().st_size, 100)
+                artifact_path = Path(str(artifact["path"]))
+                self.assertGreater(artifact_path.stat().st_size, 100)
+                self.assertEqual(artifact_path.parent, context.media_artifacts_root)
+                self.assertNotEqual(artifact_path.parent, context.settings.paths.downloads)
+                downloads = context.settings.paths.downloads
+                self.assertFalse(downloads.exists() and any(downloads.iterdir()))
 
-                mounted = context.media.mount(str(started["job_id"]))
+                restarted_context = self.context(root, app)
+                restored = restarted_context.media.status(str(started["job_id"]))
+                self.assertEqual(restored["state"], "done")
+                self.assertEqual(restarted_context.media.overview()["job_id"], started["job_id"])
+                first_download = restarted_context.media.artifact(str(started["job_id"]), "pdf")
+                second_download = restarted_context.media.artifact(str(started["job_id"]), "pdf")
+                self.assertEqual(first_download["path"], second_download["path"])
+                self.assertTrue(Path(str(second_download["path"])).is_file())
+
+                mounted = restarted_context.media.mount(str(started["job_id"]))
                 self.assertTrue(mounted["mounted"])
                 self.assertEqual(app.status()["document"]["source_type"], "media_transcript")
                 self.assertIn("técnica y sociedad", app.session.document.text)
+                self.assertNotIn("Idioma detectado:", app.session.document.text)
+                self.assertNotIn("— Transcripción", app.session.document.text)
                 self.assertTrue(Path(app._main_source_path).exists())
+                self.assertTrue(restarted_context.shutdown_jobs()["ok"])
                 self.assertTrue(context.shutdown_jobs()["ok"])
             with managed_test_app(root=root / "app") as restored:
                 self.assertEqual(restored.status()["document"]["source_type"], "media_transcript")
@@ -107,6 +124,8 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertTrue(mounted["mounted"])
                 self.assertEqual(app.status()["document"]["source_type"], "media_translation")
                 self.assertIn("Entendido", app.session.document.text)
+                self.assertNotIn("Idioma detectado:", app.session.document.text)
+                self.assertNotIn("— Traducción al castellano", app.session.document.text)
                 self.assertTrue(context.shutdown_jobs()["ok"])
 
     def test_media_without_audio_fails_cleanly(self) -> None:
