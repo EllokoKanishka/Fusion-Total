@@ -2,6 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "$ROOT/scripts/lib/env_helper.sh"
+load_env_safe
+
 PORT="${FUSION_READER_V2_PORT:-8010}"
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
@@ -14,7 +18,11 @@ OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
-PYTHON_BIN="${FUSION_READER_PYTHON:-python3}"
+
+if ! PYTHON_BIN="$(find_python)"; then
+  echo "[ERROR] No se encontró ningún intérprete de Python válido con las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
+  exit 1
+fi
 
 export FUSION_READER_RUNTIME_ROOT="$RUNTIME_DIR"
 export FUSION_READER_RUNTIME_DIR="$RUNTIME_DIR"

@@ -61,3 +61,17 @@ class LocalDefaultsV2Tests(unittest.TestCase):
             ):
                 hits.append(path)
         self.assertEqual(hits, [])
+
+    def test_launcher_coordination_and_synchronous_startup(self):
+        open_script = Path("scripts/open_fusion_reader.sh").read_text(encoding="utf-8")
+        # Ensure it doesn't run the start script blindly in the background
+        self.assertNotIn("nohup ./scripts/start_fusion_reader_v2.sh", open_script)
+        # Ensure it runs it synchronously and checks the exit code
+        self.assertIn('if ! ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1; then', open_script)
+        # Ensure it displays error using zenity or notify-send
+        self.assertIn("zenity --error", open_script)
+        self.assertIn("notify-send", open_script)
+
+        # Check env_helper python fallback
+        env_helper = Path("scripts/lib/env_helper.sh").read_text(encoding="utf-8")
+        self.assertIn("${HOME}/Miniforge3/bin/python3", env_helper)

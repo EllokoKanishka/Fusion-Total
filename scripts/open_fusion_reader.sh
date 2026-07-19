@@ -2,6 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "$ROOT/scripts/lib/env_helper.sh"
+load_env_safe
+
 PORT="${FUSION_READER_V2_PORT:-8010}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
 STT_PROVIDER_RAW="${FUSION_READER_STT_PROVIDER:-auto}"
@@ -115,13 +119,23 @@ elif ! fusion_gpu_ready \
 fi
 
 if ! curl -fsS "$URL" >/dev/null 2>&1; then
-  (
-    cd "$ROOT"
-    nohup ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1 &
-  )
+  echo "Iniciando servidor de Fusion Reader v2 en $URL..." >>"$LOG_FILE"
+  if ! ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1; then
+    echo "ERROR: El servidor de Fusion Reader v2 no pudo iniciarse correctamente." >>"$LOG_FILE"
+    
+    # Calcular la ruta del log respetando overrides
+    RUN_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
+    L_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUN_DIR/logs}}"
+    EFFECTIVE_LOG_FILE="${FUSION_READER_LOG_FILE:-$L_DIR/fusion_reader_v2_server.log}"
+    
+    if command -v zenity >/dev/null 2>&1; then
+      zenity --error --title="Error de PandaFusion" --text="No se pudo iniciar el servidor de Fusion Reader.\n\nPor favor, revisa el archivo de log en:\n$EFFECTIVE_LOG_FILE" &
+    elif command -v notify-send >/dev/null 2>&1; then
+      notify-send -u critical "Error de PandaFusion" "No se pudo iniciar el servidor de Fusion Reader. Revisa el log en $EFFECTIVE_LOG_FILE."
+    fi
+    exit 1
+  fi
 fi
-
-wait_for_url "$URL" 30 || true
 
 if command -v xdg-open >/dev/null 2>&1; then
   xdg-open "$URL" >/dev/null 2>&1 &
