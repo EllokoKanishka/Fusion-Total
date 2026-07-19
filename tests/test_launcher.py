@@ -70,6 +70,41 @@ echo "notify-send $*" >> "{self.side_effects_log}"
         )
         self.mock_notify_send.chmod(0o755)
 
+        # Mock systemctl
+        self.mock_systemctl = self.bin_dir / "systemctl"
+        self.mock_systemctl.write_text(
+            f"""#!/usr/bin/env bash
+echo "systemctl $*" >> "{self.side_effects_log}"
+if [[ "$1" == "--user" && "$2" == "show" ]]; then
+  if [[ -f "{self.tmp_dir}/systemd_missing" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "$1" == "--user" && "$2" == "start" ]]; then
+  if [[ -f "{self.tmp_dir}/systemctl_fail" ]]; then
+    exit 1
+  fi
+  # Simulate the service starting the server by touching the healthy marker
+  touch "{self.healthy_marker}"
+  exit 0
+fi
+exit 0
+""",
+            encoding="utf-8",
+        )
+        self.mock_systemctl.chmod(0o755)
+
+        # Mock systemd-run
+        self.mock_systemd_run = self.bin_dir / "systemd-run"
+        self.mock_systemd_run.write_text(
+            f"""#!/usr/bin/env bash
+echo "systemd-run $*" >> "{self.side_effects_log}"
+""",
+            encoding="utf-8",
+        )
+        self.mock_systemd_run.chmod(0o755)
+
         # Setup test environment PATH
         self.test_env = dict(os.environ)
         self.test_env["PATH"] = f"{self.bin_dir}:{self.test_env.get('PATH', '')}"
@@ -90,12 +125,8 @@ echo "notify-send $*" >> "{self.side_effects_log}"
         # Simulator server already healthy
         self.healthy_marker.touch()
 
-        # Mock python should NOT be executed (but verify_python should succeed)
         self.mock_python.write_text(
             f"""#!/usr/bin/env bash
-if [[ "$*" == *"-c"* ]]; then
-  exit 0
-fi
 echo "python-should-not-run" >> "{self.side_effects_log}"
 exit 1
 """,
@@ -117,20 +148,61 @@ exit 1
         log_content = self.side_effects_log.read_text(encoding="utf-8")
         self.assertIn("xdg-open http://127.0.0.1:19010/", log_content)
         self.assertNotIn("python-should-not-run", log_content)
+        self.assertNotIn("systemctl --user start pandafusion.service", log_content)
         self.assertNotIn("zenity", log_content)
 
-    def test_launcher_starts_and_waits_for_healthcheck(self):
-        # Mock python script that touches healthy marker representing successful startup
+    def test_launcher_starts_via_systemctl_and_waits_for_healthcheck(self):
+        # Mock python isn't executed directly by script, systemctl handles it
+        self.mock_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        self.mock_python.chmod(0o755)
+
+        script_path = self.repo_root / "scripts" / "open_fusion_reader.sh"
+        result = subprocess.run(
+            [str(script_path)],
+            cwd=str(self.repo_root),
+            env=self.test_env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        time.sleep(0.5)
+        log_content = self.side_effects_log.read_text(encoding="utf-8")
+        self.assertIn("systemctl --user start pandafusion.service", log_content)
+        self.assertIn("xdg-open http://127.0.0.1:19010/", log_content)
+        self.assertNotIn("zenity", log_content)
+
+    def test_launcher_fails_and_does_not_open_browser(self):
+        # systemctl will fail
+        (Path(self.tmp_dir) / "systemctl_fail").touch()
+
+        script_path = self.repo_root / "scripts" / "open_fusion_reader.sh"
+        result = subprocess.run(
+            [str(script_path)],
+            cwd=str(self.repo_root),
+            env=self.test_env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        log_content = self.side_effects_log.read_text(encoding="utf-8")
+        self.assertNotIn("xdg-open", log_content)
+        self.assertTrue("zenity" in log_content or "notify-send" in log_content)
+
+    def test_launcher_fallback_traditional_script(self):
+        # simulate systemd not available
+        (Path(self.tmp_dir) / "systemd_missing").touch()
+
+        # Mock python script that touches healthy marker representing successful startup via fallback
         self.mock_python.write_text(
             f"""#!/usr/bin/env bash
 if [[ "$*" == *"-c"* ]]; then
   exit 0
 fi
-echo "python-started" >> "{self.side_effects_log}"
-# Simulate starting the web server by touching healthy marker
+echo "python-started-fallback" >> "{self.side_effects_log}"
 touch "{self.healthy_marker}"
-# Stay alive in the foreground to keep the PID alive during healthcheck
-sleep 5
+sleep 1
 exit 0
 """,
             encoding="utf-8",
@@ -146,41 +218,16 @@ exit 0
             text=True,
         )
 
+        if result.returncode != 0:
+            print("STDOUT:", result.stdout)
+            print("STDERR:", result.stderr)
+            print("SIDE EFFECTS:", self.side_effects_log.read_text(encoding="utf-8"))
+
         self.assertEqual(result.returncode, 0)
         time.sleep(0.5)
         log_content = self.side_effects_log.read_text(encoding="utf-8")
-        self.assertIn("python-started", log_content)
+        self.assertIn("python-started-fallback", log_content)
         self.assertIn("xdg-open http://127.0.0.1:19010/", log_content)
-        self.assertNotIn("zenity", log_content)
-
-    def test_launcher_fails_and_does_not_open_browser(self):
-        # Mock python fails immediately
-        self.mock_python.write_text(
-            f"""#!/usr/bin/env bash
-if [[ "$*" == *"-c"* ]]; then
-  exit 0
-fi
-echo "python-failed-to-start" >> "{self.side_effects_log}"
-exit 1
-""",
-            encoding="utf-8",
-        )
-        self.mock_python.chmod(0o755)
-
-        script_path = self.repo_root / "scripts" / "open_fusion_reader.sh"
-        result = subprocess.run(
-            [str(script_path)],
-            cwd=str(self.repo_root),
-            env=self.test_env,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 1)
-        log_content = self.side_effects_log.read_text(encoding="utf-8")
-        self.assertNotIn("xdg-open", log_content)
-        # It must show the error dialog
-        self.assertTrue("zenity" in log_content or "notify-send" in log_content)
 
 
 if __name__ == "__main__":

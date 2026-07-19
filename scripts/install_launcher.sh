@@ -54,6 +54,33 @@ EOF
 
 chmod +x "$LAUNCHER_PATH"
 
+# 4.5 Configurar servicio systemd de usuario
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
+echo "Generando servicio systemd en $SYSTEMD_USER_DIR/pandafusion.service..."
+mkdir -p "$SYSTEMD_USER_DIR"
+SERVICE_PATH="$SYSTEMD_USER_DIR/pandafusion.service"
+
+cat << EOF > "$SERVICE_PATH"
+[Unit]
+Description=PandaFusion Server
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=$ROOT/.env
+WorkingDirectory=$ROOT
+ExecStart=/bin/bash -c 'mkdir -p runtime/fusion_reader_v2/logs && echo \$\$ > runtime/fusion_reader_v2/fusion_reader_v2.pid && exec "\$FUSION_READER_PYTHON" -u -m scripts.fusion_reader_v2_server >> runtime/fusion_reader_v2/logs/fusion_reader_v2_server.log 2>&1'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload || echo "ADVERTENCIA: No se pudo recargar systemd. Si estás en un entorno sin systemd, el servicio podría no funcionar."
+
+chmod +x "$LAUNCHER_PATH"
+
 # 5. Generar accesos directos .desktop
 DESKTOP_DIR="${HOME}/.local/share/applications"
 mkdir -p "$DESKTOP_DIR"

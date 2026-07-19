@@ -79,6 +79,14 @@ wait_for_fusion_gpu() {
   return 1
 }
 
+run_background() {
+  if command -v systemd-run >/dev/null 2>&1 && systemctl --user show >/dev/null 2>&1; then
+    systemd-run --user --scope --quiet nohup "$@"
+  else
+    nohup "$@"
+  fi
+}
+
 echo "STT provider solicitado: ${STT_PROVIDER} (valor: ${STT_PROVIDER_RAW})" >>"$LOG_FILE"
 if [[ "$STT_PROVIDER" == "cli" ]]; then
   echo "STT server ${STT_PORT}: inicio omitido porque el provider es cli." >>"$LOG_FILE"
@@ -88,9 +96,9 @@ elif ! curl -fsS "$STT_URL" >/dev/null 2>&1; then
     cd "$ROOT"
     if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
       FUSION_READER_STT_DEVICE=cpu FUSION_READER_STT_COMPUTE_TYPE=int8 \
-        nohup ./scripts/start_fusion_reader_v2_stt.sh >>"$STT_LOG_FILE" 2>&1 &
+        run_background ./scripts/start_fusion_reader_v2_stt.sh >>"$STT_LOG_FILE" 2>&1 &
     else
-      nohup ./scripts/start_fusion_reader_v2_stt.sh >>"$STT_LOG_FILE" 2>&1 &
+      run_background ./scripts/start_fusion_reader_v2_stt.sh >>"$STT_LOG_FILE" 2>&1 &
     fi
   )
 fi
@@ -99,7 +107,7 @@ if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
   if ! curl -fsS --max-time 2 "$CPU_TTS_URL" >/dev/null 2>&1; then
     (
       cd "$ROOT"
-      nohup ./scripts/start_reader_neural_tts.sh >>"$CPU_TTS_LOG_FILE" 2>&1 &
+      run_background ./scripts/start_reader_neural_tts.sh >>"$CPU_TTS_LOG_FILE" 2>&1 &
     )
     wait_for_url "$CPU_TTS_URL" 90 || true
   fi
@@ -107,12 +115,12 @@ elif ! fusion_gpu_ready \
   && ! curl -fsS --max-time 2 "$CPU_TTS_URL" >/dev/null 2>&1; then
   (
     cd "$ROOT"
-    nohup ./scripts/start_reader_neural_tts_gpu_5090.sh >>"$GPU_TTS_LOG_FILE" 2>&1 &
+    run_background ./scripts/start_reader_neural_tts_gpu_5090.sh >>"$GPU_TTS_LOG_FILE" 2>&1 &
   )
   if ! wait_for_fusion_gpu 90; then
     (
       cd "$ROOT"
-      nohup ./scripts/start_reader_neural_tts.sh >>"$CPU_TTS_LOG_FILE" 2>&1 &
+      run_background ./scripts/start_reader_neural_tts.sh >>"$CPU_TTS_LOG_FILE" 2>&1 &
     )
     wait_for_url "$CPU_TTS_URL" 90 || true
   fi
@@ -120,8 +128,27 @@ fi
 
 if ! curl -fsS "$URL" >/dev/null 2>&1; then
   echo "Iniciando servidor de Fusion Reader v2 en $URL..." >>"$LOG_FILE"
-  if ! ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1; then
-    echo "ERROR: El servidor de Fusion Reader v2 no pudo iniciarse correctamente." >>"$LOG_FILE"
+  
+  if command -v systemctl >/dev/null 2>&1 && systemctl --user show >/dev/null 2>&1; then
+    echo "Usando servicio systemd (pandafusion.service)..." >>"$LOG_FILE"
+    if ! systemctl --user start pandafusion.service >>"$LOG_FILE" 2>&1; then
+      echo "ERROR: Falló systemctl --user start pandafusion.service." >>"$LOG_FILE"
+      START_SUCCESS=1
+    else
+      START_SUCCESS=0
+      wait_for_url "${URL}api/status" 40 || START_SUCCESS=1
+    fi
+  else
+    echo "Fallback: Usando script tradicional..." >>"$LOG_FILE"
+    if ! ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1; then
+      START_SUCCESS=1
+    else
+      START_SUCCESS=0
+    fi
+  fi
+  
+  if [[ "${START_SUCCESS:-1}" != "0" ]]; then
+    echo "ERROR: El servidor de Fusion Reader v2 no pudo iniciarse o no respondió a tiempo." >>"$LOG_FILE"
     
     # Calcular la ruta del log respetando overrides
     RUN_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
@@ -142,3 +169,4 @@ if command -v xdg-open >/dev/null 2>&1; then
 else
   sensible-browser "$URL" >/dev/null 2>&1 &
 fi
+
