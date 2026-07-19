@@ -65,13 +65,20 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     elements.mediaAudioDownload
   ].forEach(bindDownload);
 
-  function setBusy(busy, dismissible = false) {
-    [elements.mediaTranscribeBtn, elements.mediaTranslateBtn].forEach(button => {
-      if (button) button.disabled = Boolean(busy);
+  function setBusy(busy, dismissible = false, state = 'idle') {
+    if (elements.mediaTranslateBtn) elements.mediaTranslateBtn.disabled = Boolean(busy);
+    [
+      elements.mediaOriginalPdfToggle,
+      elements.mediaTranslatedPdfToggle,
+      elements.mediaSpanishAudioToggle
+    ].forEach(input => {
+      if (input) input.disabled = Boolean(busy);
     });
     if (elements.mediaCancelBtn) {
       elements.mediaCancelBtn.disabled = !(busy || dismissible);
-      elements.mediaCancelBtn.textContent = dismissible ? 'Cerrar' : 'Cancelar';
+      elements.mediaCancelBtn.textContent = busy
+        ? 'Cancelar'
+        : (state === 'done' ? 'Cerrar resultado' : 'Cerrar');
     }
   }
 
@@ -85,8 +92,8 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
       : `${operation}: ${data.detail || data.stage || state}${diagnostic}`;
     if (elements.mediaProgress) elements.mediaProgress.value = Number(data.progress || 0);
     const running = ['queued', 'running', 'canceling'].includes(state);
-    const dismissible = ['error', 'cancelled'].includes(state);
-    setBusy(running, dismissible);
+    const dismissible = ['done', 'error', 'cancelled'].includes(state);
+    setBusy(running, dismissible, state);
     if (elements.mediaMountBtn) {
       elements.mediaMountBtn.disabled = state !== 'done';
       elements.mediaMountBtn.classList.toggle('is-hidden', state !== 'done');
@@ -122,10 +129,23 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     return data;
   }
 
+  function selectedOutputs() {
+    return {
+      original_pdf: Boolean(elements.mediaOriginalPdfToggle && elements.mediaOriginalPdfToggle.checked),
+      translated_pdf: Boolean(elements.mediaTranslatedPdfToggle && elements.mediaTranslatedPdfToggle.checked),
+      spanish_audio: Boolean(elements.mediaSpanishAudioToggle && elements.mediaSpanishAudioToggle.checked)
+    };
+  }
+
   async function start(operation, file) {
     if (!file) return;
+    const outputs = selectedOutputs();
+    if (operation === 'translate' && !Object.values(outputs).some(Boolean)) {
+      if (elements.mediaInfo) elements.mediaInfo.textContent = 'Elegí al menos uno de los tres resultados.';
+      return;
+    }
     clearPoll();
-    setBusy(true);
+    setBusy(true, false, 'queued');
     setLink(elements.mediaPdfDownload, null, 'PDF');
     setLink(elements.mediaTranslatedPdfDownload, null, 'PDF en castellano');
     setLink(elements.mediaAudioDownload, null, 'audio en castellano');
@@ -134,14 +154,19 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     const body = new FormData();
     body.append('file', file, file.name);
     try {
-      const response = await fetch(endpoints[operation], { method: 'POST', body });
+      const params = new URLSearchParams();
+      if (operation === 'translate') {
+        Object.entries(outputs).forEach(([name, enabled]) => params.set(name, enabled ? '1' : '0'));
+      }
+      const endpoint = params.size ? `${endpoints[operation]}?${params.toString()}` : endpoints[operation];
+      const response = await fetch(endpoint, { method: 'POST', body });
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'media_upload_failed');
       pollingJobId = String(data.job_id || '');
       render(data);
       log(`${file.name}: procesamiento multimedia iniciado.`);
     } catch (error) {
-      setBusy(false);
+      setBusy(false, false, 'idle');
       if (elements.mediaInfo) elements.mediaInfo.textContent = `Falló la carga: ${error.message}`;
       throw error;
     }
