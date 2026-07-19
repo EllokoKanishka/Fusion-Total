@@ -81,8 +81,10 @@ excluded from the recoverable session snapshot.
 
 Media routes:
 
-- `POST /api/media/transcribe`: multipart `file`; transcripción y PDF.
-- `POST /api/media/translate`: multipart `file`; suma castellano, PDF y WAV.
+- `POST /api/media/transcribe`: multipart `file`; transcripción y PDF (compatibilidad).
+- `POST /api/media/translate`: multipart `file`; acepta los flags de query
+  `original_pdf`, `translated_pdf` y `spanish_audio`. Por compatibilidad,
+  si se omiten genera las tres salidas. Al menos una debe estar activa.
 - `GET /api/media/status[/<job_id>]`: último job o job específico.
 - `POST /api/media/cancel/<job_id>`: cancelación cooperativa.
 - `POST /api/media/mount/<job_id>`: monta el texto terminado como documento principal.
