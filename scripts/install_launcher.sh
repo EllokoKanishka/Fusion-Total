@@ -8,80 +8,12 @@ cd "$ROOT"
 # Default local port for this installation
 DEFAULT_PORT="9010"
 
-# Sourcing existing .env if present
-if [[ -f ".env" ]]; then
-  echo "Encontrado archivo .env existente."
-  set -a
-  source ".env"
-  set +a
+source "$ROOT/scripts/lib/env_helper.sh"
+
+if [[ -f "$ROOT/.env" ]]; then
+  echo "Encontrado archivo .env existente. Cargando de forma segura..."
+  load_env_safe
 fi
-
-verify_python() {
-  local py="$1"
-  if [[ -x "$py" ]]; then
-    if "$py" -c "import reportlab, docx, PIL" >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-  return 1
-}
-
-find_python() {
-  # 1. FUSION_READER_PYTHON explícito
-  if [[ -n "${FUSION_READER_PYTHON:-}" ]]; then
-    if verify_python "$FUSION_READER_PYTHON"; then
-      echo "$FUSION_READER_PYTHON"
-      return 0
-    fi
-    echo "ERROR: FUSION_READER_PYTHON=$FUSION_READER_PYTHON no tiene las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
-    return 1
-  fi
-
-  # 2. .venv/bin/python3 del proyecto
-  if verify_python "$ROOT/.venv/bin/python3"; then
-    echo "$ROOT/.venv/bin/python3"
-    return 0
-  fi
-  if verify_python "$ROOT/.venv/bin/python"; then
-    echo "$ROOT/.venv/bin/python"
-    return 0
-  fi
-  if verify_python "$ROOT/venv/bin/python3"; then
-    echo "$ROOT/venv/bin/python3"
-    return 0
-  fi
-  if verify_python "$ROOT/venv/bin/python"; then
-    echo "$ROOT/venv/bin/python"
-    return 0
-  fi
-
-  # 3. Intérpretes en PATH y ubicaciones conocidas (como Miniforge)
-  local candidates=(
-    "python3"
-    "python"
-    "${HOME}/Miniforge3/bin/python3"
-    "${HOME}/Miniforge3/bin/python"
-    "/home/lucy-ubuntu/Miniforge3/bin/python3"
-    "/usr/bin/python3"
-    "/usr/local/bin/python3"
-  )
-  for candidate in "${candidates[@]}"; do
-    local path=""
-    if [[ "$candidate" == /* ]]; then
-      path="$candidate"
-    else
-      path="$(command -v "$candidate" || true)"
-    fi
-    if [[ -n "$path" ]]; then
-      if verify_python "$path"; then
-        echo "$path"
-        return 0
-      fi
-    fi
-  done
-
-  return 1
-}
 
 echo "=== Fusion Reader Launcher Installer ==="
 

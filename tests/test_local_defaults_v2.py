@@ -72,6 +72,6 @@ class LocalDefaultsV2Tests(unittest.TestCase):
         self.assertIn("zenity --error", open_script)
         self.assertIn("notify-send", open_script)
 
-        # Check start script python fallback
-        start_script = Path("scripts/start_fusion_reader_v2.sh").read_text(encoding="utf-8")
-        self.assertIn("${HOME}/Miniforge3/bin/python3", start_script)
+        # Check env_helper python fallback
+        env_helper = Path("scripts/lib/env_helper.sh").read_text(encoding="utf-8")
+        self.assertIn("${HOME}/Miniforge3/bin/python3", env_helper)

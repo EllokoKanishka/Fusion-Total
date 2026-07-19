@@ -3,25 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Carga de variables locales del proyecto si existen (.env) sin sobrescribir el entorno
-if [[ -f "$ROOT/.env" ]]; then
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^[[:space:]]*# ]] || [[ "$line" =~ ^[[:space:]]*$ ]]; then
-      continue
-    fi
-    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-      key="${BASH_REMATCH[1]}"
-      val="${BASH_REMATCH[2]}"
-      val="${val#\"}"
-      val="${val%\"}"
-      val="${val#\'}"
-      val="${val%\'}"
-      if [[ -z "${!key:-}" ]]; then
-        export "$key"="$val"
-      fi
-    fi
-  done < "$ROOT/.env"
-fi
+source "$ROOT/scripts/lib/env_helper.sh"
+load_env_safe
 
 PORT="${FUSION_READER_V2_PORT:-8010}"
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
@@ -35,70 +18,6 @@ OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
-
-verify_python() {
-  local py="$1"
-  if [[ -x "$py" ]]; then
-    if "$py" -c "import reportlab, docx, PIL" >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-  return 1
-}
-
-find_python() {
-  if [[ -n "${FUSION_READER_PYTHON:-}" ]]; then
-    if verify_python "$FUSION_READER_PYTHON"; then
-      echo "$FUSION_READER_PYTHON"
-      return 0
-    fi
-    echo "ERROR: FUSION_READER_PYTHON=$FUSION_READER_PYTHON no tiene las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
-    return 1
-  fi
-
-  if verify_python "$ROOT/.venv/bin/python3"; then
-    echo "$ROOT/.venv/bin/python3"
-    return 0
-  fi
-  if verify_python "$ROOT/.venv/bin/python"; then
-    echo "$ROOT/.venv/bin/python"
-    return 0
-  fi
-  if verify_python "$ROOT/venv/bin/python3"; then
-    echo "$ROOT/venv/bin/python3"
-    return 0
-  fi
-  if verify_python "$ROOT/venv/bin/python"; then
-    echo "$ROOT/venv/bin/python"
-    return 0
-  fi
-
-  local candidates=(
-    "python3"
-    "python"
-    "${HOME}/Miniforge3/bin/python3"
-    "${HOME}/Miniforge3/bin/python"
-    "/home/lucy-ubuntu/Miniforge3/bin/python3"
-    "/usr/bin/python3"
-    "/usr/local/bin/python3"
-  )
-  for candidate in "${candidates[@]}"; do
-    local path=""
-    if [[ "$candidate" == /* ]]; then
-      path="$candidate"
-    else
-      path="$(command -v "$candidate" || true)"
-    fi
-    if [[ -n "$path" ]]; then
-      if verify_python "$path"; then
-        echo "$path"
-        return 0
-      fi
-    fi
-  done
-
-  return 1
-}
 
 if ! PYTHON_BIN="$(find_python)"; then
   echo "[ERROR] No se encontró ningún intérprete de Python válido con las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
