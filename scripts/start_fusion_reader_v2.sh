@@ -14,7 +14,15 @@ OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
-PYTHON_BIN="${FUSION_READER_PYTHON:-python3}"
+if [[ -z "${FUSION_READER_PYTHON:-}" ]]; then
+  if [[ -x "${HOME}/Miniforge3/bin/python3" ]]; then
+    PYTHON_BIN="${HOME}/Miniforge3/bin/python3"
+  else
+    PYTHON_BIN="python3"
+  fi
+else
+  PYTHON_BIN="$FUSION_READER_PYTHON"
+fi
 
 export FUSION_READER_RUNTIME_ROOT="$RUNTIME_DIR"
 export FUSION_READER_RUNTIME_DIR="$RUNTIME_DIR"
