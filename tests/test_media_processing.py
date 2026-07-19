@@ -148,7 +148,6 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertFalse(source.exists())
                 self.assertTrue(context.shutdown_jobs()["ok"])
 
-
     def test_failed_job_can_be_dismissed_and_legacy_manifest_is_not_restored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
