@@ -127,8 +127,12 @@ primero el archivo a FLAC mono de 16 kHz y muestra etapas separadas.
 
 Operación de medios largos:
 
-- `Transcribir a documento` produce PDF y habilita montaje;
-- `Traducir audio al castellano` suma PDF castellano y WAV;
+- la interfaz usa un único flujo para audio o video;
+- se puede pedir de forma independiente el PDF en idioma original, el PDF
+  traducido al castellano y el audio en castellano;
+- sólo se generan las salidas marcadas; se puede elegir una, dos o las tres;
+- `Cancelar` detiene cooperativamente un trabajo activo y `Cerrar resultado`
+  limpia el panel cuando terminó, sin borrar los PDF/WAV publicados;
 - los originales subidos y FLAC temporales se eliminan al terminar o fallar;
 - PDF/WAV publicados quedan en Descargas;
 - montar copia el texto a `runtime/fusion_reader_v2/imported_texts` para que la

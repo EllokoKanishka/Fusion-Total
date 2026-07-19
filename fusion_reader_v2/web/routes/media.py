@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import parse_qs, urlparse
 
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.web.context import WebContext
@@ -9,6 +10,8 @@ from fusion_reader_v2.web.downloads import stream_file
 
 
 class MediaResponder(Protocol):
+    path: str
+
     @property
     def context(self) -> WebContext: ...
 
@@ -67,12 +70,21 @@ def handle_media_post(responder: MediaResponder, path: str, payload: dict | None
             limit_error="media_too_large",
         )
         operation = "translate" if path.endswith("/translate") else "transcribe"
+        params = parse_qs(urlparse(responder.path).query)
+
+        def selected(name: str, default: bool) -> bool:
+            raw = str((params.get(name) or ["1" if default else "0"])[-1]).strip().lower()
+            return raw not in {"", "0", "false", "no", "off"}
+
         result = responder.context.media.start(
             operation=operation,
             filename=filename,
             mime=mime,
             input_path=input_path,
             voice=responder.context.app.voice.voice,
+            include_original_pdf=selected("original_pdf", True),
+            include_translated_pdf=selected("translated_pdf", operation == "translate"),
+            include_spanish_audio=selected("spanish_audio", operation == "translate"),
         )
         responder._json(200 if result.get("ok") else 409, result)
         return True

@@ -41,8 +41,11 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.goto(baseURL);
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
   await expect(page.locator('#mediaToolsTitle')).toContainText('Audio y video');
-  await expect(page.locator('#mediaTranscribeBtn')).toBeVisible();
+  await expect(page.locator('#mediaTranscribeBtn')).toHaveCount(0);
   await expect(page.locator('#mediaTranslateBtn')).toBeVisible();
+  await expect(page.locator('#mediaOriginalPdfToggle')).toBeChecked();
+  await expect(page.locator('#mediaTranslatedPdfToggle')).toBeChecked();
+  await expect(page.locator('#mediaSpanishAudioToggle')).toBeChecked();
 
   await page.locator('#quickTextInput').fill('Fragmento temporal para leer sin crear un archivo.');
   await page.locator('#quickReadStartBtn').click();

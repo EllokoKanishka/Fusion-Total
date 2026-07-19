@@ -90,11 +90,36 @@ class MediaProcessingService:
             backing=self.jobs,
         )
 
-    def start(self, *, operation: str, filename: str, mime: str, input_path: Path, voice: str) -> dict:
+    def start(
+        self,
+        *,
+        operation: str,
+        filename: str,
+        mime: str,
+        input_path: Path,
+        voice: str,
+        include_original_pdf: bool = True,
+        include_translated_pdf: bool | None = None,
+        include_spanish_audio: bool | None = None,
+    ) -> dict:
         normalized = str(operation or "").strip().lower()
         if normalized not in {"transcribe", "translate"}:
             input_path.unlink(missing_ok=True)
             return {"ok": False, "error": "media_operation_invalid"}
+        original_requested = bool(include_original_pdf)
+        translated_requested = normalized == "translate" and (
+            True if include_translated_pdf is None else bool(include_translated_pdf)
+        )
+        audio_requested = normalized == "translate" and (
+            True if include_spanish_audio is None else bool(include_spanish_audio)
+        )
+        if not any((original_requested, translated_requested, audio_requested)):
+            input_path.unlink(missing_ok=True)
+            return {
+                "ok": False,
+                "error": "media_output_required",
+                "detail": "Elegí al menos una salida para procesar.",
+            }
         with self.lock:
             active = self.jobs.get(self.active_job_id)
             if active and not active.terminal:
@@ -110,6 +135,9 @@ class MediaProcessingService:
                 filename=Path(filename).name,
                 mime=str(mime or "application/octet-stream"),
                 voice=str(voice or ""),
+                original_pdf_requested=original_requested,
+                translated_pdf_requested=translated_requested,
+                spanish_audio_requested=audio_requested,
             )
             self.registry.add(job.job_id, job)
             self.active_job_id = job.job_id
@@ -152,8 +180,6 @@ class MediaProcessingService:
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
             if job.terminal:
-                if job.state not in {"error", "cancelled"}:
-                    return job.to_dict()
                 self.registry.remove(job.job_id)
                 (self.manifest_root / f"{job.job_id}.json").unlink(missing_ok=True)
                 if self.active_job_id == job.job_id:
@@ -176,11 +202,12 @@ class MediaProcessingService:
                 return {"ok": False, "error": "media_job_not_found"}
             if job.state != "done":
                 return {"ok": False, "error": "media_job_not_ready"}
-            text = job.translated_text if job.operation == "translate" else job.transcript
-            title_suffix = " — castellano" if job.operation == "translate" else " — transcripción"
+            mount_translation = bool(job.translated_text)
+            text = job.translated_text if mount_translation else job.transcript
+            title_suffix = " — castellano" if mount_translation else " — transcripción"
             title = f"{Path(job.filename).stem}{title_suffix}"
         self.converted_root.mkdir(parents=True, exist_ok=True)
-        filename = f"{safe_media_stem(job.filename)}_{job.job_id}{'_es' if job.operation == 'translate' else ''}.txt"
+        filename = f"{safe_media_stem(job.filename)}_{job.job_id}{'_es' if mount_translation else ''}.txt"
         reservation = reserve_output_path(self.converted_root, filename, default_suffix=".txt")
         temporary = reservation.path.with_name(f".{reservation.path.name}.{uuid.uuid4().hex}.part")
         try:
@@ -197,14 +224,14 @@ class MediaProcessingService:
             text,
             prefetch=False,
             source_path=str(target),
-            source_type="media_translation" if job.operation == "translate" else "media_transcript",
+            source_type="media_translation" if mount_translation else "media_transcript",
         )
         with self.lock:
             current = self.jobs.get(job.job_id)
             if current:
                 current.mounted = True
-                current.translated_path = str(target) if current.operation == "translate" else current.translated_path
-                current.transcript_path = str(target) if current.operation == "transcribe" else current.transcript_path
+                current.translated_path = str(target) if mount_translation else current.translated_path
+                current.transcript_path = str(target) if not mount_translation else current.transcript_path
                 current.updated_at = time.time()
                 self._persist_job(current)
         return {**result, "media_job_id": job.job_id, "mounted": True}
@@ -280,22 +307,26 @@ class MediaProcessingService:
                 progress=48,
                 detail="Generando el PDF de la transcripción...",
             )
-            pdf_path = self._publish_pdf(
-                job_id,
-                work_root,
-                title=title,
-                subtitle=f"Idioma detectado: {detected} · Generado localmente por Fusion Reader v2",
-                paragraphs=paragraphs,
-                suffix="transcripcion",
-            )
-            self._update(
-                job_id,
-                pdf_path=str(pdf_path),
-                pdf_download_url=f"/api/media/download/{job_id}/pdf",
-                progress=58,
-            )
+            job = self._job(job_id)
+            if job.original_pdf_requested:
+                pdf_path = self._publish_pdf(
+                    job_id,
+                    work_root,
+                    title=title,
+                    subtitle=f"Idioma detectado: {detected} · Generado localmente por Fusion Reader v2",
+                    paragraphs=paragraphs,
+                    suffix="transcripcion",
+                )
+                self._update(
+                    job_id,
+                    pdf_path=str(pdf_path),
+                    pdf_download_url=f"/api/media/download/{job_id}/pdf",
+                    progress=58,
+                )
+            else:
+                self._update(job_id, progress=58, detail="Transcripción original preparada.")
             self._check_cancelled(job_id)
-            if self._job(job_id).operation == "translate":
+            if job.operation == "translate" and (job.translated_pdf_requested or job.spanish_audio_requested):
                 self._translate_and_synthesize(job_id, work_root, paragraphs, detected)
             self._update(
                 job_id,
@@ -350,18 +381,26 @@ class MediaProcessingService:
         translated_file = work_root / "translated_es.txt"
         translated_file.write_text(translated_text, encoding="utf-8")
         self._update(job_id, translated_text=translated_text, translated_path=str(translated_file))
-        translated_pdf = self._publish_pdf(
-            job_id,
-            work_root,
-            title=title,
-            subtitle=f"Traducción desde {detected_language} · Generada localmente por Fusion Reader v2",
-            paragraphs=translated,
-            suffix="castellano",
-        )
+        job = self._job(job_id)
+        if job.translated_pdf_requested:
+            translated_pdf = self._publish_pdf(
+                job_id,
+                work_root,
+                title=title,
+                subtitle=f"Traducción desde {detected_language} · Generada localmente por Fusion Reader v2",
+                paragraphs=translated,
+                suffix="castellano",
+            )
+            self._update(
+                job_id,
+                translated_pdf_path=str(translated_pdf),
+                translated_pdf_download_url=f"/api/media/download/{job_id}/translated-pdf",
+                progress=76,
+            )
+        if not job.spanish_audio_requested:
+            return
         self._update(
             job_id,
-            translated_pdf_path=str(translated_pdf),
-            translated_pdf_download_url=f"/api/media/download/{job_id}/translated-pdf",
             stage="synthesizing",
             progress=76,
             detail="Generando el audio en castellano...",

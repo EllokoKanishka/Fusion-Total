@@ -178,14 +178,23 @@
           <p class="sub">Convertí conferencias en documentos o en audio castellano.</p>
         </div>
         <details class="media-tool-card" open>
-          <summary>Transcribir a documento</summary>
-          <p class="upload-info">Extrae la voz, genera un PDF con marcas de tiempo y permite montarlo en el lector.</p>
-          <button id="mediaTranscribeBtn" class="primary compact-btn wide" type="button">Elegir audio o video</button>
-          <input id="mediaTranscribeInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
-        </details>
-        <details class="media-tool-card" open>
-          <summary>Traducir audio al castellano</summary>
-          <p class="upload-info">Detecta el idioma, traduce el contenido y genera un WAV con la voz seleccionada.</p>
+          <summary>Traducir audio o video al castellano</summary>
+          <p class="upload-info">Elegí qué resultados querés generar. Podés marcar uno, dos o los tres.</p>
+          <fieldset class="media-output-options">
+            <legend>Resultados</legend>
+            <label>
+              <input id="mediaOriginalPdfToggle" type="checkbox" checked>
+              <span>PDF con la transcripción en el idioma original</span>
+            </label>
+            <label>
+              <input id="mediaTranslatedPdfToggle" type="checkbox" checked>
+              <span>PDF traducido al castellano</span>
+            </label>
+            <label>
+              <input id="mediaSpanishAudioToggle" type="checkbox" checked>
+              <span>Audio traducido al castellano</span>
+            </label>
+          </fieldset>
           <button id="mediaTranslateBtn" class="primary compact-btn wide" type="button">Elegir audio o video</button>
           <input id="mediaTranslateInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
         </details>

@@ -58,6 +58,9 @@ class MediaJob:
     filename: str
     mime: str
     voice: str
+    original_pdf_requested: bool = True
+    translated_pdf_requested: bool = True
+    spanish_audio_requested: bool = True
     state: str = "queued"
     stage: str = "queued"
     progress: int = 0
@@ -103,6 +106,11 @@ class MediaJob:
             "operation": self.operation,
             "filename": self.filename,
             "voice": self.voice,
+            "requested_outputs": {
+                "original_pdf": self.original_pdf_requested,
+                "translated_pdf": self.operation == "translate" and self.translated_pdf_requested,
+                "spanish_audio": self.operation == "translate" and self.spanish_audio_requested,
+            },
             "state": self.state,
             "stage": self.stage,
             "progress": self.progress,
