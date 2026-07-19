@@ -67,7 +67,7 @@ class LocalDefaultsV2Tests(unittest.TestCase):
         # Ensure it doesn't run the start script blindly in the background
         self.assertNotIn("nohup ./scripts/start_fusion_reader_v2.sh", open_script)
         # Ensure it runs it synchronously and checks the exit code
-        self.assertIn("if ! ./scripts/start_fusion_reader_v2.sh >>\"$LOG_FILE\" 2>&1; then", open_script)
+        self.assertIn('if ! ./scripts/start_fusion_reader_v2.sh >>"$LOG_FILE" 2>&1; then', open_script)
         # Ensure it displays error using zenity or notify-send
         self.assertIn("zenity --error", open_script)
         self.assertIn("notify-send", open_script)
