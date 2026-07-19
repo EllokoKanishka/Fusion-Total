@@ -142,3 +142,13 @@ if command -v xdg-open >/dev/null 2>&1; then
 else
   sensible-browser "$URL" >/dev/null 2>&1 &
 fi
+
+# Prevent systemd/launcher cgroup cleanup from killing the background server
+# by keeping the script alive as long as the server is running.
+PID_FILE="$LOG_DIR/fusion_reader_v2.pid"
+if [[ -f "$PID_FILE" ]]; then
+  server_pid="$(cat "$PID_FILE")"
+  if kill -0 "$server_pid" 2>/dev/null; then
+    tail --pid="$server_pid" -f /dev/null 2>/dev/null || while kill -0 "$server_pid" 2>/dev/null; do sleep 5; done
+  fi
+fi
