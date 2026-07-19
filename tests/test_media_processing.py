@@ -128,6 +128,47 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertNotIn("— Traducción al castellano", app.session.document.text)
                 self.assertTrue(context.shutdown_jobs()["ok"])
 
+    def test_selectable_outputs_skip_unrequested_artifacts_and_completed_job_closes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tts = SyntheticWavTTSProvider()
+            with managed_test_app(
+                root=root / "app",
+                tts=tts,
+                stt=NullSTTProvider("Technology changes institutions."),
+            ) as app:
+                context = self.context(root, app)
+                source = root / "selective.wav"
+                write_wav(source)
+                started = context.media.start(
+                    operation="translate",
+                    filename=source.name,
+                    mime="audio/wav",
+                    input_path=source,
+                    voice="female_03.wav",
+                    include_original_pdf=False,
+                    include_translated_pdf=True,
+                    include_spanish_audio=False,
+                )
+                job_id = str(started["job_id"])
+                status = wait_for_media(context, job_id)
+                self.assertEqual(status["state"], "done", status)
+                self.assertEqual(set(status["output"]), {"translated_pdf"})
+                self.assertFalse(tts.calls)
+
+                translated = context.media.artifact(job_id, "translated-pdf")
+                translated_path = Path(str(translated["path"]))
+                self.assertTrue(translated_path.is_file())
+                mounted = context.media.mount(job_id)
+                self.assertTrue(mounted["mounted"])
+                self.assertEqual(app.status()["document"]["source_type"], "media_translation")
+
+                closed = context.media.cancel(job_id)
+                self.assertEqual(closed["state"], "idle")
+                self.assertEqual(context.media.overview()["state"], "idle")
+                self.assertTrue(translated_path.is_file())
+                self.assertTrue(context.shutdown_jobs()["ok"])
+
     def test_media_without_audio_fails_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
