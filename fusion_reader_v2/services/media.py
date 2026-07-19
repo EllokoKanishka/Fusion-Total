@@ -152,7 +152,15 @@ class MediaProcessingService:
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
             if job.terminal:
-                return job.to_dict()
+                if job.state not in {"error", "cancelled"}:
+                    return job.to_dict()
+                self.registry.remove(job.job_id)
+                (self.manifest_root / f"{job.job_id}.json").unlink(missing_ok=True)
+                if self.active_job_id == job.job_id:
+                    self.active_job_id = ""
+                if self.latest_job_id == job.job_id:
+                    self.latest_job_id = ""
+                return self._idle_status()
             job.cancel_requested = True
             job.state = "canceling"
             job.detail = "Cancelando procesamiento..."
@@ -467,7 +475,9 @@ class MediaProcessingService:
                 "audio_path",
                 "mounted",
             }
-            if job.terminal or durable_fields.intersection(changes):
+            if job.state in {"error", "cancelled"}:
+                (self.manifest_root / f"{job.job_id}.json").unlink(missing_ok=True)
+            elif job.terminal or durable_fields.intersection(changes):
                 self._persist_job(job)
 
     def _persist_job(self, job: MediaJob) -> None:
@@ -490,7 +500,10 @@ class MediaProcessingService:
                 return None
             allowed = {item.name for item in fields(MediaJob)}
             job = MediaJob(**{key: value for key, value in raw.items() if key in allowed})
-            if job.job_id != job_id or not job.terminal:
+            if job.job_id != job_id:
+                return None
+            if job.state != "done":
+                (self.manifest_root / f"{job_id}.json").unlink(missing_ok=True)
                 return None
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return None

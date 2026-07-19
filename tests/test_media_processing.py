@@ -148,6 +148,41 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertFalse(source.exists())
                 self.assertTrue(context.shutdown_jobs()["ok"])
 
+    def test_failed_job_can_be_dismissed_and_legacy_manifest_is_not_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(root=root / "app") as app:
+                context = self.context(root, app)
+                source = root / "broken-media.txt"
+                source.write_text("not media", encoding="utf-8")
+                started = context.media.start(
+                    operation="translate",
+                    filename=source.name,
+                    mime="text/plain",
+                    input_path=source,
+                    voice=app.voice.voice,
+                )
+                job_id = str(started["job_id"])
+                status = wait_for_media(context, job_id)
+                self.assertEqual(status["state"], "error")
+
+                manifest = context.media.manifest_root / f"{job_id}.json"
+                self.assertFalse(manifest.exists())
+
+                # Simulate a stale failure manifest written by an older release.
+                context.media._persist_job(context.media.jobs[job_id])
+                self.assertTrue(manifest.exists())
+                restarted_context = self.context(root, app)
+                self.assertEqual(restarted_context.media.overview()["state"], "idle")
+                self.assertFalse(manifest.exists())
+
+                dismissed = context.media.cancel(job_id)
+                self.assertEqual(dismissed["state"], "idle")
+                self.assertEqual(context.media.overview()["state"], "idle")
+                self.assertNotIn(job_id, context.media.jobs)
+                self.assertTrue(restarted_context.shutdown_jobs()["ok"])
+                self.assertTrue(context.shutdown_jobs()["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,23 +65,28 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     elements.mediaAudioDownload
   ].forEach(bindDownload);
 
-  function setBusy(busy) {
+  function setBusy(busy, dismissible = false) {
     [elements.mediaTranscribeBtn, elements.mediaTranslateBtn].forEach(button => {
       if (button) button.disabled = Boolean(busy);
     });
-    if (elements.mediaCancelBtn) elements.mediaCancelBtn.disabled = !busy;
+    if (elements.mediaCancelBtn) {
+      elements.mediaCancelBtn.disabled = !(busy || dismissible);
+      elements.mediaCancelBtn.textContent = dismissible ? 'Cerrar' : 'Cancelar';
+    }
   }
 
   function render(data) {
     if (!data || !elements.mediaInfo) return;
     const state = String(data.state || 'idle');
     const operation = data.operation === 'translate' ? 'Traducción' : 'Transcripción';
+    const diagnostic = state === 'error' && data.error ? ` Detalle técnico: ${data.error}` : '';
     elements.mediaInfo.textContent = state === 'idle'
       ? (data.detail || 'Sin procesamiento multimedia activo.')
-      : `${operation}: ${data.detail || data.stage || state}`;
+      : `${operation}: ${data.detail || data.stage || state}${diagnostic}`;
     if (elements.mediaProgress) elements.mediaProgress.value = Number(data.progress || 0);
     const running = ['queued', 'running', 'canceling'].includes(state);
-    setBusy(running);
+    const dismissible = ['error', 'cancelled'].includes(state);
+    setBusy(running, dismissible);
     if (elements.mediaMountBtn) {
       elements.mediaMountBtn.disabled = state !== 'done';
       elements.mediaMountBtn.classList.toggle('is-hidden', state !== 'done');
@@ -91,6 +96,7 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     setLink(elements.mediaTranslatedPdfDownload, output.translated_pdf, 'PDF en castellano');
     setLink(elements.mediaAudioDownload, output.audio, 'audio en castellano');
     if (data.job_id) pollingJobId = String(data.job_id);
+    else if (state === 'idle') pollingJobId = '';
     if (running) schedulePoll();
     else clearPoll();
   }
