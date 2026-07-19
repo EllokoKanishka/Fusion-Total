@@ -502,10 +502,8 @@ class MediaProcessingService:
             job = MediaJob(**{key: value for key, value in raw.items() if key in allowed})
             if job.job_id != job_id:
                 return None
-            if job.state in {"error", "cancelled"}:
-                (self.manifest_root / f"{job_id}.json").unlink(missing_ok=True)
-                return None
             if job.state != "done":
+                (self.manifest_root / f"{job_id}.json").unlink(missing_ok=True)
                 return None
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return None
