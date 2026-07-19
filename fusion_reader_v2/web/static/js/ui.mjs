@@ -12,9 +12,9 @@ const ELEMENT_IDS = [
   'reasoningThinkingBtn', 'reasoningSupremeBtn', 'reasoningPensamientoCriticoBtn', 'profileSelect',
   'veilSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',
   'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect'
-  , 'mediaTranscribeBtn', 'mediaTranscribeInput', 'mediaTranslateBtn', 'mediaTranslateInput',
-  'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn', 'mediaPdfDownload',
-  'mediaTranslatedPdfDownload', 'mediaAudioDownload'
+  , 'mediaTranslateBtn', 'mediaTranslateInput', 'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle',
+  'mediaSpanishAudioToggle', 'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',
+  'mediaPdfDownload', 'mediaTranslatedPdfDownload', 'mediaAudioDownload'
 ];
 
 export function collectElements(documentRoot = document) {
