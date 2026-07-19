@@ -432,6 +432,7 @@ function renderStatus(data) {
   renderReasoningStatus(data.reasoning || {});
   renderProfileStatus(data.profile || {});
   renderVeilStatus(data.veil || {});
+  renderChatProviderStatus(data.chat_provider || {});
   renderLaboratoryMode(data.laboratory_mode || {});
   if (!dialogue.active && !dialogue.processing && !dialogue.speaking) {
     setDialogueInfo(`Diálogo apagado. ${laboratoryModeSummary()}`);
@@ -730,6 +731,43 @@ function renderVeilStatus(veilInfo) {
   }
   els.veilSelect.value = mode;
   els.veilSelect.title = item.description || '';
+}
+
+function renderChatProviderStatus(providerInfo) {
+  const item = providerInfo && typeof providerInfo === 'object' ? providerInfo : {};
+  const selected = String(item.id || 'local');
+  const available = Array.isArray(item.available) ? item.available : [];
+  if (available.length > 0) {
+    els.chatProviderSelect.replaceChildren();
+    for (const provider of available) {
+      const opt = document.createElement('option');
+      opt.value = String(provider.id || '');
+      opt.textContent = `IA: ${String(provider.label || provider.id || '')}`;
+      opt.title = provider.cloud ? 'Este modo envía el contexto conversacional a OpenAI.' : 'Procesamiento local.';
+      els.chatProviderSelect.appendChild(opt);
+    }
+  }
+  els.chatProviderSelect.value = selected;
+  const active = available.find(provider => String(provider.id || '') === selected) || item;
+  els.chatProviderSelect.title = active.cloud
+    ? 'OpenAI vía el agente aislado fusion-dialogue. La voz continúa siendo local.'
+    : 'Modelo local 14B. El contenido no sale de la computadora.';
+}
+
+async function setChatProvider(providerId) {
+  const target = String(providerId || '').trim();
+  try {
+    const data = await api('/api/chat/provider', { provider: target });
+    if (!data.ok) throw new Error(data.error || 'No se pudo cambiar la IA');
+    if (!status) status = {};
+    status.chat_provider = data;
+    renderChatProviderStatus(data);
+    const destination = data.cloud ? 'OpenAI mediante OpenClaw' : 'el modelo local 14B';
+    log(`Diálogo conectado con ${destination}. La voz neural sigue siendo local.`);
+  } catch (err) {
+    log(`No pude cambiar el proveedor de diálogo: ${err.message}`);
+    if (status && status.chat_provider) renderChatProviderStatus(status.chat_provider);
+  }
 }
 
 async function setProfileMode(mode) {
@@ -1745,6 +1783,7 @@ els.reasoningSupremeBtn.addEventListener('click', () => setReasoningMode('suprem
 els.reasoningPensamientoCriticoBtn.addEventListener('click', () => setReasoningMode('pensamiento_critico'));
 els.profileSelect.addEventListener('change', event => setProfileMode(event.target.value));
 els.veilSelect.addEventListener('change', event => setVeilMode(event.target.value));
+els.chatProviderSelect.addEventListener('change', event => setChatProvider(event.target.value));
 els.voiceSelect.addEventListener('change', changeVoice);
 els.freeModeBtn.addEventListener('click', () => setLaboratoryMode(currentLaboratoryMode() === 'free' ? 'document' : 'free'));
 els.dialogueBtn.addEventListener('click', toggleDialogue);

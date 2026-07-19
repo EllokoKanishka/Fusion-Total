@@ -23,6 +23,7 @@ class SessionPreferences:
     laboratory_mode: str
     profile: str
     veil: str
+    chat_provider: str = "local"
 
 
 class SessionPersistenceService:
@@ -75,6 +76,7 @@ class SessionPersistenceService:
             "laboratory_mode": preferences.laboratory_mode,
             "profile": preferences.profile,
             "veil": preferences.veil,
+            "chat_provider": preferences.chat_provider,
             "voice": self.voice.voice,
             "reference_documents": [
                 {
@@ -114,6 +116,7 @@ class SessionPersistenceService:
             laboratory_mode="free" if str(raw.get("laboratory_mode") or "").strip().lower() == "free" else "document",
             profile=str(raw.get("profile") or "academica").strip().lower(),
             veil=str(raw.get("veil") or "lucy").strip().lower(),
+            chat_provider=str(raw.get("chat_provider") or current.chat_provider or "local").strip().lower(),
         )
         self.apply_preferences(preferences)
         saved_voice = str(raw.get("voice") or "").strip()

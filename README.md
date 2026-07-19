@@ -28,6 +28,8 @@ loopback por defecto.
 - preparación y exportación WAV cancelables;
 - referencias, promoción, notas y recuperación de sesión;
 - diálogo sobre la lectura mediante STT/LLM opcionales;
+- selector de inteligencia para diálogo: `Local 14B` por defecto u OpenAI
+  mediante el agente OpenClaw aislado `fusion-dialogue`;
 - investigación externa sólo ante pedido explícito;
 - conversión auxiliar PDF a DOCX.
 
@@ -39,6 +41,10 @@ loopback por defecto.
 - `7852` está sin asignar y `7854` pertenece a Doctora/Antigravity;
 - investigación automática: SearXNG local, luego OpenClaw `fusion-research`;
 - Fusion nunca usa OpenClaw `main` ni modifica sistemas externos.
+
+La integración opcional con OpenAI no reemplaza la voz ni la lectura local.
+Consultá [docs/OPENAI_DIALOGUE_PROVIDER.md](docs/OPENAI_DIALOGUE_PROVIDER.md)
+para la autenticación OAuth, la frontera de privacidad y la instalación.
 
 ## Operación
 

@@ -118,6 +118,7 @@ def create_router() -> Router:
         "/api/laboratory/mode",
         "/api/profile",
         "/api/veil",
+        "/api/chat/provider",
         "/api/voice",
         "/api/laboratory/reset",
         "/api/chat/reset",

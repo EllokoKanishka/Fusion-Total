@@ -48,10 +48,17 @@ class WebContext:
             is_terminal=lambda _item: True,
             updated_at=lambda item: float(item.get("created_ts") or 0),
         )
+        # The OpenAI selector is deliberately scoped to reader conversations.
+        # Multimedia translation remains local so choosing cloud dialogue never
+        # uploads a conference, recording, or book as a side effect.
+        media_chat = self.app.conversation.provider
+        chat_providers = getattr(media_chat, "providers", {})
+        if isinstance(chat_providers, dict):
+            media_chat = chat_providers.get("local", media_chat)
         self.media = MediaProcessingService(
             reader=self.app,
             stt=self.app.stt,
-            chat=self.app.conversation.provider,
+            chat=media_chat,
             synthesize=self.app.synthesize_for_export,
             runtime_root=self.media_root,
             converted_root=self.converted_root,

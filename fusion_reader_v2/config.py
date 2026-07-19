@@ -136,6 +136,11 @@ class ProviderSettings:
     stt_threads: int
     ollama_url: str
     chat_model: str
+    chat_provider: str
+    openai_chat_model: str
+    openai_chat_agent: str
+    openai_chat_timeout_seconds: float
+    openai_chat_enabled: bool
     research_provider: str
     searxng_url: str
     searxng_timeout_seconds: float
@@ -158,6 +163,10 @@ class ProviderSettings:
             raise ConfigurationError("invalid external research provider")
         if self.stt_provider not in {"auto", "server", "cli", "none"}:
             raise ConfigurationError("invalid STT provider")
+        if self.chat_provider not in {"local", "openai"}:
+            raise ConfigurationError("invalid chat provider")
+        if self.openai_chat_agent != "fusion-dialogue":
+            raise ConfigurationError("Fusion OpenAI dialogue must use the fusion-dialogue OpenClaw agent")
         if self.openclaw_agent != "fusion-research":
             raise ConfigurationError("Fusion external research must use the fusion-research OpenClaw agent")
 
@@ -256,6 +265,11 @@ def create_settings(
             stt_threads=_integer(env, "FUSION_READER_STT_THREADS", 8, minimum=1),
             ollama_url=(env.get("FUSION_READER_OLLAMA_URL") or f"http://127.0.0.1:{ports.ollama}").rstrip("/"),
             chat_model=env.get("FUSION_READER_CHAT_MODEL", "qwen3:14b-q8_0"),
+            chat_provider=env.get("FUSION_READER_CHAT_PROVIDER", "local").strip().lower(),
+            openai_chat_model=env.get("FUSION_READER_OPENAI_CHAT_MODEL", "openai/gpt-5.6-sol").strip(),
+            openai_chat_agent=env.get("FUSION_READER_OPENAI_CHAT_AGENT", "fusion-dialogue").strip(),
+            openai_chat_timeout_seconds=_floating(env, "FUSION_READER_OPENAI_CHAT_TIMEOUT", 180.0, minimum=10.0),
+            openai_chat_enabled=_truthy(env.get("FUSION_READER_OPENAI_CHAT_ENABLED"), default=True),
             research_provider=env.get("FUSION_READER_EXTERNAL_RESEARCH_PROVIDER", "auto").strip().lower(),
             searxng_url=(env.get("FUSION_READER_SEARXNG_URL") or f"http://127.0.0.1:{ports.searxng}").rstrip("/"),
             searxng_timeout_seconds=_floating(env, "FUSION_READER_SEARXNG_TIMEOUT", 12.0, minimum=0.1),

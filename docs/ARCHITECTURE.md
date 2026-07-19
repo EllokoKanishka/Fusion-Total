@@ -284,6 +284,22 @@ STT:
 stdio fusion_memory_mcp_server.py
 ```
 
+## Proveedor seleccionable de diálogo
+
+`ConversationCore` conserva la construcción de contexto, perfiles, velos,
+historial y modos de razonamiento. `SelectableChatProvider` cambia únicamente
+el último adaptador:
+
+```text
+ConversationCore -> Local: Ollama qwen3 14B
+                 -> Cloud: OpenClaw fusion-dialogue -> OpenAI
+```
+
+La selección persiste en la sesión y nunca cambia STT, TTS, navegación,
+lectura ni caché. El servicio multimedia recibe expresamente el provider local:
+seleccionar OpenAI en Dialogar no sube audios, videos o libros. Tampoco existe
+fallback silencioso entre nube y local.
+
 ## Lifecycle operativo
 
 - `scripts/start_fusion_reader_v2.sh`

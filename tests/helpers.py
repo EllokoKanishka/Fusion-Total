@@ -67,7 +67,12 @@ def close_test_app(app, timeout: float = 10.0) -> None:
 
 @contextmanager
 def managed_test_app(
-    tts=None, stt=None, root: Path | None = None, external_research=None, audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT
+    tts=None,
+    stt=None,
+    root: Path | None = None,
+    external_research=None,
+    audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT,
+    conversation=None,
 ):
     app = test_app(
         tts=tts,
@@ -75,6 +80,7 @@ def managed_test_app(
         root=root,
         external_research=external_research,
         audio_export_root=audio_export_root,
+        conversation=conversation,
         register_cleanup=False,
     )
     try:
@@ -89,6 +95,7 @@ def test_app(
     root: Path | None = None,
     external_research=None,
     audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT,
+    conversation=None,
     register_cleanup: bool = True,
 ) -> FusionReaderV2:
     tempdir = None
@@ -112,7 +119,7 @@ def test_app(
         cache=AudioCache(root / "audio_cache"),
         metrics=VoiceMetricsStore(root / "voice_metrics.jsonl"),
         notes=ReaderNotesStore(root / "notes"),
-        conversation=ConversationCore(NullChatProvider("Entendido.")),
+        conversation=conversation or ConversationCore(NullChatProvider("Entendido.")),
         external_research=external_research
         or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
         session_state_path=root / "session_state.json",

@@ -166,6 +166,20 @@ provider sin iniciar ni cargar modelos pesados.
 3. si `Dialogar` devuelve texto humano de error, no tocar `Leer`
 4. relanzar Ollama y reintentar una pregunta corta
 
+## Si OpenAI mediante OpenClaw no responde
+
+1. volver a `IA: Local 14B`; la lectura y la voz siguen disponibles
+2. revisar `GET /api/dialogue/status` y el objeto `chat_provider`
+3. confirmar que existe el binario indicado por `FUSION_READER_OPENCLAW_BIN`
+4. ejecutar `openclaw models list --provider openai`
+5. si la sesión OAuth venció, ejecutar personalmente
+   `openclaw models auth login --provider openai`
+6. verificar el agente sin mutar nada con
+   `python3 scripts/setup_fusion_openai_dialogue.py`
+
+La instalación y las fronteras de privacidad están en
+`docs/OPENAI_DIALOGUE_PROVIDER.md`.
+
 ## Si SearXNG está caído
 
 1. revisar `curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head`
