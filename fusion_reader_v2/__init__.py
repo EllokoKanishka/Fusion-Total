@@ -1,7 +1,14 @@
 """Fusion Reader v2: voice-first conversational reader core."""
 
 from .documents import ImportedDocument, import_document_bytes, import_document_path
-from .conversation import ChatResult, ConversationCore, NullChatProvider, OllamaChatProvider
+from .conversation import (
+    ChatResult,
+    ConversationCore,
+    NullChatProvider,
+    OllamaChatProvider,
+    OpenClawChatProvider,
+    SelectableChatProvider,
+)
 from .dialogue import (
     AutoSTTProvider,
     FasterWhisperServerSTTProvider,
@@ -50,6 +57,7 @@ __all__ = [
     "NullExternalResearchBridge",
     "NullSTTProvider",
     "OllamaChatProvider",
+    "OpenClawChatProvider",
     "OpenClawResearchBridge",
     "ReaderNote",
     "ReaderNotesStore",
@@ -57,6 +65,7 @@ __all__ = [
     "SearxngResearchBridge",
     "STTProvider",
     "Settings",
+    "SelectableChatProvider",
     "TranscriptResult",
     "VoiceMetric",
     "VoiceMetricsStore",

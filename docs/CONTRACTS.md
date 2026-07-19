@@ -35,6 +35,8 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 - notes CRUD;
 - document chat and explicit external research;
 - text/audio dialogue and reset;
+- explicit dialogue-provider selection (`local` or `openai`) through
+  `POST /api/chat/provider`; the selected value is session-persistent;
 - laboratory anchor, profile, veil, and reasoning modes;
 - deterministic background shutdown.
 
@@ -102,3 +104,8 @@ Reading never requires STT, an LLM, or research. External research activates
 only on an explicit request and uses SearXNG first, then the isolated OpenClaw
 `fusion-research` agent. Fusion never routes through OpenClaw `main`, port
 7852, or port 7854.
+
+OpenAI dialogue is a separate, explicit capability and may only use the
+`fusion-dialogue` agent. It changes the conversation `ChatProvider` while STT,
+TTS, reading and multimedia processing remain local. A provider failure must
+not interrupt reader controls and must not silently fall back to another model.

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from unicodedata import normalize
 
-from .config import environment_has, environment_value
+from .config import environment_copy, environment_has, environment_value
+from .owned_subprocess import run_owned
 
 
 @dataclass(frozen=True)
@@ -162,6 +168,239 @@ class OllamaChatProvider(ChatProvider):
             return ChatResult(
                 False, model=selected_model, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
             )
+
+
+class OpenClawChatProvider(ChatProvider):
+    """Run a text-only Fusion dialogue turn through an isolated OpenClaw agent."""
+
+    name = "openclaw"
+
+    def __init__(
+        self,
+        command: str = "",
+        agent: str = "fusion-dialogue",
+        default_model: str = "openai/gpt-5.6-sol",
+        timeout_seconds: float = 180.0,
+        enabled: bool = True,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        self.command = (
+            command
+            or environment_value("FUSION_READER_OPENCLAW_BIN")
+            or str(Path.home() / ".openclaw" / "bin" / "openclaw")
+        )
+        self.agent = str(agent or "fusion-dialogue").strip()
+        self.default_model = str(default_model or "openai/gpt-5.6-sol").strip()
+        self.timeout_seconds = max(10.0, float(timeout_seconds))
+        self.enabled = bool(enabled)
+        self.environment = dict(environment) if environment is not None else None
+
+    def available(self) -> bool:
+        if not self.enabled or self.agent != "fusion-dialogue":
+            return False
+        if os.path.isabs(self.command):
+            return Path(self.command).is_file()
+        return shutil.which(self.command) is not None
+
+    def health(self) -> dict:
+        available = self.available()
+        return {
+            "ok": available,
+            "provider": self.name,
+            "command": self.command,
+            "agent": self.agent,
+            "model": self.default_model,
+            "cloud": True,
+            "detail": "configured" if available else ("disabled" if not self.enabled else "openclaw_unavailable"),
+        }
+
+    @staticmethod
+    def _messages_as_prompt(messages: list[dict]) -> str:
+        sections = [
+            "Esta es una solicitud conversacional de Fusion Reader v2.",
+            (
+                "No uses herramientas, no investigues afuera y no ejecutes acciones. "
+                "Respondé solamente con el texto final."
+            ),
+            "Respetá la jerarquía SYSTEM > USER > ASSISTANT de la conversación serializada.",
+        ]
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "user").strip().upper()
+            content = str(item.get("content") or "").strip()
+            if content:
+                sections.append(f"<{role}>\n{content}\n</{role}>")
+        sections.append("Devolvé únicamente la respuesta final para el último mensaje USER.")
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _extract_answer(raw: str) -> tuple[str, str, str]:
+        try:
+            payload = json.loads(str(raw or "").strip())
+        except (TypeError, ValueError):
+            return "", "", "openclaw_invalid_json"
+        if not isinstance(payload, dict):
+            return "", "", "openclaw_invalid_json"
+        result_value = payload.get("result")
+        result = result_value if isinstance(result_value, dict) else {}
+        meta_value = result.get("meta")
+        meta = meta_value if isinstance(meta_value, dict) else {}
+        agent_meta_value = meta.get("agentMeta")
+        agent_meta = agent_meta_value if isinstance(agent_meta_value, dict) else {}
+        model = str(agent_meta.get("model") or "").strip()
+        payloads_value = result.get("payloads")
+        payloads = payloads_value if isinstance(payloads_value, list) else []
+        answer = "\n".join(
+            str(item.get("text") or "").strip()
+            for item in payloads
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ).strip()
+        stop_reason = str(result.get("stopReason") or "").strip().lower()
+        if stop_reason == "error":
+            return "", model, "openclaw_agent_error"
+        if not answer:
+            return "", model, "empty_answer"
+        return answer, model, ""
+
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
+        del num_predict
+        started = time.perf_counter()
+        selected_model = str(model or self.default_model).strip()
+        if not self.enabled:
+            return ChatResult(False, model=selected_model, detail="openclaw_disabled")
+        if not self.available():
+            return ChatResult(False, model=selected_model, detail="openclaw_unavailable")
+        prompt = self._messages_as_prompt(messages)
+        env = dict(self.environment) if self.environment is not None else environment_copy()
+        env["PATH"] = f"{Path.home() / '.openclaw' / 'bin'}:{env.get('PATH', '')}"
+        thinking = "off"
+        if bool(think):
+            thinking = environment_value("FUSION_READER_OPENAI_THINKING_LEVEL", "medium") or "medium"
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", prefix="fusion_dialogue_", suffix=".txt", delete=False
+            ) as handle:
+                handle.write(prompt)
+                temp_path = handle.name
+            cmd = [
+                self.command,
+                "agent",
+                "--local",
+                "--agent",
+                self.agent,
+                "--model",
+                selected_model,
+                "--thinking",
+                thinking,
+                "--json",
+                "--timeout",
+                str(int(self.timeout_seconds)),
+                "--message-file",
+                temp_path,
+            ]
+            proc = run_owned(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds + 5.0,
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return ChatResult(
+                False,
+                model=selected_model,
+                detail="openclaw_timeout",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
+        except Exception as exc:
+            return ChatResult(
+                False,
+                model=selected_model,
+                detail=f"openclaw_error:{exc}",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        raw = (proc.stdout or proc.stderr or "").strip()
+        answer, reported_model, detail = self._extract_answer(raw)
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        if proc.returncode != 0 and not answer:
+            return ChatResult(
+                False,
+                model=reported_model or selected_model,
+                detail=detail or f"openclaw_exit_{proc.returncode}",
+                duration_ms=duration_ms,
+            )
+        if detail:
+            return ChatResult(False, model=reported_model or selected_model, detail=detail, duration_ms=duration_ms)
+        return ChatResult(True, answer=answer, model=reported_model or selected_model, duration_ms=duration_ms)
+
+
+class SelectableChatProvider(ChatProvider):
+    """Switch between compatible chat providers without rebuilding ConversationCore."""
+
+    name = "selectable_chat"
+
+    def __init__(self, providers: dict[str, ChatProvider], selected: str = "local") -> None:
+        if not providers:
+            raise ValueError("at least one chat provider is required")
+        self.providers = dict(providers)
+        self.selected = selected if selected in self.providers else next(iter(self.providers))
+
+    @property
+    def active(self) -> ChatProvider:
+        return self.providers[self.selected]
+
+    @property
+    def default_model(self) -> str:
+        return str(getattr(self.active, "default_model", "") or "")
+
+    def select(self, provider_id: str) -> str:
+        clean = str(provider_id or "").strip().lower()
+        if clean not in self.providers:
+            raise ValueError("invalid_chat_provider")
+        self.selected = clean
+        return self.selected
+
+    def catalog(self) -> list[dict]:
+        labels = {"local": "Local 14B", "openai": "OpenAI vía OpenClaw"}
+        return [
+            {
+                "id": provider_id,
+                "label": labels.get(provider_id, provider_id),
+                "model": str(getattr(provider, "default_model", "") or ""),
+                "cloud": provider_id == "openai",
+            }
+            for provider_id, provider in self.providers.items()
+        ]
+
+    def health(self) -> dict:
+        active = dict(self.active.health() or {})
+        return {
+            **active,
+            "ok": bool(active.get("ok")),
+            "provider": self.name,
+            "selected": self.selected,
+            "active_provider": str(active.get("provider") or getattr(self.active, "name", self.selected)),
+            "available": self.catalog(),
+        }
+
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
+        selected_model = str(model or "").strip()
+        if self.selected == "openai" and selected_model and not selected_model.startswith("openai/"):
+            selected_model = ""
+        return self.active.chat(messages, model=selected_model, think=think, num_predict=num_predict)
 
 
 class NullChatProvider(ChatProvider):

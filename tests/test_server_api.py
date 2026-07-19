@@ -114,6 +114,14 @@ class ServerAPITests(unittest.TestCase):
         self.assertIn('id="profileSelect"', server)
         self.assertIn('id="veilSelect"', server)
 
+    def test_server_ui_contains_local_openai_selector_and_endpoint(self):
+        server = _web_source()
+        routing = Path("fusion_reader_v2/web/routing.py").read_text(encoding="utf-8")
+        self.assertIn('id="chatProviderSelect"', server)
+        self.assertIn("IA: OpenAI", server)
+        self.assertIn("/api/chat/provider", server)
+        self.assertIn("/api/chat/provider", routing)
+
     def test_start_fusion_reader_v2_bohemia_script_is_valid(self):
         script = Path("scripts/start_fusion_reader_v2_bohemia.sh").read_text(encoding="utf-8")
         self.assertIn("FUSION_READER_BOHEMIA_CHAT_MODEL", script)

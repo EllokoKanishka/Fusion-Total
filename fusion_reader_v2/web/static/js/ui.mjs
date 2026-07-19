@@ -10,7 +10,7 @@ const ELEMENT_IDS = [
   'log', 'player', 'prevBtn', 'readBtn', 'repeatBtn', 'nextBtn', 'jumpInput', 'jumpBtn',
   'continuousToggle', 'chatLog', 'chatInput', 'sendChatBtn', 'clearLabHistoryBtn', 'reasoningNormalBtn',
   'reasoningThinkingBtn', 'reasoningSupremeBtn', 'reasoningPensamientoCriticoBtn', 'profileSelect',
-  'veilSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',
+  'veilSelect', 'chatProviderSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',
   'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect'
   , 'mediaTranslateBtn', 'mediaTranslateInput', 'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle',
   'mediaSpanishAudioToggle', 'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',

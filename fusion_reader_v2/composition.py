@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .config import ProviderSettings, Settings, create_settings
-from .conversation import ConversationCore, OllamaChatProvider
+from .conversation import ConversationCore, OllamaChatProvider, OpenClawChatProvider, SelectableChatProvider
 from .dialogue import (
     AutoSTTProvider,
     FasterWhisperServerSTTProvider,
@@ -44,9 +44,21 @@ def create_providers(settings: Settings) -> ProviderBundle:
         owner_file=settings.providers.tts_owner_file,
     )
     conversation = ConversationCore(
-        OllamaChatProvider(
-            base_url=settings.providers.ollama_url,
-            default_model=settings.providers.chat_model,
+        SelectableChatProvider(
+            {
+                "local": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=settings.providers.chat_model,
+                ),
+                "openai": OpenClawChatProvider(
+                    command=settings.providers.openclaw_command,
+                    agent=settings.providers.openai_chat_agent,
+                    default_model=settings.providers.openai_chat_model,
+                    timeout_seconds=settings.providers.openai_chat_timeout_seconds,
+                    enabled=settings.providers.openai_chat_enabled,
+                ),
+            },
+            selected=settings.providers.chat_provider,
         )
     )
     return ProviderBundle(

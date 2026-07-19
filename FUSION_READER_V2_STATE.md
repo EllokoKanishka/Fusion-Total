@@ -53,6 +53,9 @@ y laboratorio, no como dependencia del producto v2.
   normaliza a FLAC, Whisper transcribe con idioma y tiempos, ReportLab genera
   PDF y, opcionalmente, Ollama traduce al castellano antes de reutilizar el TTS
   y la voz seleccionada para exportar WAV.
+- diálogo: `Local 14B` sigue siendo el default; el usuario puede seleccionar
+  OpenAI explícitamente mediante OpenClaw `fusion-dialogue`. La voz, la lectura
+  y multimedia permanecen locales y no hay fallback silencioso.
 
 ## Persistencia
 

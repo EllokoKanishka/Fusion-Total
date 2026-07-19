@@ -28,6 +28,7 @@ def handle_dialogue_post(responder: DialogueResponder, path: str, payload: dict)
         "/api/laboratory/mode": lambda: responder.app.set_laboratory_mode(str(payload.get("mode") or "")),
         "/api/profile": lambda: responder.app.set_profile(str(payload.get("mode") or "")),
         "/api/veil": lambda: responder.app.set_veil(str(payload.get("mode") or "")),
+        "/api/chat/provider": lambda: responder.app.set_chat_provider(str(payload.get("provider") or "")),
     }
     handler = handlers.get(path)
     if handler is not None:

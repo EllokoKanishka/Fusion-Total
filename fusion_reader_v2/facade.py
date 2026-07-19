@@ -915,6 +915,14 @@ class FusionReaderV2:
         out.setdefault("model", getattr(provider, "default_model", "") or "")
         return out
 
+    def _active_chat_provider_name(self) -> str:
+        provider = getattr(self.conversation, "provider", None)
+        active = getattr(provider, "active", None)
+        if active is not None:
+            return str(getattr(active, "name", "") or getattr(provider, "selected", "") or "chat")
+        # Preserve the historical trace contract for directly injected test and legacy providers.
+        return "ollama"
+
     def _external_research_health(self) -> dict:
         return self._research_service.health()
         """Compatibility implementation retained below for stable blame history."""
@@ -1008,6 +1016,27 @@ class FusionReaderV2:
                 return ""
             return "No pude entender bien el audio que llegó a Dialogar. Probemos otra vez con una frase más clara."
         if stage == "chat":
+            cloud = str(provider or "").strip().lower() in {"openai", "openclaw"}
+            if cloud:
+                if clean_detail == "empty_answer":
+                    return (
+                        "Me quedé sin respuesta útil de OpenAI mediante OpenClaw. "
+                        "Repetímelo en una frase corta y vuelvo a intentarlo."
+                    )
+                if (
+                    "http_" in clean_detail
+                    or "Connection refused" in clean_detail
+                    or "timed out" in clean_detail
+                    or clean_detail == "openclaw_timeout"
+                ):
+                    return (
+                        "OpenAI mediante OpenClaw no respondió a tiempo desde Fusion. "
+                        "La lectura sigue sana; probemos otra vez en unos segundos."
+                    )
+                return (
+                    "Se cayó el diálogo con OpenAI mediante OpenClaw justo cuando estaba respondiendo. "
+                    "La lectura sigue sana; si querés, repetímelo y lo intento de nuevo."
+                )
             if clean_detail == "empty_answer":
                 return (
                     "Me quedé sin respuesta útil del modelo local. Repetímelo en una frase corta y vuelvo a intentarlo."
@@ -1088,6 +1117,7 @@ class FusionReaderV2:
         out["laboratory_mode"] = self.laboratory_mode_status()
         out["profile"] = self.profile_status()
         out["veil"] = self.veil_status()
+        out["chat_provider"] = self.chat_provider_status()
         main_record = self._main_document_record()
         total = int(out.get("total") or 0)
         current = int(out.get("current") or 0)
@@ -2080,7 +2110,50 @@ class FusionReaderV2:
         return self._dialogue_service.clear_history()
 
     def dialogue_status(self) -> dict:
-        return self._dialogue_service.status()
+        out = self._dialogue_service.status()
+        out["chat_provider"] = self.chat_provider_status()
+        return out
+
+    def chat_provider_status(self) -> dict:
+        provider = getattr(self.conversation, "provider", None)
+        if provider is None:
+            return {"id": "unknown", "label": "No disponible", "selected": True, "available": []}
+        selected = str(getattr(provider, "selected", "local") or "local")
+        catalog = provider.catalog() if hasattr(provider, "catalog") else []
+        if not catalog:
+            catalog = [
+                {
+                    "id": selected,
+                    "label": "Local 14B" if selected == "local" else selected,
+                    "model": str(getattr(provider, "default_model", "") or ""),
+                    "cloud": selected == "openai",
+                }
+            ]
+        active = next((item for item in catalog if str(item.get("id") or "") == selected), catalog[0])
+        health = provider.health() if hasattr(provider, "health") else {}
+        return {
+            **active,
+            "id": selected,
+            "selected": True,
+            "ready": bool((health or {}).get("ok")),
+            "detail": str((health or {}).get("detail") or ""),
+            "active_provider": str((health or {}).get("active_provider") or (health or {}).get("provider") or ""),
+            "available": catalog,
+        }
+
+    def set_chat_provider(self, provider_id: str) -> dict:
+        provider = getattr(self.conversation, "provider", None)
+        if provider is None or not hasattr(provider, "select"):
+            return {"ok": False, "error": "chat_provider_not_selectable"}
+        try:
+            selected = provider.select(provider_id)
+        except ValueError:
+            return {"ok": False, "error": "invalid_chat_provider"}
+        self._persist_session_state()
+        self._append_dialogue_trace(
+            {"ts": time.time(), "event": "chat_provider_changed", "selected_provider": selected}
+        )
+        return {"ok": True, **self.chat_provider_status()}
 
     def reasoning_status(self) -> dict:
         return self._dialogue_service.reasoning_status()
@@ -2643,8 +2716,8 @@ class FusionReaderV2:
                 transcript=text,
                 answer="",
                 detail=str(chat_result.detail or "dialogue_failed"),
-                model=chat_result.model or "ollama",
-                provider="ollama",
+                model=chat_result.model or self._active_chat_provider_name(),
+                provider=self._active_chat_provider_name(),
                 stage="chat",
                 chat_ms=chat_ms,
                 reasoning=reasoning,
@@ -2658,7 +2731,7 @@ class FusionReaderV2:
                     "ok": False,
                     "detail": out["detail"],
                     "human_error": str(out.get("human_error") or ""),
-                    "chat_provider": "ollama",
+                    "chat_provider": self._active_chat_provider_name(),
                     "chat_model": str(out.get("model") or ""),
                     "chat_ms": chat_ms,
                     "tts_provider": str(out.get("provider") or ""),
@@ -2713,7 +2786,7 @@ class FusionReaderV2:
                 **trace_event,
                 "ok": True,
                 "detail": str(out.get("detail") or ""),
-                "chat_provider": "ollama",
+                "chat_provider": self._active_chat_provider_name(),
                 "chat_model": str(out.get("model") or ""),
                 "chat_ms": chat_ms,
                 "tts_ms": tts_ms,
@@ -3114,6 +3187,7 @@ class FusionReaderV2:
             laboratory_mode=self.laboratory_mode,
             profile=self.profile,
             veil=self.veil,
+            chat_provider=str(getattr(getattr(self.conversation, "provider", None), "selected", "local") or "local"),
         )
 
     def _apply_session_preferences(self, preferences: SessionPreferences) -> None:
@@ -3121,6 +3195,12 @@ class FusionReaderV2:
         self.laboratory_mode = preferences.laboratory_mode
         self.profile = preferences.profile
         self.veil = preferences.veil
+        provider = getattr(self.conversation, "provider", None)
+        if provider is not None and hasattr(provider, "select"):
+            try:
+                provider.select(preferences.chat_provider)
+            except ValueError:
+                provider.select("local")
 
     def _set_main_source(self, source_path: str, source_type: str) -> None:
         self._main_source_path = source_path
