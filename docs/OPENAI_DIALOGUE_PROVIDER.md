@@ -75,6 +75,15 @@ FUSION_READER_OPENAI_CHAT_MODEL=openai/gpt-5.6-sol
 FUSION_READER_OPENAI_CHAT_AGENT=fusion-dialogue
 ```
 
+## Rendimiento validado
+
+La corrección de sesiones se validó en una instalación real con OpenClaw
+`2026.7.1-2`, OAuth de ChatGPT y `openai/gpt-5.6-sol`. Cinco turnos escritos
+consecutivos tardaron 10.22 s, 10.27 s, 11.22 s, 9.52 s y 10.02 s. El contexto
+se conservó y la latencia dejó de crecer entre turnos. Estos valores son una
+referencia de esa instalación, no un límite garantizado para otras redes o
+cuentas.
+
 ## Diagnóstico
 
 `GET /api/status` y `GET /api/dialogue/status` publican `chat_provider`, que
