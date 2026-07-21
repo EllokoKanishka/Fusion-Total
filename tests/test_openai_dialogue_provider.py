@@ -109,6 +109,29 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(model, "gpt-5.6-sol")
         self.assertEqual(detail, "")
 
+    def test_openclaw_provider_reports_disabled_health(self) -> None:
+        provider = OpenClawChatProvider(command="openclaw", enabled=False)
+
+        health = provider.health()
+
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["detail"], "disabled")
+        self.assertEqual(health["session_mode"], "fresh_per_turn")
+
+    def test_openclaw_provider_reports_agent_error_stop_reason(self) -> None:
+        payload = {
+            "result": {
+                "payloads": [{"text": "No debe devolverse"}],
+                "stopReason": "error",
+            }
+        }
+
+        answer, model, detail = OpenClawChatProvider._extract_answer(json.dumps(payload))
+
+        self.assertEqual(answer, "")
+        self.assertEqual(model, "")
+        self.assertEqual(detail, "openclaw_agent_error")
+
     def test_openclaw_provider_fails_closed_when_agent_is_not_isolated(self) -> None:
         provider = OpenClawChatProvider(command="openclaw", agent="main")
         self.assertFalse(provider.available())
