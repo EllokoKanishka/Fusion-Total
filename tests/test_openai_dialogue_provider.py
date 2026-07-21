@@ -63,6 +63,56 @@ class OpenAIProviderTests(unittest.TestCase):
             self.assertIn("<SYSTEM>\nSos Lucy.\n</SYSTEM>", prompt_seen)
             self.assertIn("<USER>\nHola\n</USER>", prompt_seen)
 
+    def test_openclaw_provider_uses_stateless_infer_with_isolated_auth_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            command = root / "openclaw"
+            command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            agent_dir = root / "agents" / "fusion-dialogue" / "agent"
+            agent_dir.mkdir(parents=True)
+
+            def fake_run(cmd, **kwargs):
+                payload = {
+                    "ok": True,
+                    "capability": "model.run",
+                    "transport": "local",
+                    "provider": "openai",
+                    "model": "gpt-5.6-sol",
+                    "attempts": [],
+                    "outputs": [{"text": "Respuesta rápida."}],
+                }
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+            provider = OpenClawChatProvider(
+                command=str(command),
+                agent="fusion-dialogue",
+                default_model="openai/gpt-5.6-sol",
+                environment={"PATH": ""},
+                execution_mode="infer",
+                agent_dir=str(agent_dir),
+            )
+            with mock.patch("fusion_reader_v2.conversation.run_owned", side_effect=fake_run) as run:
+                result = provider.chat(
+                    [
+                        {"role": "system", "content": "Sos Lucy."},
+                        {"role": "user", "content": "Respondé rápido"},
+                    ]
+                )
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(result.answer, "Respuesta rápida.")
+        self.assertEqual(result.model, "gpt-5.6-sol")
+        command_line = run.call_args.args[0]
+        self.assertEqual(command_line[1:4], ["infer", "model", "run"])
+        self.assertNotIn("--agent", command_line)
+        self.assertNotIn("--session-id", command_line)
+        self.assertIn("<USER>\nRespondé rápido\n</USER>", command_line[command_line.index("--prompt") + 1])
+        self.assertEqual(run.call_args.kwargs["env"]["OPENCLAW_AGENT_DIR"], str(agent_dir))
+        health = provider.health()
+        self.assertEqual(health["execution_mode"], "infer")
+        self.assertEqual(health["session_mode"], "stateless")
+        self.assertEqual(health["prompt_transport"], "argv")
+
     def test_openclaw_provider_uses_a_fresh_session_for_each_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             command = Path(tmp) / "openclaw"
@@ -108,6 +158,25 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(answer, "Respuesta desde OpenClaw nuevo.")
         self.assertEqual(model, "gpt-5.6-sol")
         self.assertEqual(detail, "")
+
+    def test_openclaw_provider_reports_infer_error_without_fallback(self) -> None:
+        payload = {
+            "ok": False,
+            "capability": "model.run",
+            "model": "gpt-5.6-sol",
+            "error": {"message": "auth failed"},
+            "outputs": [],
+        }
+
+        answer, model, detail = OpenClawChatProvider._extract_answer(json.dumps(payload))
+
+        self.assertEqual(answer, "")
+        self.assertEqual(model, "gpt-5.6-sol")
+        self.assertEqual(detail, "openclaw_infer_error")
+
+    def test_openclaw_provider_rejects_unknown_execution_mode(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid_openclaw_execution_mode"):
+            OpenClawChatProvider(execution_mode="automatic")
 
     def test_openclaw_provider_reports_disabled_health(self) -> None:
         provider = OpenClawChatProvider(command="openclaw", enabled=False)
@@ -172,10 +241,17 @@ class OpenAIProviderTests(unittest.TestCase):
         settings = create_settings(environ={})
         self.assertEqual(settings.providers.chat_provider, "local")
         self.assertEqual(settings.providers.openai_chat_agent, "fusion-dialogue")
+        self.assertEqual(settings.providers.openai_chat_execution_mode, "agent")
+        self.assertEqual(settings.providers.openai_chat_agent_dir.name, "agent")
+        self.assertEqual(settings.providers.openai_chat_agent_dir.parent.name, "fusion-dialogue")
         with self.assertRaises(ConfigurationError):
             create_settings(environ={"FUSION_READER_OPENAI_CHAT_AGENT": "main"})
         with self.assertRaises(ConfigurationError):
             create_settings(environ={"FUSION_READER_CHAT_PROVIDER": "unknown"})
+        with self.assertRaises(ConfigurationError):
+            create_settings(environ={"FUSION_READER_OPENAI_EXECUTION_MODE": "automatic"})
+        with self.assertRaises(ConfigurationError):
+            create_settings(environ={"FUSION_READER_OPENAI_CHAT_AGENT_DIR": "/tmp/main/agent"})
 
     def test_facade_switches_dialogue_provider_and_media_stays_local(self) -> None:
         local = NullChatProvider("local")
