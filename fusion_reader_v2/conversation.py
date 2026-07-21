@@ -201,7 +201,8 @@ class OpenClawChatProvider(ChatProvider):
         if self.execution_mode not in {"agent", "infer"}:
             raise ValueError("invalid_openclaw_execution_mode")
         self.agent_dir = str(
-            agent_dir or Path.home() / ".openclaw" / "agents" / self.agent / "agent"
+            agent_dir
+            or Path.home() / ".openclaw" / "agents" / self.agent / "agent"
         )
 
     def available(self) -> bool:
