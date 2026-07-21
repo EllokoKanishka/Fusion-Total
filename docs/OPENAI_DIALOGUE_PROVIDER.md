@@ -26,9 +26,11 @@ El diálogo usa exclusivamente el agente `fusion-dialogue`. No usa ni modifica:
 - canales, bindings, Telegram o gateway;
 - búsqueda web.
 
-El agente se ejecuta con `openclaw agent --local` como turno aislado. Fusion le
-envía la conversación ya serializada por `ConversationCore`; OpenClaw aporta el
-runtime y la autenticación OpenAI/Codex.
+El agente se ejecuta con `openclaw agent --local` y un `--session-id` nuevo en
+cada turno. Fusion ya envía la conversación completa serializada por
+`ConversationCore`; por eso no se reutiliza la sesión interna de OpenClaw, lo
+que evita duplicar y acumular el mismo historial en cada respuesta. OpenClaw
+aporta el runtime y la autenticación OpenAI/Codex.
 
 Referencias oficiales de OpenClaw:
 
@@ -72,6 +74,15 @@ FUSION_READER_OPENAI_CHAT_ENABLED=1
 FUSION_READER_OPENAI_CHAT_MODEL=openai/gpt-5.6-sol
 FUSION_READER_OPENAI_CHAT_AGENT=fusion-dialogue
 ```
+
+## Rendimiento validado
+
+La corrección de sesiones se validó en una instalación real con OpenClaw
+`2026.7.1-2`, OAuth de ChatGPT y `openai/gpt-5.6-sol`. Cinco turnos escritos
+consecutivos tardaron 10.22 s, 10.27 s, 11.22 s, 9.52 s y 10.02 s. El contexto
+se conservó y la latencia dejó de crecer entre turnos. Estos valores son una
+referencia de esa instalación, no un límite garantizado para otras redes o
+cuentas.
 
 ## Diagnóstico
 
