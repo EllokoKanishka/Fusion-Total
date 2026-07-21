@@ -56,10 +56,45 @@ class OpenAIProviderTests(unittest.TestCase):
             command_line = run.call_args.args[0]
             self.assertIn("--local", command_line)
             self.assertEqual(command_line[command_line.index("--agent") + 1], "fusion-dialogue")
+            session_id = command_line[command_line.index("--session-id") + 1]
+            self.assertRegex(session_id, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
             self.assertEqual(command_line[command_line.index("--model") + 1], "openai/gpt-5.6-sol")
             self.assertIn("No uses herramientas", prompt_seen)
             self.assertIn("<SYSTEM>\nSos Lucy.\n</SYSTEM>", prompt_seen)
             self.assertIn("<USER>\nHola\n</USER>", prompt_seen)
+
+    def test_openclaw_provider_uses_a_fresh_session_for_each_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = Path(tmp) / "openclaw"
+            command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            session_ids: list[str] = []
+
+            def fake_run(cmd, **kwargs):
+                del kwargs
+                session_ids.append(cmd[cmd.index("--session-id") + 1])
+                payload = {"result": {"payloads": [{"text": "OK"}]}}
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+            provider = OpenClawChatProvider(
+                command=str(command),
+                agent="fusion-dialogue",
+                default_model="openai/gpt-5.6-sol",
+                environment={"PATH": ""},
+            )
+            with mock.patch("fusion_reader_v2.conversation.run_owned", side_effect=fake_run):
+                first = provider.chat([{"role": "user", "content": "Uno"}])
+                second = provider.chat(
+                    [
+                        {"role": "user", "content": "Uno"},
+                        {"role": "assistant", "content": "OK"},
+                        {"role": "user", "content": "Dos"},
+                    ]
+                )
+
+        self.assertTrue(first.ok, first.detail)
+        self.assertTrue(second.ok, second.detail)
+        self.assertEqual(len(session_ids), 2)
+        self.assertNotEqual(session_ids[0], session_ids[1])
 
     def test_openclaw_provider_parses_new_root_payload_format(self) -> None:
         payload = {
