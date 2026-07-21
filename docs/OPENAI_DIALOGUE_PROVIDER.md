@@ -26,9 +26,11 @@ El diálogo usa exclusivamente el agente `fusion-dialogue`. No usa ni modifica:
 - canales, bindings, Telegram o gateway;
 - búsqueda web.
 
-El agente se ejecuta con `openclaw agent --local` como turno aislado. Fusion le
-envía la conversación ya serializada por `ConversationCore`; OpenClaw aporta el
-runtime y la autenticación OpenAI/Codex.
+El agente se ejecuta con `openclaw agent --local` y un `--session-id` nuevo en
+cada turno. Fusion ya envía la conversación completa serializada por
+`ConversationCore`; por eso no se reutiliza la sesión interna de OpenClaw, lo
+que evita duplicar y acumular el mismo historial en cada respuesta. OpenClaw
+aporta el runtime y la autenticación OpenAI/Codex.
 
 Referencias oficiales de OpenClaw:
 
