@@ -132,6 +132,20 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(model, "")
         self.assertEqual(detail, "openclaw_agent_error")
 
+    def test_openclaw_provider_rejects_invalid_or_empty_responses(self) -> None:
+        cases = [
+            ("not-json", "openclaw_invalid_json"),
+            (json.dumps([]), "openclaw_invalid_json"),
+            (json.dumps({"payloads": []}), "empty_answer"),
+        ]
+
+        for raw, expected_detail in cases:
+            with self.subTest(expected_detail=expected_detail, raw=raw):
+                answer, model, detail = OpenClawChatProvider._extract_answer(raw)
+                self.assertEqual(answer, "")
+                self.assertEqual(model, "")
+                self.assertEqual(detail, expected_detail)
+
     def test_openclaw_provider_fails_closed_when_agent_is_not_isolated(self) -> None:
         provider = OpenClawChatProvider(command="openclaw", agent="main")
         self.assertFalse(provider.available())
