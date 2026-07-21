@@ -56,6 +56,8 @@ def create_providers(settings: Settings) -> ProviderBundle:
                     default_model=settings.providers.openai_chat_model,
                     timeout_seconds=settings.providers.openai_chat_timeout_seconds,
                     enabled=settings.providers.openai_chat_enabled,
+                    execution_mode=settings.providers.openai_chat_execution_mode,
+                    agent_dir=str(settings.providers.openai_chat_agent_dir),
                 ),
             },
             selected=settings.providers.chat_provider,
