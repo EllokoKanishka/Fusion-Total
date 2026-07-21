@@ -9,6 +9,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from unicodedata import normalize
@@ -211,6 +212,7 @@ class OpenClawChatProvider(ChatProvider):
             "agent": self.agent,
             "model": self.default_model,
             "cloud": True,
+            "session_mode": "fresh_per_turn",
             "detail": "configured" if available else ("disabled" if not self.enabled else "openclaw_unavailable"),
         }
 
@@ -279,6 +281,10 @@ class OpenClawChatProvider(ChatProvider):
         thinking = "off"
         if bool(think):
             thinking = environment_value("FUSION_READER_OPENAI_THINKING_LEVEL", "medium") or "medium"
+        # ConversationCore already serializes the complete history. A fresh
+        # OpenClaw session prevents that same history from accumulating a second
+        # time inside the agent session on every PandaFusion turn.
+        session_id = str(uuid.uuid4())
         temp_path = ""
         try:
             with tempfile.NamedTemporaryFile(
@@ -292,6 +298,8 @@ class OpenClawChatProvider(ChatProvider):
                 "--local",
                 "--agent",
                 self.agent,
+                "--session-id",
+                session_id,
                 "--model",
                 selected_model,
                 "--thinking",
