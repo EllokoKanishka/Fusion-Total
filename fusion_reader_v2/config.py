@@ -141,6 +141,8 @@ class ProviderSettings:
     openai_chat_agent: str
     openai_chat_timeout_seconds: float
     openai_chat_enabled: bool
+    openai_chat_execution_mode: str
+    openai_chat_agent_dir: Path
     research_provider: str
     searxng_url: str
     searxng_timeout_seconds: float
@@ -167,6 +169,13 @@ class ProviderSettings:
             raise ConfigurationError("invalid chat provider")
         if self.openai_chat_agent != "fusion-dialogue":
             raise ConfigurationError("Fusion OpenAI dialogue must use the fusion-dialogue OpenClaw agent")
+        if self.openai_chat_execution_mode not in {"agent", "infer"}:
+            raise ConfigurationError("Fusion OpenAI dialogue execution mode must be agent or infer")
+        if (
+            self.openai_chat_agent_dir.name != "agent"
+            or self.openai_chat_agent_dir.parent.name != self.openai_chat_agent
+        ):
+            raise ConfigurationError("Fusion OpenAI dialogue agent directory must belong to fusion-dialogue")
         if self.openclaw_agent != "fusion-research":
             raise ConfigurationError("Fusion external research must use the fusion-research OpenClaw agent")
 
@@ -230,6 +239,7 @@ def create_settings(
     downloads = _path(env.get("FUSION_READER_DOWNLOADS_ROOT") or _default_downloads(home))
     cache = _path(env.get("FUSION_READER_CACHE_ROOT") or runtime / "audio_cache")
     logs = _path(env.get("FUSION_READER_LOG_ROOT") or env.get("FUSION_READER_LOG_DIR") or runtime / "logs")
+    openclaw_state = _path(env.get("OPENCLAW_STATE_DIR") or home / ".openclaw")
     ports = PortSettings(
         api=_integer(env, "FUSION_READER_V2_PORT", 8010, minimum=1),
         tts_gpu=_integer(env, "FUSION_READER_GPU_TTS_PORT", 7853, minimum=1),
@@ -270,6 +280,14 @@ def create_settings(
             openai_chat_agent=env.get("FUSION_READER_OPENAI_CHAT_AGENT", "fusion-dialogue").strip(),
             openai_chat_timeout_seconds=_floating(env, "FUSION_READER_OPENAI_CHAT_TIMEOUT", 180.0, minimum=10.0),
             openai_chat_enabled=_truthy(env.get("FUSION_READER_OPENAI_CHAT_ENABLED"), default=True),
+            openai_chat_execution_mode=env.get("FUSION_READER_OPENAI_EXECUTION_MODE", "agent").strip().lower(),
+            openai_chat_agent_dir=_path(
+                env.get("FUSION_READER_OPENAI_CHAT_AGENT_DIR")
+                or openclaw_state
+                / "agents"
+                / env.get("FUSION_READER_OPENAI_CHAT_AGENT", "fusion-dialogue").strip()
+                / "agent"
+            ),
             research_provider=env.get("FUSION_READER_EXTERNAL_RESEARCH_PROVIDER", "auto").strip().lower(),
             searxng_url=(env.get("FUSION_READER_SEARXNG_URL") or f"http://127.0.0.1:{ports.searxng}").rstrip("/"),
             searxng_timeout_seconds=_floating(env, "FUSION_READER_SEARXNG_TIMEOUT", 12.0, minimum=0.1),
