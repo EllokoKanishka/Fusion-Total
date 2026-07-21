@@ -243,7 +243,7 @@ class OpenClawChatProvider(ChatProvider):
         if not isinstance(payload, dict):
             return "", "", "openclaw_invalid_json"
         result_value = payload.get("result")
-        result = result_value if isinstance(result_value, dict) else {}
+        result = result_value if isinstance(result_value, dict) else payload
         meta_value = result.get("meta")
         meta = meta_value if isinstance(meta_value, dict) else {}
         agent_meta_value = meta.get("agentMeta")

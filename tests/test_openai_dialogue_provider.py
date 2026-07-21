@@ -61,6 +61,19 @@ class OpenAIProviderTests(unittest.TestCase):
             self.assertIn("<SYSTEM>\nSos Lucy.\n</SYSTEM>", prompt_seen)
             self.assertIn("<USER>\nHola\n</USER>", prompt_seen)
 
+    def test_openclaw_provider_parses_new_root_payload_format(self) -> None:
+        payload = {
+            "payloads": [{"text": "Respuesta desde OpenClaw nuevo."}],
+            "meta": {"agentMeta": {"model": "gpt-5.6-sol"}},
+            "stopReason": "stop",
+        }
+
+        answer, model, detail = OpenClawChatProvider._extract_answer(json.dumps(payload))
+
+        self.assertEqual(answer, "Respuesta desde OpenClaw nuevo.")
+        self.assertEqual(model, "gpt-5.6-sol")
+        self.assertEqual(detail, "")
+
     def test_openclaw_provider_fails_closed_when_agent_is_not_isolated(self) -> None:
         provider = OpenClawChatProvider(command="openclaw", agent="main")
         self.assertFalse(provider.available())
