@@ -8,6 +8,7 @@ from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_pos
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_post
+from fusion_reader_v2.web.routes.dictation import handle_dictation_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
 from fusion_reader_v2.web.routing import create_router
 
@@ -46,6 +47,9 @@ class App:
 
     def set_profile(self, mode: str) -> dict:
         return {"ok": True, "mode": mode}
+
+    def dictation_turn_text(self, text: str, commands_enabled: bool = True) -> dict:
+        return {"ok": True, "text": text, "commands_enabled": commands_enabled}
 
     def prepare_status(self) -> dict:
         return {"ok": True, "state": "idle"}
@@ -105,6 +109,14 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["text"], "nota")
         self.assertTrue(handle_dialogue_post(responder, "/api/profile", {"mode": "bohemia"}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["mode"], "bohemia")
+        self.assertTrue(
+            handle_dictation_post(
+                responder,
+                "/api/dictation/interpret",
+                {"text": "deshacer", "commands_enabled": True},
+            )
+        )  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["text"], "deshacer")
 
     def test_preparation_module_owns_status_start_and_cancel(self) -> None:
         responder = DomainResponder()

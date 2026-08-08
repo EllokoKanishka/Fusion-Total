@@ -7,6 +7,7 @@ import { createPreparationController } from './preparation.mjs';
 import { createAudioExportController } from './audio_export.mjs';
 import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
 import { createMediaController } from './media.mjs';
+import { createDictationController } from './dictation.mjs';
 
 const els = collectElements();
 let status = null;
@@ -44,6 +45,12 @@ const mediaController = createMediaController({
   elements: els,
   log,
   refreshMainStatus: () => refresh()
+});
+const dictationController = createDictationController({
+  api,
+  elements: els,
+  refreshMainStatus: data => renderStatus(data),
+  log
 });
 
 function beginBusyLease() {
@@ -1880,6 +1887,7 @@ window.addEventListener('beforeunload', () => {
   preparation.dispose();
   audioExport.dispose();
   mediaController.dispose();
+  dictationController.dispose();
   clearDialogueTimers(dialogue);
   if (dialogue.stream) dialogue.stream.getTracks().forEach(track => track.stop());
   try { els.player.pause(); } catch (_) {}

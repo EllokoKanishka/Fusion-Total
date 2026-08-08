@@ -47,6 +47,19 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#mediaTranslatedPdfToggle')).toBeChecked();
   await expect(page.locator('#mediaSpanishAudioToggle')).toBeChecked();
 
+  await page.locator('#dictationToggleBtn').click();
+  await expect(page.locator('#dictationWorkspace')).toBeVisible();
+  await page.locator('#dictationEditor').fill('Primer párrafo.\n\nSegundo párrafo para la lectora.');
+  await page.locator('#dictationCommandInput').fill('reemplazá lectora por voz');
+  await page.locator('#dictationCommandBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la voz.');
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la lectora.');
+  await page.locator('#dictationUseReaderBtn').click();
+  await expect(page.locator('#docTitle')).toContainText('Dictado sin título');
+  await page.locator('#dictationCloseBtn').click();
+  await expect(page.locator('#dictationWorkspace')).toBeHidden();
+
   await page.locator('#quickTextInput').fill('Fragmento temporal para leer sin crear un archivo.');
   await page.locator('#quickReadStartBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Texto rápido — Texto pegado');

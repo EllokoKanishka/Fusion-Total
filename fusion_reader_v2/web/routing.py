@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
+from fusion_reader_v2.web.routes.dictation import handle_dictation_post, handle_dictation_raw_post
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
@@ -45,11 +46,16 @@ class Router:
         return any(handler() for handler in handlers)
 
     def dispatch_raw_post(self, responder, path: str) -> bool:
-        return handle_tools_post(responder, path) or handle_media_post(responder, path)
+        return (
+            handle_dictation_raw_post(responder, path)
+            or handle_tools_post(responder, path)
+            or handle_media_post(responder, path)
+        )
 
     def dispatch_post(self, responder, path: str, payload: dict) -> bool:
         handlers = (
             lambda: handle_audio_post(responder, path, payload),
+            lambda: handle_dictation_post(responder, path, payload),
             lambda: handle_dialogue_post(responder, path, payload),
             lambda: handle_preparation_post(responder, path, payload),
             lambda: handle_reading_post(responder, path, payload),
@@ -123,6 +129,7 @@ def create_router() -> Router:
         "/api/laboratory/reset",
         "/api/chat/reset",
         "/api/dialogue/turn",
+        "/api/dictation/interpret",
         "/api/voice/test",
         "/api/chat",
     )
@@ -132,7 +139,12 @@ def create_router() -> Router:
         "/api/media/cancel/",
         "/api/media/mount/",
     )
-    raw_post_exact = ("/api/media/transcribe", "/api/media/translate", "/api/tools/pdf-to-docx")
+    raw_post_exact = (
+        "/api/dictation/transcribe",
+        "/api/media/transcribe",
+        "/api/media/translate",
+        "/api/tools/pdf-to-docx",
+    )
     routes = [Route("GET", path, path) for path in get_exact]
     routes.extend(Route("GET", path, path, prefix=True) for path in get_prefixes)
     routes.extend(Route("HEAD", path, path) for path in ("/", "/health", "/api/status"))

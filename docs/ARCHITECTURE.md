@@ -1,9 +1,11 @@
-# Fusion Reader v2 — Arquitectura Vigente
+# Panda Fusión — Arquitectura Vigente
 
 ## Norte
 
-Fusion Reader v2 es un lector conversacional por voz neural. La lectura sigue
+Panda Fusión es un lector conversacional por voz neural. La lectura sigue
 siendo el centro del producto.
+
+`fusion_reader_v2` continúa como identificador interno compatible.
 
 ## Capas principales
 
@@ -60,6 +62,37 @@ Propiedades:
 - TTS neural por defecto para respuesta oral;
 - `Dialogar` puede degradar `Supremo -> Pensamiento` para cuidar latencia oral.
 - la UI principal expone ahora el provider STT activo y si está en fallback.
+
+## Dictado editable
+
+Componentes principales:
+
+- `fusion_reader_v2/dictation.py`: interpreta órdenes españolas y devuelve
+  operaciones acotadas, sin mutar documentos;
+- `fusion_reader_v2/web/routes/dictation.py`: transcripción efímera y órdenes
+  escritas;
+- `fusion_reader_v2/web/static/js/dictation.mjs`: captura, editor, historial,
+  lectura selectiva y autosalvado local.
+
+```text
+Micrófono -> MediaRecorder -> STTProvider -> instrucción acotada -> textarea
+                                                |
+                                                -> TTSProvider para leer tramos
+```
+
+Propiedades:
+
+- vive en un panel acoplado, separado de Texto rápido y Laboratorio;
+- usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
+- distingue dictado de órdenes con un control explícito que puede desactivarse;
+- soporta insertar, reemplazar, borrar, limpiar, deshacer, rehacer y leer por
+  selección, párrafo, hoja virtual o ancla textual;
+- el backend nunca recibe ni reescribe el borrador completo: sólo audio efímero
+  u órdenes individuales;
+- `localStorage` conserva el borrador por origen; pasar al lector o descargar TXT
+  siempre requiere una acción explícita;
+- una hoja virtual equivale a aproximadamente 1800 caracteres y no pretende
+  reproducir la paginación editorial de un PDF o DOCX.
 
 ## Modos de razonamiento
 

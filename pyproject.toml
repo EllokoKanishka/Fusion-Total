@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fusion-reader-v2"
 version = "2.0.0"
-description = "Local-first neural voice conversational reader"
+description = "Panda Fusión, a local-first neural voice conversational reader"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

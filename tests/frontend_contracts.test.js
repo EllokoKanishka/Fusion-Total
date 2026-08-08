@@ -10,7 +10,8 @@ const preparation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static
 const audioExport = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/audio_export.mjs'), 'utf8');
 const notes = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/notes.mjs'), 'utf8');
 const media = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/media.mjs'), 'utf8');
-const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}\n${media}`;
+const dictation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/dictation.mjs'), 'utf8');
+const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}\n${media}\n${dictation}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
 
 test('frontend owns abortable reads and one export poller', () => {
@@ -32,6 +33,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/audio-export',
     '/api/notes/create',
     '/api/dialogue/turn',
+    '/api/dictation/transcribe',
     '/api/tools/pdf-to-docx',
     '/api/media/transcribe',
     '/api/media/translate',
@@ -48,6 +50,9 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="quickTextInput"[^>]+aria-label="Texto rápido para leer"/);
   assert.match(html, /id="quickTextInfo"[^>]+aria-live="polite"/);
   assert.match(html, /id="mediaInfo"[^>]+aria-live="polite"/);
+  assert.match(html, /id="dictationToggleBtn"[^>]+aria-expanded="false"[^>]+aria-controls="dictationWorkspace"/);
+  assert.match(html, /id="dictationEditor"[^>]+aria-label="Borrador de dictado"/);
+  assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
 });
 
 test('media downloads validate the response before saving a browser file', () => {
@@ -63,6 +68,7 @@ test('frontend cleanup owns aborts, pollers, timers and media tracks', () => {
   assert.match(app, /preparation\.dispose\(\)/);
   assert.match(app, /audioExport\.dispose\(\)/);
   assert.match(app, /mediaController\.dispose\(\)/);
+  assert.match(app, /dictationController\.dispose\(\)/);
   assert.match(app, /clearDialogueTimers\(dialogue\)/);
   assert.match(app, /getTracks\(\)\.forEach\(track => track\.stop\(\)\)/);
 });
@@ -75,4 +81,5 @@ test('UI element collection is isolated and resolves each declared element once'
   assert.deepEqual(calls, ELEMENT_IDS);
   assert.equal(elements.dialogueBtn.id, 'dialogueBtn');
   assert.equal(elements.voiceSelect.id, 'voiceSelect');
+  assert.equal(elements.dictationEditor.id, 'dictationEditor');
 });

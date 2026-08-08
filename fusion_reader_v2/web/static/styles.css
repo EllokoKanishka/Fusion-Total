@@ -904,3 +904,202 @@ textarea {
 .clear-document-btn { margin-top: 4px; }
 .progress-native { width: 100%; height: 8px; accent-color: var(--accent-2); }
 .pdf-cancel-link { margin-left: 8px; font-size: .8em; color: var(--danger); text-decoration: none; }
+
+.app.dictation-open {
+  grid-template-columns: minmax(260px, 300px) minmax(500px, 1fr) minmax(420px, 42vw);
+}
+.app.dictation-open .right-sidebar {
+  display: none;
+}
+.dictation-workspace[hidden] {
+  display: none;
+}
+.dictation-workspace {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: #0b0f0d;
+  padding: 16px;
+  display: grid;
+  grid-template-rows: auto auto auto auto auto minmax(260px, 1fr) auto auto auto auto;
+  align-content: start;
+  gap: 10px;
+}
+.dictation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dictation-header .sub {
+  margin-bottom: 0;
+}
+.dictation-toggle-btn[aria-expanded="true"] {
+  border-color: var(--accent-2);
+  background: rgba(56, 198, 216, 0.14);
+}
+.dictation-toolbar,
+.dictation-editor-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+#dictationMicBtn.recording {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #160505;
+}
+.dictation-status {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #080b09;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.dictation-status[data-mode="listening"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dictation-status[data-mode="processing"],
+.dictation-status[data-mode="speaking"] {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+.dictation-status[data-mode="error"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.dictation-title-label,
+.dictation-activity-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.dictation-title-input,
+.dictation-command-row input {
+  min-height: 32px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #070909;
+  color: var(--text);
+  padding: 6px 9px;
+}
+.dictation-title-input:focus,
+.dictation-command-row input:focus,
+.dictation-editor:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.dictation-editor {
+  min-height: 38vh;
+  height: 100%;
+  resize: none;
+  padding: 18px clamp(16px, 2vw, 28px);
+  border-color: #3a4943;
+  background: #f2eee4;
+  color: #181b19;
+  caret-color: #0c7f4b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  line-height: 1.65;
+}
+.dictation-stats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.dictation-command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+.dictation-help {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #080b09;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.dictation-help summary {
+  cursor: pointer;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+.dictation-help p {
+  margin: 8px 0 0;
+}
+.dictation-activity {
+  max-height: 118px;
+  margin-top: 6px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #070909;
+  padding: 7px 9px;
+}
+.dictation-activity:empty::before {
+  content: "Las transcripciones y operaciones aparecerán acá.";
+  color: var(--muted);
+  font-size: 11px;
+}
+.dictation-activity-row {
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(49, 64, 58, .55);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.dictation-activity-row:first-child {
+  color: var(--text);
+}
+.dictation-activity-row:last-child {
+  border-bottom: 0;
+}
+.dictation-player {
+  min-height: 32px;
+}
+
+@media (max-width: 1320px) and (min-width: 981px) {
+  .app.dictation-open {
+    grid-template-columns: minmax(480px, 1fr) minmax(420px, 46vw);
+  }
+  .app.dictation-open .left-sidebar {
+    display: none;
+  }
+  .app.dictation-open main,
+  .app.dictation-open .lab {
+    grid-column: 1;
+  }
+  .app.dictation-open .dictation-workspace {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 980px) {
+  .app.dictation-open {
+    grid-template-columns: 1fr;
+  }
+  .dictation-workspace {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    grid-column: auto;
+    grid-row: auto;
+    border: 0;
+  }
+  .dictation-editor {
+    min-height: 42vh;
+  }
+}

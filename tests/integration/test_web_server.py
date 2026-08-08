@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
+from fusion_reader_v2.dialogue import NullSTTProvider
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
 from fusion_reader_v2.web.jobs import register_pdf_to_docx_download
@@ -38,9 +39,9 @@ class WebServerIntegrationTests(unittest.TestCase):
         settings = replace(settings, ports=replace(settings.ports, api=0))
         return settings
 
-    def _start(self, root: Path, *, synthetic_tts: bool = False):
+    def _start(self, root: Path, *, synthetic_tts: bool = False, stt=None):
         tts = SyntheticWavTTSProvider() if synthetic_tts else None
-        app_context = managed_test_app(root=root / "app", tts=tts)
+        app_context = managed_test_app(root=root / "app", tts=tts, stt=stt)
         app = app_context.__enter__()
         server = web_server.create_http_server(app, self._settings(root))
         thread = threading.Thread(target=server.serve_forever, name="fusion-test-http")
@@ -140,10 +141,11 @@ class WebServerIntegrationTests(unittest.TestCase):
             server = self._start(Path(tmp))
             base = f"http://127.0.0.1:{server.server_address[1]}"
             for path, marker in (
-                ("/", b"Fusion Reader v2"),
+                ("/", "Panda Fusión".encode("utf-8")),
                 ("/static/styles.css", b"--accent"),
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
+                ("/static/js/dictation.mjs", b"createDictationController"),
                 ("/health/live", b'"status": "live"'),
                 ("/health/ready", b'"reader_ready": true'),
             ):
@@ -232,6 +234,32 @@ class WebServerIntegrationTests(unittest.TestCase):
                     payload = json.loads(raised.exception.read())
                     self.assertEqual(payload["error"], error)
                     self.assertTrue(payload["request_id"])
+
+    def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root, stt=NullSTTProvider("Borrá piedra y escribí agua"))
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+
+            status, typed = self._request(
+                base,
+                "/api/dictation/interpret",
+                {"text": "Léeme la última hoja", "commands_enabled": True},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(typed["instruction"]["scope"], "last_page")
+
+            request = urllib.request.Request(
+                base + "/api/dictation/transcribe?filename=dictation.webm&commands=1",
+                data=b"synthetic-audio",
+                headers={"Content-Type": "audio/webm"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5.0) as response:
+                audio = json.loads(response.read())
+            self.assertEqual(audio["instruction"]["kind"], "replace")
+            self.assertEqual(audio["instruction"]["target"], "piedra")
+            self.assertFalse(list(server.context.upload_root.glob("fusion_reader_upload_*")))
 
     def test_quick_text_endpoint_is_transient_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,4 +1,4 @@
-# Fusion Reader v2 — Operación
+# Panda Fusión — Operación
 
 La fase de reparación/consolidación está cerrada en
 `docs/CLOSURE_AND_BACKLOG_V2.md`; este archivo conserva los procedimientos
@@ -118,6 +118,23 @@ La traza de Dialogar muestra diagnóstico de captura:
 - `Mic`: etiqueta del dispositivo si el navegador la expone.
 
 Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando silencio o el micrófono equivocado. Si hay amplitud razonable pero `hallucinated_transcript`, ajustar después umbrales/duración o revisar STT, sin tocar `Leer`.
+
+## Dictado
+
+1. abrir `Dictado` desde la barra superior;
+2. pulsar `Iniciar dictado` y aprobar el permiso de micrófono;
+3. hacer una pausa breve para cerrar cada tramo;
+4. mantener `Interpretar órdenes` activo para corregir o leer por voz, o
+   desactivarlo cuando todo lo pronunciado deba entrar literalmente;
+5. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
+   conservar un archivo.
+
+El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
+escribe en el upload temporal únicamente durante la transcripción y se elimina
+en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectura.
+
+Órdenes base: `borrá X y escribí Y`, `reemplazá X por Y`, `deshacer`, `rehacer`,
+`léeme el último párrafo`, `léeme la última hoja` y `léeme desde X`.
 
 ## Si STT 8021 está caído
 

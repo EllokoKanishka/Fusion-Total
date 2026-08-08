@@ -1,4 +1,4 @@
-# Fusion Reader v2 Public Contracts
+# Panda Fusión Public Contracts
 
 This document defines deliberate compatibility promises. Internal modules may
 change during consolidation, but these contracts remain stable unless a
@@ -35,6 +35,7 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 - notes CRUD;
 - document chat and explicit external research;
 - text/audio dialogue and reset;
+- dictation text interpretation and ephemeral audio transcription;
 - explicit dialogue-provider selection (`local` or `openai`) through
   `POST /api/chat/provider`; the selected value is session-persistent;
 - laboratory anchor, profile, veil, and reasoning modes;
@@ -68,6 +69,20 @@ responses may be normalized to a stable envelope while preserving the legacy
 Dynamic values are not snapshot identity: timestamps, process IDs, durations,
 UUIDs, temporary paths, and the current Git commit are ignored when comparing
 contract snapshots.
+
+Dictation routes:
+
+- `POST /api/dictation/transcribe`: raw browser audio; query parameters
+  `filename` and `commands=0|1`; returns `transcript`, STT metadata and one
+  bounded `instruction` object;
+- `POST /api/dictation/interpret`: JSON `text` plus optional
+  `commands_enabled`; useful for typed corrections and accessibility;
+- instruction kinds are additive and currently include `dictate`, `insert`,
+  `replace`, `delete`, `clear`, `undo`, `redo`, `read`, `stop_listening` and
+  `noop`.
+
+The draft itself is browser-owned. These routes never accept a complete draft
+and never perform an unbounded model-authored rewrite.
 
 ## HTTP Routes
 
