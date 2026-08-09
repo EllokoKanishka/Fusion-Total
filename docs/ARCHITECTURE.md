@@ -82,7 +82,8 @@ Micrófono -> MediaRecorder -> STTProvider -> instrucción acotada -> textarea
 
 Propiedades:
 
-- vive en un panel acoplado, separado de Texto rápido y Laboratorio;
+- vive en un escritorio exclusivo de pantalla completa, separado de Texto rápido
+  y Laboratorio; al cerrarlo restaura la interfaz principal;
 - usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
 - distingue dictado de órdenes con un control explícito que puede desactivarse;
 - soporta insertar, reemplazar, borrar, limpiar, deshacer, rehacer y leer por

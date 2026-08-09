@@ -49,6 +49,16 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
 
   await page.locator('#dictationToggleBtn').click();
   await expect(page.locator('#dictationWorkspace')).toBeVisible();
+  await expect(page.locator('.left-sidebar')).toBeHidden();
+  await expect(page.locator('main')).toBeHidden();
+  await expect(page.locator('.lab')).toBeHidden();
+  await expect(page.locator('.right-sidebar')).toBeHidden();
+  const dictationBox = await page.locator('#dictationWorkspace').boundingBox();
+  const viewport = page.viewportSize();
+  expect(dictationBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(dictationBox.width).toBeGreaterThanOrEqual(viewport.width - 1);
+  expect(dictationBox.height).toBeGreaterThanOrEqual(viewport.height - 1);
   await page.locator('#dictationEditor').fill('Primer párrafo.\n\nSegundo párrafo para la lectora.');
   await page.locator('#dictationCommandInput').fill('reemplazá lectora por voz');
   await page.locator('#dictationCommandBtn').click();
@@ -61,6 +71,10 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(dictationReaderBefore + 1);
   await page.locator('#dictationCloseBtn').click();
   await expect(page.locator('#dictationWorkspace')).toBeHidden();
+  await expect(page.locator('.left-sidebar')).toBeVisible();
+  await expect(page.locator('main')).toBeVisible();
+  await expect(page.locator('.lab')).toBeVisible();
+  await expect(page.locator('.right-sidebar')).toBeVisible();
 
   await page.locator('#quickTextInput').fill('Fragmento temporal para leer sin crear un archivo.');
   const quickTextBefore = requestCounts.get('/api/quick-text') || 0;
