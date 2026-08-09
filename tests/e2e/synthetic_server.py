@@ -43,13 +43,20 @@ class InstallableNullChatProvider(NullChatProvider):
 def main() -> None:
     tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_e2e_")
     root = Path(tempdir.name)
+    local4b = InstallableNullChatProvider(
+        '{"kind":"delete_from","text":"","target":"Buenos Aires","scope":"","number":0,"all_matches":false}'
+    )
+    local14b = InstallableNullChatProvider(
+        '{"kind":"delete_from","text":"","target":"Buenos Aires","scope":"","number":0,"all_matches":false}'
+    )
+    local14b.default_model = "qwen3:14b-q8_0"
+
     app = test_app(
         tts=SyntheticWavTTSProvider(output_root=root / "tts"),
         dictation_assistant=DictationAssistant(
             {
-                "local": InstallableNullChatProvider(
-                    '{"kind":"delete_from","text":"","target":"Buenos Aires","scope":"","number":0,"all_matches":false}'
-                ),
+                "local": local4b,
+                "local14b": local14b,
                 "openai": NullChatProvider(
                     '{"kind":"replace_selection","text":"Versión de nube.","target":"",'
                     '"scope":"","number":0,"all_matches":false}'

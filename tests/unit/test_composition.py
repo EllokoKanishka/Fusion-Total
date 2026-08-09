@@ -39,6 +39,7 @@ class CompositionTests(unittest.TestCase):
             self.assertIsNotNone(bundle.dictation_assistant)
             self.assertEqual(bundle.dictation_assistant.selected, "rules")
             self.assertEqual(bundle.dictation_assistant.providers["local"].default_model, "qwen3:4b")
+            self.assertEqual(bundle.dictation_assistant.providers["local14b"].default_model, "qwen3:14b-q8_0")
             self.assertFalse(settings.paths.runtime.exists())
 
     def test_dictation_assistant_selection_is_independent_from_dialogue(self) -> None:

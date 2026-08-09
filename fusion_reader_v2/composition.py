@@ -75,6 +75,11 @@ def create_providers(settings: Settings) -> ProviderBundle:
                     default_model=settings.providers.dictation_model,
                     timeout_seconds=settings.providers.dictation_timeout_seconds,
                 ),
+                "local14b": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=settings.providers.dictation_14b_model,
+                    timeout_seconds=settings.providers.dictation_timeout_seconds,
+                ),
                 "openai": OpenClawChatProvider(
                     command=settings.providers.openclaw_command,
                     agent=settings.providers.openai_chat_agent,

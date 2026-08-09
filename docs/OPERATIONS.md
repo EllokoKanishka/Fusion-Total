@@ -164,13 +164,14 @@ en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectu
 `Lucy, cambiá las últimas 20 palabras por Y`, `Lucy, después de X borrá todo`
 y `Lucy, X, cambialo por Y`.
 
-El default `Reglas instantáneas` no carga ningún LLM. Para instalar el modelo
-local ligero opcional, seleccionar `IA local ligera` y pulsar `Instalar
-qwen3:4b`; la descarga corre en un trabajo propio y el dictado/lector siguen
+El default `Reglas instantáneas` no carga ningún LLM. Para instalar los modelos
+locales opcionales, seleccionar `Qwen3 4B — rápido` o `Qwen3 14B Q8 — mejor comprensión`
+y pulsar el botón de instalación (`qwen3:4b` o `qwen3:14b-q8_0`); la descarga corre en un trabajo propio y el dictado/lector siguen
 disponibles. La alternativa por terminal es:
 
 ```bash
 ollama pull qwen3:4b
+ollama pull qwen3:14b-q8_0
 ```
 
 Al decir `Lucy` sola con el asistente local elegido, Panda Fusión hace una

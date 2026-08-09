@@ -279,6 +279,60 @@ class DictationAssistantTests(unittest.TestCase):
                 context._dictation_model_warm["ready_until_ts"] = 0
                 self.assertEqual(context.dictation_model_warm_status()["state"], "cold")
 
+    def test_local14b_catalog_persistence_and_warmup_isolation(self) -> None:
+        class DummyProvider(NullChatProvider):
+            def __init__(self, model: str) -> None:
+                super().__init__("{}")
+                self.default_model = model
+
+            def health(self) -> dict:
+                return {"ok": True, "provider": "ollama", "model": self.default_model, "model_present": True}
+
+            def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:
+                return {"ok": True, "model": model, "duration_ms": 100, "load_duration_ms": 80}
+
+        local4b = DummyProvider("qwen3:4b")
+        local14b = DummyProvider("qwen3:14b-q8_0")
+        openai_p = DummyProvider("openai/gpt-5-nano")
+
+        assistant = DictationAssistant(
+            {"local": local4b, "local14b": local14b, "openai": openai_p},
+            selected="rules",
+        )
+
+        catalog = assistant.catalog()
+        ids = [item["id"] for item in catalog]
+        self.assertEqual(ids, ["rules", "local", "local14b", "openai"])
+
+        local14b_item = next(item for item in catalog if item["id"] == "local14b")
+        self.assertEqual(local14b_item["model"], "qwen3:14b-q8_0")
+        self.assertIn("14B", local14b_item["label"])
+
+        self.assertEqual(assistant.select("local14b"), "local14b")
+        self.assertEqual(assistant.status()["selected"], "local14b")
+        self.assertEqual(assistant.status()["model"], "qwen3:14b-q8_0")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(root=root, dictation_assistant=assistant) as app:
+                self.assertTrue(app.set_dictation_assistant("local14b")["ok"])
+
+            restored = DictationAssistant({"local": local4b, "local14b": local14b, "openai": openai_p})
+            with managed_test_app(root=root, dictation_assistant=restored) as app:
+                self.assertEqual(app.dictation_assistant_status()["selected"], "local14b")
+
+                settings = create_settings(environ={"HOME": tmp}, repository_root=root)
+                context = WebContext(app=app, settings=settings, runtime_info={})
+
+                warmed = context.warm_dictation_model()
+                self.assertEqual(warmed["state"], "ready")
+                self.assertEqual(warmed["model"], "qwen3:14b-q8_0")
+
+                app.set_dictation_assistant("local")
+                warmed_4b = context.warm_dictation_model()
+                self.assertEqual(warmed_4b["state"], "ready")
+                self.assertEqual(warmed_4b["model"], "qwen3:4b")
+
 
 if __name__ == "__main__":
     unittest.main()

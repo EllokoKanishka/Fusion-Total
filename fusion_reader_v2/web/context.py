@@ -127,9 +127,11 @@ class WebContext:
 
     def warm_dictation_model(self) -> dict:
         assistant = self.app.dictation_assistant
-        if str(getattr(assistant, "selected", "rules") or "rules") != "local":
+        selected = str(getattr(assistant, "selected", "rules") or "rules")
+        providers = getattr(assistant, "providers", {})
+        if selected not in providers:
             return {"ok": True, "state": "not_required", "terminal": True}
-        provider = getattr(assistant, "providers", {}).get("local")
+        provider = providers.get(selected)
         model = str(getattr(provider, "default_model", "") or "").strip()
         preload = getattr(provider, "preload_model", None)
         if provider is None or not model or not callable(preload):
@@ -178,18 +180,29 @@ class WebContext:
     def _run_dictation_model_install(self, provider, model: str) -> None:
         with self._dictation_model_lock:
             self._dictation_model_job.update(
-                {"state": "running", "terminal": False, "detail": "Descargando el modelo local…"}
+                {
+                    "state": "running",
+                    "terminal": False,
+                    "model": model,
+                    "detail": f"Descargando {model}…",
+                }
             )
         result = provider.install_model(model, cancel_event=self._dictation_model_cancel)
         cancelled = self._dictation_model_cancel.is_set()
         with self._dictation_model_lock:
             if cancelled:
                 self._dictation_model_job.update(
-                    {"ok": False, "state": "cancelled", "terminal": True, "detail": "Instalación cancelada."}
+                    {
+                        "ok": False,
+                        "state": "cancelled",
+                        "terminal": True,
+                        "detail": "Instalación cancelada.",
+                        "model": model,
+                    }
                 )
             elif result.get("ok"):
                 self._dictation_model_job.update(
-                    {"ok": True, "state": "done", "terminal": True, "detail": "Modelo local instalado."}
+                    {"ok": True, "state": "done", "terminal": True, "detail": "Modelo local instalado.", "model": model}
                 )
             else:
                 self._dictation_model_job.update(
@@ -197,13 +210,16 @@ class WebContext:
                         "ok": False,
                         "state": "error",
                         "terminal": True,
+                        "model": model,
                         "detail": str(result.get("detail") or "No pude instalar el modelo local."),
                     }
                 )
 
     def start_dictation_model_install(self) -> dict:
         assistant = self.app.dictation_assistant
-        provider = getattr(assistant, "providers", {}).get("local")
+        selected = str(getattr(assistant, "selected", "rules") or "rules")
+        providers = getattr(assistant, "providers", {})
+        provider = providers.get(selected)
         model = str(getattr(provider, "default_model", "") or "").strip()
         installer = getattr(provider, "install_model", None)
         if provider is None or not model or not callable(installer):
@@ -225,7 +241,8 @@ class WebContext:
             }
         with self._dictation_model_lock:
             if str(self._dictation_model_job.get("state") or "") in {"queued", "running"}:
-                return dict(self._dictation_model_job)
+                if self._dictation_model_job.get("model") == model:
+                    return dict(self._dictation_model_job)
             self._dictation_model_cancel = threading.Event()
             self._dictation_model_job = {
                 "ok": True,
@@ -242,7 +259,10 @@ class WebContext:
             )
         except Exception as exc:
             with self._dictation_model_lock:
-                self._dictation_model_job.update({"ok": False, "state": "error", "terminal": True, "detail": str(exc)})
+                self._dictation_model_job.update(
+                    {"ok": False, "state": "error", "terminal": True, "detail": str(exc), "model": model}
+                )
+        return self.dictation_model_install_status()
         return self.dictation_model_install_status()
 
     def shutdown_jobs(self, timeout: float = 10.0) -> dict:
