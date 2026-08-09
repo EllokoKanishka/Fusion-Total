@@ -13,6 +13,24 @@ const media = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/me
 const dictation = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/js/dictation.mjs'), 'utf8');
 const frontend = `${app}\n${preparation}\n${audioExport}\n${notes}\n${media}\n${dictation}`;
 const html = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/index.html'), 'utf8');
+const styles = fs.readFileSync(path.join(root, 'fusion_reader_v2/web/static/styles.css'), 'utf8');
+
+function cssColor(variable) {
+  const match = styles.match(new RegExp(`--${variable}:\\s*(#[0-9a-f]{6})`, 'i'));
+  assert.ok(match, `missing CSS color --${variable}`);
+  return match[1];
+}
+
+function relativeLuminance(color) {
+  const channels = color.match(/[0-9a-f]{2}/gi).map(value => parseInt(value, 16) / 255);
+  const linear = channels.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function contrastRatio(first, second) {
+  const luminances = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => b - a);
+  return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+}
 
 test('frontend owns abortable reads and one export poller', () => {
   assert.match(entry, /import\('\.\/js\/bootstrap\.mjs'\)/);
@@ -61,6 +79,10 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="dictationAssistantSelect"[^>]+aria-label="Asistente de escritura"/);
   assert.match(html, /id="dictationAssistantInstallBtn"[^>]+type="button"[^>]+hidden/);
   assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
+});
+
+test('destructive button text meets WCAG AA contrast in its resting state', () => {
+  assert.ok(contrastRatio(cssColor('danger'), cssColor('surface-hover')) >= 4.5);
 });
 
 test('voice selectors distinguish the live provider catalog from the known fallback', () => {
