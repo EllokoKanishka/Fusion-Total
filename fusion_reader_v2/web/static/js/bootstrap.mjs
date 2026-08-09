@@ -354,6 +354,10 @@ function renderVoiceSelect(select, data) {
     return;
   }
   select.replaceChildren();
+  select.dataset.catalogSource = String(data.source || 'provider');
+  select.title = data.source === 'known_fallback'
+    ? 'Catálogo conocido de Fusion. El motor de voz todavía no está listo.'
+    : 'Voces disponibles en el motor activo de Fusion.';
 
   const sorted = [...data.voices].sort((a, b) => voiceSortKey(a) - voiceSortKey(b));
 

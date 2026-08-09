@@ -57,6 +57,12 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
 });
 
+test('voice selectors distinguish the live provider catalog from the known fallback', () => {
+  assert.match(app, /select\.dataset\.catalogSource/);
+  assert.match(app, /Catálogo conocido de Fusion/);
+  assert.match(app, /motor de voz todavía no está listo/);
+});
+
 test('media downloads validate the response before saving a browser file', () => {
   assert.match(media, /if \(!response\.ok\)/);
   assert.match(media, /await response\.blob\(\)/);

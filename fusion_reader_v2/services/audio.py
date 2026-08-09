@@ -9,6 +9,30 @@ from fusion_reader_v2.metrics import VoiceMetricsStore
 from fusion_reader_v2.tts import AudioArtifact, TTSProvider
 
 
+KNOWN_FUSION_VOICES = (
+    "female_01.wav",
+    "female_02.wav",
+    "female_03.wav",
+    "female_04.wav",
+    "female_05.wav",
+    "female_06.wav",
+    "female_07.wav",
+    "Lucy_Cunningham.wav",
+    "Lisa_Gerrard.wav",
+    "male_01.wav",
+    "male_02.wav",
+    "male_03.wav",
+    "male_04.wav",
+    "male_05.wav",
+    "Morgan_Freeman CC3.wav",
+    "James_Earl_Jones CC3.wav",
+    "David_Attenborough CC3.wav",
+    "Clint_Eastwood CC3.wav",
+    "Clint_Eastwood CC3 (enhanced).wav",
+    "arnold.wav",
+)
+
+
 class VoiceState(Protocol):
     voice: str
     language: str
@@ -63,11 +87,29 @@ class AudioService:
         return out
 
     def catalog(self, *, fallback_current: bool = False) -> dict:
-        available = self.tts.voices()
+        try:
+            health = dict(self.tts.health() or {})
+        except Exception as exc:
+            health = {"ok": False, "detail": str(exc)}
+        try:
+            available = self.tts.voices()
+        except Exception as exc:
+            available = []
+            health = {**health, "ok": False, "detail": str(exc)}
+        source = "provider"
+        voices = available
+        if not voices and fallback_current:
+            source = "known_fallback"
+            voices = list(KNOWN_FUSION_VOICES)
+            if self.voice.voice and self.voice.voice not in voices:
+                voices.insert(0, self.voice.voice)
         return {
             "ok": True,
-            "voices": available if available or not fallback_current else [self.voice.voice],
+            "voices": voices,
             "current": self.voice.voice,
+            "source": source,
+            "tts_ready": bool(health.get("ok")),
+            "detail": str(health.get("detail") or ""),
         }
 
     def set_voice(self, voice: str) -> dict:
@@ -97,4 +139,4 @@ class AudioService:
         return {"ok": True, "items": self.metrics.chunk_summary(doc_id=doc_id, limit=limit)}
 
 
-__all__ = ["AudioService", "VoiceState"]
+__all__ = ["AudioService", "KNOWN_FUSION_VOICES", "VoiceState"]

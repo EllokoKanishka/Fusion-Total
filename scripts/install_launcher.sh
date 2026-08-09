@@ -67,11 +67,12 @@ After=network.target
 
 [Service]
 Type=simple
-EnvironmentFile=$ROOT/.env
-WorkingDirectory=$ROOT
-ExecStart=/bin/bash -c 'mkdir -p runtime/fusion_reader_v2/logs && echo \$\$ > runtime/fusion_reader_v2/fusion_reader_v2.pid && exec "\$FUSION_READER_PYTHON" -u -m scripts.fusion_reader_v2_server >> runtime/fusion_reader_v2/logs/fusion_reader_v2_server.log 2>&1'
+EnvironmentFile="$ROOT/.env"
+WorkingDirectory="$ROOT"
+ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"
 Restart=on-failure
 RestartSec=3
+KillMode=control-group
 
 [Install]
 WantedBy=default.target
