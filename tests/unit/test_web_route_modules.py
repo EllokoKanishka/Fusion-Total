@@ -25,6 +25,12 @@ class Context:
     def start_dictation_model_install(self) -> dict:
         return {"ok": True, "state": "queued", "terminal": False, "model": "qwen3:4b"}
 
+    def dictation_model_warm_status(self) -> dict:
+        return {"ok": True, "state": "cold", "terminal": True}
+
+    def warm_dictation_model(self) -> dict:
+        return {"ok": True, "state": "ready", "terminal": True, "model": "qwen3:4b"}
+
 
 class Responder:
     def __init__(self) -> None:
@@ -54,8 +60,18 @@ class App:
     def set_profile(self, mode: str) -> dict:
         return {"ok": True, "mode": mode}
 
-    def dictation_turn_text(self, text: str, commands_enabled: bool = True) -> dict:
-        return {"ok": True, "text": text, "commands_enabled": commands_enabled}
+    def dictation_turn_text(
+        self,
+        text: str,
+        commands_enabled: bool = True,
+        require_wake_word: bool = False,
+    ) -> dict:
+        return {
+            "ok": True,
+            "text": text,
+            "commands_enabled": commands_enabled,
+            "require_wake_word": require_wake_word,
+        }
 
     def dictation_assistant_status(self) -> dict:
         return {"ok": True, "selected": "rules", "available": []}
@@ -138,6 +154,8 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["selected"], "local")
         self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant/install", {}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["state"], "queued")
+        self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant/warm", {}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["state"], "ready")
         self.assertTrue(
             handle_dictation_post(
                 responder,

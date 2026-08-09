@@ -15,6 +15,8 @@ _ALLOWED_KINDS = {
     "replace_selection",
     "delete",
     "delete_from",
+    "delete_last_words",
+    "replace_last_words",
     "undo",
     "redo",
     "read",
@@ -33,6 +35,19 @@ _ALLOWED_READ_SCOPES = {
     "from_cursor",
     "from_text",
 }
+_INSTRUCTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": sorted(_ALLOWED_KINDS)},
+        "text": {"type": "string"},
+        "target": {"type": "string"},
+        "scope": {"type": "string"},
+        "number": {"type": "integer"},
+        "all_matches": {"type": "boolean"},
+    },
+    "required": ["kind", "text", "target", "scope", "number", "all_matches"],
+    "additionalProperties": False,
+}
 
 
 @dataclass(frozen=True)
@@ -43,6 +58,7 @@ class DictationAssistantResult:
     model: str = ""
     detail: str = ""
     duration_ms: int = 0
+    load_duration_ms: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +68,7 @@ class DictationAssistantResult:
             "assistant_model": self.model,
             "assistant_detail": self.detail,
             "assistant_ms": self.duration_ms,
+            "assistant_load_ms": self.load_duration_ms,
         }
 
 
@@ -152,7 +169,17 @@ class DictationAssistant:
         start = max(0, min(int(selection_start or 0), len(clean_draft)))
         end = max(start, min(int(selection_end or start), len(clean_draft)))
         messages = self._messages(clean_command, clean_draft, start, end)
-        result = provider.chat(messages, think=False, num_predict=320)
+        structured_chat = getattr(provider, "chat_structured", None)
+        if callable(structured_chat):
+            result = structured_chat(
+                messages,
+                schema=_INSTRUCTION_SCHEMA,
+                think=False,
+                num_predict=320,
+                keep_alive="10m",
+            )
+        else:
+            result = provider.chat(messages, think=False, num_predict=320)
         duration_ms = result.duration_ms or int((time.perf_counter() - started) * 1000)
         if not result.ok:
             return DictationAssistantResult(
@@ -161,6 +188,7 @@ class DictationAssistant:
                 model=result.model,
                 detail=result.detail or "assistant_failed",
                 duration_ms=duration_ms,
+                load_duration_ms=result.load_duration_ms,
             )
         instruction, detail = self._parse_instruction(result.answer)
         if instruction is None:
@@ -170,6 +198,7 @@ class DictationAssistant:
                 model=result.model,
                 detail=detail,
                 duration_ms=duration_ms,
+                load_duration_ms=result.load_duration_ms,
             )
         return DictationAssistantResult(
             True,
@@ -178,19 +207,19 @@ class DictationAssistant:
             model=result.model,
             detail="classified",
             duration_ms=duration_ms,
+            load_duration_ms=result.load_duration_ms,
         )
 
     @staticmethod
     def _messages(command: str, draft: str, selection_start: int, selection_end: int) -> list[dict]:
-        schema = (
-            '{"kind":"noop|insert|replace|replace_selection|delete|delete_from|undo|redo|read|stop_listening",'
-            '"text":"","target":"","scope":"","number":0,"all_matches":false}'
-        )
+        schema = json.dumps(_INSTRUCTION_SCHEMA, ensure_ascii=False, separators=(",", ":"))
         system = (
             "Sos un clasificador de órdenes editoriales en castellano. No converses ni expliques. "
             "Devolvé un único objeto JSON y nada más. La orden ya fue invocada con Lucy. "
             "Elegí solamente una operación del esquema permitido. Usá texto exacto del CONTEXTO para target. "
-            "delete_from significa borrar desde target hasta el final. replace_selection sólo si hay selección. "
+            "delete_from significa borrar desde target hasta el final; delete_last_words usa number; "
+            "replace_last_words usa number y text. "
+            "replace_selection sólo si hay selección. "
             "Para reescribir un párrafo sin selección, devolvé replace con el párrafo exacto en target y la nueva versión en text. "
             "Si la intención o el ancla no son seguras, devolvé kind=noop. Nunca devuelvas el borrador completo. "
             f"Esquema: {schema}"
@@ -237,7 +266,9 @@ class DictationAssistant:
         all_matches = bool(payload.get("all_matches", False))
         if kind in {"replace", "delete", "delete_from"} and not target:
             return None, "assistant_missing_target"
-        if kind in {"insert", "replace", "replace_selection"} and not text:
+        if kind in {"delete_last_words", "replace_last_words"} and not 0 < number <= 10_000:
+            return None, "assistant_invalid_word_count"
+        if kind in {"insert", "replace", "replace_selection", "replace_last_words"} and not text:
             return None, "assistant_missing_text"
         if kind == "read":
             if scope not in _ALLOWED_READ_SCOPES:

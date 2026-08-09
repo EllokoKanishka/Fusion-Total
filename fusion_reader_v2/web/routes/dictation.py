@@ -26,6 +26,9 @@ def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
     status = getattr(getattr(responder, "context", None), "dictation_model_install_status", None)
     if callable(status):
         out["installation"] = status()
+    warm_status = getattr(getattr(responder, "context", None), "dictation_model_warm_status", None)
+    if callable(warm_status):
+        out["warmup"] = warm_status()
     return out
 
 
@@ -64,6 +67,14 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/assistant/warm":
+        warm = getattr(getattr(responder, "context", None), "warm_dictation_model", None)
+        if not callable(warm):
+            result = {"ok": False, "error": "warmup_unavailable", "detail": "Precarga local no disponible."}
+        else:
+            result = dict(warm() or {})
+        responder._json(200 if result.get("ok") else 503, result)
+        return True
     if path == "/api/dictation/assistant/install":
         install = getattr(getattr(responder, "context", None), "start_dictation_model_install", None)
         if not callable(install):
@@ -105,6 +116,7 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
         responder.app.dictation_turn_text(
             str(payload.get("text") or ""),
             commands_enabled=bool(payload.get("commands_enabled", True)),
+            require_wake_word=bool(payload.get("require_wake_word", False)),
         ),
     )
     return True

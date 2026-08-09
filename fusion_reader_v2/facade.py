@@ -2362,11 +2362,20 @@ class FusionReaderV2:
             return "El asistente no devolvió una operación editorial segura; no cambié el texto."
         return "El asistente no pudo interpretar la orden; no cambié el texto."
 
-    def dictation_turn_text(self, text: str, commands_enabled: bool = True) -> dict:
+    def dictation_turn_text(
+        self,
+        text: str,
+        commands_enabled: bool = True,
+        require_wake_word: bool = False,
+    ) -> dict:
         clean = str(text or "").strip()
         if not clean:
             return {"ok": False, "error": "empty_dictation_text", "detail": "empty_dictation_text"}
-        instruction = interpret_dictation_transcript(clean, commands_enabled=commands_enabled)
+        instruction = interpret_dictation_transcript(
+            clean,
+            commands_enabled=commands_enabled,
+            require_wake_word=require_wake_word,
+        )
         return {
             "ok": True,
             "transcript": clean,

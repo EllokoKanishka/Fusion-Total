@@ -30,6 +30,8 @@ class WebContext:
     _dictation_model_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _dictation_model_cancel: threading.Event = field(default_factory=threading.Event, init=False)
     _dictation_model_job: dict = field(default_factory=dict, init=False)
+    _dictation_model_warm_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _dictation_model_warm: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         limits = self.settings.limits
@@ -115,6 +117,63 @@ class WebContext:
     def dictation_model_install_status(self) -> dict:
         with self._dictation_model_lock:
             return dict(self._dictation_model_job or {"state": "idle", "terminal": True})
+
+    def dictation_model_warm_status(self) -> dict:
+        with self._dictation_model_lock:
+            status = dict(self._dictation_model_warm or {"state": "cold", "terminal": True})
+        if status.get("state") == "ready" and float(status.get("ready_until_ts") or 0) <= time.time():
+            return {"state": "cold", "terminal": True, "model": status.get("model", "")}
+        return status
+
+    def warm_dictation_model(self) -> dict:
+        assistant = self.app.dictation_assistant
+        if str(getattr(assistant, "selected", "rules") or "rules") != "local":
+            return {"ok": True, "state": "not_required", "terminal": True}
+        provider = getattr(assistant, "providers", {}).get("local")
+        model = str(getattr(provider, "default_model", "") or "").strip()
+        preload = getattr(provider, "preload_model", None)
+        if provider is None or not model or not callable(preload):
+            return {
+                "ok": False,
+                "state": "error",
+                "terminal": True,
+                "model": model,
+                "detail": "El proveedor local no admite precarga verificable.",
+            }
+        health = dict(provider.health() or {})
+        if not health.get("ok") or health.get("model_present") is False:
+            return {
+                "ok": False,
+                "state": "error",
+                "terminal": True,
+                "model": model,
+                "detail": "El modelo local no está instalado o Ollama no responde.",
+            }
+        with self._dictation_model_warm_lock:
+            current = self.dictation_model_warm_status()
+            if current.get("state") == "ready" and current.get("model") == model:
+                return {"ok": True, **current}
+            with self._dictation_model_lock:
+                self._dictation_model_warm = {
+                    "ok": True,
+                    "state": "loading",
+                    "terminal": False,
+                    "model": model,
+                }
+            result = dict(preload(model, keep_alive="10m") or {})
+            if result.get("ok"):
+                result.update(
+                    {
+                        "state": "ready",
+                        "terminal": True,
+                        "ready_until_ts": time.time() + 600,
+                    }
+                )
+            else:
+                result.update({"ok": False, "state": "error", "terminal": True})
+            with self._dictation_model_lock:
+                self._dictation_model_warm = result
+            return dict(result)
 
     def _run_dictation_model_install(self, provider, model: str) -> None:
         with self._dictation_model_lock:

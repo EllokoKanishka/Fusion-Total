@@ -280,6 +280,57 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(typed["instruction"]["scope"], "last_page")
 
+            status, invoked = self._request(
+                base,
+                "/api/dictation/interpret",
+                {
+                    "text": "Lucy, borrá las últimas 20 palabras",
+                    "commands_enabled": True,
+                    "require_wake_word": True,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(invoked["instruction"]["kind"], "delete_last_words")
+            self.assertEqual(invoked["instruction"]["number"], 20)
+
+            exact_console_cases = (
+                ("Lucy, borrar 10 palabras", "delete_last_words", 10, ""),
+                (
+                    "Lucy, Cambia las últimas 20 palabras por lo que vos quieras.",
+                    "replace_last_words",
+                    20,
+                    "lo que vos quieras.",
+                ),
+                ("Lucy, borra desde y el signo en adelante", "delete_from", 0, ""),
+            )
+            for transcript, kind, number, replacement in exact_console_cases:
+                status, exact = self._request(
+                    base,
+                    "/api/dictation/interpret",
+                    {
+                        "text": transcript,
+                        "commands_enabled": True,
+                        "require_wake_word": True,
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(exact["instruction"]["kind"], kind)
+                self.assertEqual(exact["instruction"]["number"], number)
+                self.assertEqual(exact["instruction"]["text"], replacement)
+            self.assertEqual(exact["instruction"]["target"], "y el signo")
+
+            status, unknown = self._request(
+                base,
+                "/api/dictation/interpret",
+                {
+                    "text": "Lucy, inventá una edición desconocida",
+                    "commands_enabled": True,
+                    "require_wake_word": True,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(unknown["instruction"]["kind"], "noop")
+
             request = urllib.request.Request(
                 base + "/api/dictation/transcribe?filename=dictation.webm&commands=1",
                 data=b"synthetic-audio",

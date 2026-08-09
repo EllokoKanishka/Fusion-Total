@@ -30,6 +30,15 @@ class InstallableNullChatProvider(NullChatProvider):
         self.installed = model == self.default_model and not cancel_event.is_set()
         return {"ok": self.installed, "model": model, "detail": "installed"}
 
+    def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:
+        return {
+            "ok": self.installed and model == self.default_model,
+            "model": model,
+            "keep_alive": keep_alive,
+            "load_duration_ms": 12,
+            "duration_ms": 20,
+        }
+
 
 def main() -> None:
     tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_e2e_")

@@ -93,3 +93,46 @@ test('bare Lucy arms one following utterance instead of becoming an empty comman
   now += 20001;
   assert.equal(gate.isArmed(), false);
 });
+
+test('an armed utterance uses the wake-only interpretation contract', async () => {
+  const { invokedInterpretationPayload } = await import(moduleUrl);
+  assert.deepEqual(invokedInterpretationPayload('borrá las últimas 20 palabras'), {
+    text: 'Lucy, borrá las últimas 20 palabras',
+    commands_enabled: true,
+    require_wake_word: true
+  });
+});
+
+test('delete last words removes only the requested tail', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const target = editor('uno dos tres cuatro cinco', 25);
+  const result = applyEditorInstruction(target, { kind: 'delete_last_words', number: 3 });
+  assert.equal(result.changed, true);
+  assert.equal(target.value, 'uno dos ');
+});
+
+test('replace last words changes only the requested tail', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const target = editor('uno dos tres cuatro cinco', 25);
+  const result = applyEditorInstruction(target, {
+    kind: 'replace_last_words',
+    number: 3,
+    text: 'un final distinto'
+  });
+  assert.equal(result.changed, true);
+  assert.equal(target.value, 'uno dos un final distinto');
+});
+
+test('assistant failure activity does not repeat the unchanged-text notice', async () => {
+  const { assistantFailureActivity } = await import(moduleUrl);
+  const message = assistantFailureActivity({
+    data: {
+      detail: 'El asistente no pudo interpretar la orden; no cambié el texto.',
+      technical_detail: 'assistant_invalid_json',
+      assistant_model: 'gpt-5-nano',
+      assistant_ms: 120
+    }
+  });
+  assert.equal((message.match(/no cambi[eé] el texto/gi) || []).length, 1);
+  assert.match(message, /assistant_invalid_json/);
+});

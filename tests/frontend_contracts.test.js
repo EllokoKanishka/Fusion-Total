@@ -37,6 +37,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/dictation/speak',
     '/api/dictation/assistant',
     '/api/dictation/assistant/install',
+    '/api/dictation/assistant/warm',
     '/api/dictation/assist',
     '/api/tools/pdf-to-docx',
     '/api/media/transcribe',

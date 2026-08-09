@@ -74,7 +74,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationAssistantInstallBtn')).toBeVisible();
   page.once('dialog', dialog => dialog.accept());
   await page.locator('#dictationAssistantInstallBtn').click();
-  await expect(page.locator('#dictationAssistantStatus')).toContainText('local · carga bajo demanda');
+  await expect(page.locator('#dictationAssistantStatus')).toContainText('local · se prepara al decir Lucy');
   await expect(page.locator('#dictationAssistantInstallBtn')).toBeHidden();
   await page.locator('#dictationEditor').fill('Una tarde en Buenos Aires. Lo sé.');
   await page.locator('#dictationCommandInput').fill('borrá Bonos Aires Loces');

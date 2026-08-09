@@ -93,7 +93,8 @@ Propiedades:
 - distingue dictado de órdenes mediante la invocación explícita “Lucy”; el
   control puede desactivarse para que absolutamente todo entre como texto;
 - “Lucy” sola arma una ventana acotada para la siguiente frase y el navegador
-  no anuncia ese estado hasta que el nuevo grabador ya está activo;
+  no anuncia ese estado hasta que el modelo local, si fue elegido, confirmó su
+  precarga y el nuevo grabador ya está activo;
 - comparte el catálogo y la voz TTS seleccionada con el lector principal;
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
@@ -106,7 +107,8 @@ Propiedades:
 - STT, asistente y TTS son procesos separados: cambiar o fallar el asistente no
   reinicia Whisper, AllTalk ni el modelo conversacional 14B;
 - soporta insertar, reemplazar, reescribir selección, borrar coincidencias o
-  desde un ancla hasta el final, limpiar, deshacer, rehacer y leer por
+  desde un ancla hasta el final, borrar o reemplazar las últimas N palabras, limpiar,
+  deshacer, rehacer y leer por
   selección, párrafo, hoja virtual o ancla textual;
 - para una escalada opcional el navegador envía como máximo una ventana de
   12.000 caracteres alrededor del cursor; el modelo nunca devuelve un borrador

@@ -11,6 +11,23 @@ export function isBareLucyInvocation(value) {
   return /^lucy(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
 }
 
+export function invokedInterpretationPayload(transcript) {
+  return {
+    text: `Lucy, ${cleanText(transcript)}`,
+    commands_enabled: true,
+    require_wake_word: true
+  };
+}
+
+export function assistantFailureActivity(error) {
+  const detail = error && error.data && error.data.detail ? error.data.detail : (error && error.message) || 'El asistente falló.';
+  const technical = error && error.data && error.data.technical_detail ? error.data.technical_detail : '';
+  const model = error && error.data && error.data.assistant_model ? error.data.assistant_model : 'asistente';
+  const elapsed = error && error.data ? Number(error.data.assistant_ms || 0) : 0;
+  const unchanged = /no cambi[eé] el texto/i.test(detail) ? '' : ' No cambié el texto.';
+  return `${detail} [${model} · ${technical || 'sin detalle'} · ${elapsed} ms]${unchanged}`;
+}
+
 export function createWakeCommandGate({ now = () => Date.now(), ttlMs = WAKE_COMMAND_WINDOW_MS } = {}) {
   let armedUntil = 0;
   return {
@@ -151,6 +168,20 @@ export function applyEditorInstruction(editor, instruction) {
     const range = preferredRange(ranges, Number(editor.selectionStart || editor.value.length));
     replaceRange(editor, '', range[0], editor.value.length);
     return { changed: true, message: `Texto borrado desde “${item.target}” hasta el final.` };
+  }
+  if (kind === 'delete_last_words' || kind === 'replace_last_words') {
+    const count = Math.max(0, Math.min(10000, Number(item.number || 0)));
+    const words = [...String(editor.value || '').matchAll(/\p{L}[\p{L}\p{M}\p{N}'’_-]*/gu)];
+    if (!count || !words.length) return { changed: false, message: 'No encontré palabras al final.' };
+    const first = words[Math.max(0, words.length - count)];
+    const replacement = kind === 'replace_last_words' ? String(item.text || '') : '';
+    if (kind === 'replace_last_words' && !replacement) {
+      return { changed: false, message: 'No recibí el texto de reemplazo.' };
+    }
+    replaceRange(editor, replacement, Number(first.index || 0), editor.value.length);
+    const removed = Math.min(count, words.length);
+    const action = kind === 'replace_last_words' ? 'reemplazada' : 'borrada';
+    return { changed: true, message: `${removed} palabra${removed === 1 ? '' : 's'} ${action}${removed === 1 ? '' : 's'} del final.` };
   }
   if (kind === 'replace' || kind === 'delete') {
     const ranges = occurrenceRanges(editor.value, item.target);
@@ -387,13 +418,18 @@ export function createDictationController({
     const selected = available.find(item => String(item.id || '') === select.value) || {};
     const ready = data && typeof data.ready === 'boolean' ? data.ready : true;
     const installation = data && data.installation && typeof data.installation === 'object' ? data.installation : {};
+    const warmup = data && data.warmup && typeof data.warmup === 'object' ? data.warmup : {};
     const installing = ['queued', 'running'].includes(String(installation.state || ''));
     elements.dictationAssistantStatus.dataset.ready = String(ready);
     elements.dictationAssistantStatus.textContent = installing
       ? `instalando ${installation.model || selected.model || 'modelo local'}…`
       : selected.cloud
         ? (ready ? 'nube · sólo al invocar' : 'nube no disponible')
-        : (select.value === 'rules' ? 'sin modelo' : (ready ? 'local · carga bajo demanda' : 'modelo local no instalado'));
+        : (select.value === 'rules'
+            ? 'sin modelo'
+            : (ready
+                ? (warmup.state === 'ready' ? 'local · modelo preparado' : 'local · se prepara al decir Lucy')
+                : 'modelo local no instalado'));
     elements.dictationAssistantInstallBtn.hidden = select.value !== 'local' || (ready && !installing);
     elements.dictationAssistantInstallBtn.disabled = installing;
     elements.dictationAssistantInstallBtn.textContent = installing
@@ -478,6 +514,24 @@ export function createDictationController({
     wakeGate.arm();
     scheduleWakeExpiry();
     addActivity('Lucy quedó atenta. Decí ahora la orden completa.');
+  }
+
+  async function prepareAssistantForWake() {
+    if (String(elements.dictationAssistantSelect.value || 'rules') !== 'local') return true;
+    setStatus('Preparando el modelo local…', 'processing');
+    try {
+      const data = await api('/api/dictation/assistant/warm', {});
+      const load = Number(data.load_duration_ms || 0);
+      const total = Number(data.duration_ms || 0);
+      addActivity(`Modelo ${data.model || 'local'} preparado: carga ${load} ms · total ${total} ms.`);
+      await refreshAssistantStatus();
+      return true;
+    } catch (error) {
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      addActivity(`No armé la orden: ${detail}`);
+      await refreshAssistantStatus();
+      return false;
+    }
   }
 
   function updateStats() {
@@ -636,11 +690,12 @@ export function createDictationController({
     try {
       const data = await api('/api/dictation/assist', { text: transcript, ...context });
       const model = data.assistant_model || data.assistant_provider || 'asistente';
-      addActivity(`Lucy interpretó la orden con ${model} (${data.assistant_ms || 0} ms).`);
+      addActivity(
+        `Lucy interpretó la orden con ${model}: total ${data.assistant_ms || 0} ms · carga ${data.assistant_load_ms || 0} ms.`
+      );
       return applyInstruction(data.instruction, '', false, true);
     } catch (error) {
-      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
-      addActivity(`${detail} No cambié el texto.`);
+      addActivity(assistantFailureActivity(error));
     } finally {
       setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
@@ -649,6 +704,9 @@ export function createDictationController({
   async function applyInstruction(instruction, transcript = '', allowAssistant = false, assistantAttempted = false) {
     const item = instruction && typeof instruction === 'object' ? instruction : { kind: 'noop' };
     if (transcript) addActivity(`Oí: “${transcript}”`);
+    if (transcript && allowAssistant && item.kind !== 'noop' && item.kind !== 'dictate') {
+      addActivity(`Lucy resolvió la orden con reglas instantáneas (${item.kind}).`);
+    }
     if (item.kind === 'undo') return undo();
     if (item.kind === 'redo') return redo();
     if (item.kind === 'stop_listening') {
@@ -760,6 +818,7 @@ export function createDictationController({
       const transcript = String(data.transcript || '').trim();
       if (!claimedWakeCommand && elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
         addActivity(`Oí: “${transcript}”`);
+        if (!await prepareAssistantForWake()) return;
         armWakeCommand();
         log(`Dictado: ${transcript || 'sin texto'} (${data.stt_provider || 'STT'}). Esperando orden.`);
         return;
@@ -767,11 +826,9 @@ export function createDictationController({
       let instruction = data.instruction;
       let appliedTranscript = transcript;
       if (claimedWakeCommand) {
-        appliedTranscript = wakeGate.command(transcript);
-        const interpreted = await api('/api/dictation/interpret', {
-          text: appliedTranscript,
-          commands_enabled: true
-        });
+        const payload = invokedInterpretationPayload(transcript);
+        appliedTranscript = payload.text;
+        const interpreted = await api('/api/dictation/interpret', payload);
         instruction = interpreted.instruction;
       }
       const invoked = claimedWakeCommand || /^lucy(?:\b|(?=[,.:;!?_-]))/i.test(appliedTranscript);
