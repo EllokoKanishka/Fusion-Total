@@ -32,17 +32,30 @@ El diálogo usa exclusivamente el agente `fusion-dialogue`. No usa ni modifica:
 - canales, bindings, Telegram o gateway;
 - búsqueda web.
 
-El agente se ejecuta con `openclaw agent --local` y un `--session-id` nuevo en
-cada turno. Fusion ya envía la conversación completa serializada por
-`ConversationCore`; por eso no se reutiliza la sesión interna de OpenClaw, lo
-que evita duplicar y acumular el mismo historial en cada respuesta. OpenClaw
-aporta el runtime y la autenticación OpenAI/Codex.
+Fusion ofrece dos modos de ejecución explícitos:
+
+- `agent` (predeterminado): ejecuta `openclaw agent --local` con un
+  `--session-id` nuevo en cada turno;
+- `infer` (experimental): ejecuta `openclaw infer model run --local` sin
+  sesión, herramientas, memoria ni archivos de bootstrap.
+
+Fusion ya envía la conversación completa serializada por `ConversationCore`.
+En modo `infer`, `OPENCLAW_AGENT_DIR` apunta al almacén exclusivo de
+`fusion-dialogue`, por lo que conserva su OAuth y su orden de autenticación sin
+usar `main`. Los errores fallan cerrados: nunca se vuelve silenciosamente a
+`agent` ni al modelo local.
+
+OpenClaw no ofrece un argumento de archivo para el prompt de `infer model run`.
+Por eso, en ese modo el texto aparece transitoriamente en los argumentos del
+proceso local y puede ser visible para procesos del mismo usuario. El modo
+`agent` conserva el transporte mediante archivo temporal.
 
 Referencias oficiales de OpenClaw:
 
 - [proveedor OpenAI y autenticación](https://docs.openclaw.ai/providers/openai);
 - [administración de agentes](https://docs.openclaw.ai/cli/agents);
-- [ejecución de un agente](https://docs.openclaw.ai/cli/agent).
+- [ejecución de un agente](https://docs.openclaw.ai/cli/agent);
+- [inferencia liviana y stateless](https://docs.openclaw.ai/cli/infer).
 
 ## Preparación en la PC
 
@@ -80,7 +93,19 @@ FUSION_READER_OPENAI_CHAT_ENABLED=1
 FUSION_READER_OPENAI_CHAT_MODEL=openai/gpt-5.6-sol
 FUSION_READER_OPENAI_CHAT_AGENT=fusion-dialogue
 FUSION_READER_OPENAI_DICTATION_MODEL=openai/gpt-5-nano
+FUSION_READER_OPENAI_EXECUTION_MODE=agent
 ```
+
+Para activar la ruta liviana explícitamente:
+
+```dotenv
+FUSION_READER_OPENAI_EXECUTION_MODE=infer
+```
+
+`FUSION_READER_OPENAI_CHAT_AGENT_DIR` es opcional. Si no se define, Fusion usa
+`$OPENCLAW_STATE_DIR/agents/fusion-dialogue/agent` o
+`~/.openclaw/agents/fusion-dialogue/agent`. La aplicación falla cerrada si ese
+directorio no existe o pertenece a otro agente.
 
 ## Rendimiento validado
 
@@ -90,6 +115,11 @@ consecutivos tardaron 10.22 s, 10.27 s, 11.22 s, 9.52 s y 10.02 s. El contexto
 se conservó y la latencia dejó de crecer entre turnos. Estos valores son una
 referencia de esa instalación, no un límite garantizado para otras redes o
 cuentas.
+
+La ruta `infer` también completó una prueba directa y una prueba integrada de
+cinco turnos en la instalación real. Como esta consolidación reconstruye el
+cambio sobre un `main` posterior, la comprobación integrada debe repetirse con
+el nuevo head antes de fusionarlo o activarlo de forma permanente.
 
 ## Diagnóstico
 

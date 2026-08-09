@@ -101,11 +101,13 @@ Propiedades:
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
   conversacional 14B ni por OpenAI;
-- el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local
-  y OpenAI GPT-5 nano mediante el agente aislado `fusion-dialogue`; los modelos
-  sólo se invocan cuando una orden con “Lucy” escapa a la gramática;
-- si Qwen3 4B falta, una acción explícita de la interfaz inicia `ollama pull`
-  como proceso poseído y cancelable durante el cierre; nunca bloquea el arranque;
+- el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local,
+  Qwen3 14B Q8 local y OpenAI GPT-5 nano mediante el agente aislado
+  `fusion-dialogue`; los modelos sólo se invocan cuando una orden con “Lucy”
+  escapa a la gramática;
+- si el Qwen seleccionado falta, una acción explícita inicia `ollama pull` como
+  proceso poseído y cancelable durante el cierre; 4B y 14B comparten una sola
+  ranura serializada para impedir descargas simultáneas y estados cruzados;
 - STT, asistente y TTS son procesos separados: cambiar o fallar el asistente no
   reinicia Whisper, AllTalk ni el modelo conversacional 14B;
 - soporta insertar, reemplazar, reescribir selección, borrar coincidencias o
@@ -353,6 +355,12 @@ el último adaptador:
 ConversationCore -> Local: Ollama qwen3 14B
                  -> Cloud: OpenClaw fusion-dialogue -> OpenAI
 ```
+
+El adaptador OpenClaw ofrece dos ejecuciones explícitas. `agent` usa una sesión
+nueva y prompt por archivo en cada turno; `infer` usa inferencia local one-shot,
+sin sesión ni herramientas, y transporta el prompt por argv. `infer` sólo se
+habilita por configuración y usa el directorio de autenticación aislado de
+`fusion-dialogue`; una falla no conmuta silenciosamente a otro provider.
 
 La selección persiste en la sesión y nunca cambia STT, TTS, navegación,
 lectura ni caché. El servicio multimedia recibe expresamente el provider local:

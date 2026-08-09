@@ -146,9 +146,10 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 4. mantener `Órdenes con «Lucy»` activo para corregir o leer por voz: sólo las
    frases que empiezan con “Lucy” se ejecutan como órdenes; o
    desactivarlo cuando todo lo pronunciado deba entrar literalmente;
-5. elegir `Reglas instantáneas`, `IA local ligera` u `OpenAI nano`; la gramática
-   siempre resuelve primero las órdenes conocidas y el modelo se carga o llama
-   sólo ante una orden no reconocida;
+5. elegir `Reglas instantáneas`, `Qwen3 4B — rápido`, `Qwen3 14B Q8 — mejor
+   comprensión` u `OpenAI nano`; la gramática siempre resuelve primero las
+   órdenes conocidas y el modelo se carga o llama sólo ante una orden no
+   reconocida;
 6. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
    conservar un archivo.
 
@@ -166,8 +167,11 @@ y `Lucy, X, cambialo por Y`.
 
 El default `Reglas instantáneas` no carga ningún LLM. Para instalar los modelos
 locales opcionales, seleccionar `Qwen3 4B — rápido` o `Qwen3 14B Q8 — mejor comprensión`
-y pulsar el botón de instalación (`qwen3:4b` o `qwen3:14b-q8_0`); la descarga corre en un trabajo propio y el dictado/lector siguen
-disponibles. La alternativa por terminal es:
+y pulsar el botón de instalación (`qwen3:4b` o `qwen3:14b-q8_0`); la descarga
+corre en un único trabajo propio y el dictado/lector siguen disponibles. Si otra
+pestaña intenta instalar el segundo modelo mientras hay un pull activo, recibe
+el estado del trabajo en curso y no inicia una descarga paralela. La alternativa
+por terminal es:
 
 ```bash
 ollama pull qwen3:4b
@@ -245,6 +249,10 @@ provider sin iniciar ni cargar modelos pesados.
    `openclaw models auth login --provider openai`
 6. verificar el agente sin mutar nada con
    `python3 scripts/setup_fusion_openai_dialogue.py`
+7. si se usa `FUSION_READER_OPENAI_EXECUTION_MODE=infer`, confirmar en
+   `chat_provider` los valores `execution_mode=infer`, `session_mode=stateless`
+   y `prompt_transport=argv`; si el binario no soporta `infer`, Panda Fusión
+   debe fallar cerrado y conservar sana la lectura
 
 La instalación y las fronteras de privacidad están en
 `docs/OPENAI_DIALOGUE_PROVIDER.md`.

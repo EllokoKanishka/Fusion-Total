@@ -312,6 +312,8 @@ class OpenClawChatProvider(ChatProvider):
         timeout_seconds: float = 180.0,
         enabled: bool = True,
         environment: dict[str, str] | None = None,
+        execution_mode: str = "agent",
+        agent_dir: str = "",
     ) -> None:
         self.command = (
             command
@@ -323,9 +325,15 @@ class OpenClawChatProvider(ChatProvider):
         self.timeout_seconds = max(10.0, float(timeout_seconds))
         self.enabled = bool(enabled)
         self.environment = dict(environment) if environment is not None else None
+        self.execution_mode = str(execution_mode or "agent").strip().lower()
+        if self.execution_mode not in {"agent", "infer"}:
+            raise ValueError("invalid_openclaw_execution_mode")
+        self.agent_dir = str(agent_dir or Path.home() / ".openclaw" / "agents" / self.agent / "agent")
 
     def available(self) -> bool:
         if not self.enabled or self.agent != "fusion-dialogue":
+            return False
+        if self.execution_mode == "infer" and not Path(self.agent_dir).is_dir():
             return False
         if os.path.isabs(self.command):
             return Path(self.command).is_file()
@@ -340,7 +348,9 @@ class OpenClawChatProvider(ChatProvider):
             "agent": self.agent,
             "model": self.default_model,
             "cloud": True,
-            "session_mode": "fresh_per_turn",
+            "execution_mode": self.execution_mode,
+            "session_mode": "stateless" if self.execution_mode == "infer" else "fresh_per_turn",
+            "prompt_transport": "argv" if self.execution_mode == "infer" else "file",
             "detail": "configured" if available else ("disabled" if not self.enabled else "openclaw_unavailable"),
         }
 
@@ -385,6 +395,21 @@ class OpenClawChatProvider(ChatProvider):
                         payload = candidate
         if not isinstance(payload, dict):
             return "", "", "openclaw_invalid_json"
+        outputs_value = payload.get("outputs")
+        if payload.get("capability") == "model.run" or isinstance(outputs_value, list):
+            model = str(payload.get("model") or "").strip()
+            if payload.get("ok") is False:
+                return "", model, "openclaw_infer_error"
+            outputs = outputs_value if isinstance(outputs_value, list) else []
+            answer = "\n".join(
+                str(item.get("text") or "").strip()
+                for item in outputs
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ).strip()
+            if not answer:
+                return "", model, "empty_answer"
+            return answer, model, ""
+
         result_value = payload.get("result")
         result = result_value if isinstance(result_value, dict) else payload
         meta_value = result.get("meta")
@@ -422,35 +447,55 @@ class OpenClawChatProvider(ChatProvider):
         thinking = "off"
         if bool(think):
             thinking = environment_value("FUSION_READER_OPENAI_THINKING_LEVEL", "medium") or "medium"
-        # ConversationCore already serializes the complete history. A fresh
-        # OpenClaw session prevents that same history from accumulating a second
-        # time inside the agent session on every PandaFusion turn.
-        session_id = str(uuid.uuid4())
         temp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", prefix="fusion_dialogue_", suffix=".txt", delete=False
-            ) as handle:
-                handle.write(prompt)
-                temp_path = handle.name
-            cmd = [
-                self.command,
-                "agent",
-                "--local",
-                "--agent",
-                self.agent,
-                "--session-id",
-                session_id,
-                "--model",
-                selected_model,
-                "--thinking",
-                thinking,
-                "--json",
-                "--timeout",
-                str(int(self.timeout_seconds)),
-                "--message-file",
-                temp_path,
-            ]
+            if self.execution_mode == "infer":
+                # OpenClaw's one-shot inference path reads the selected agent's
+                # OAuth store through OPENCLAW_AGENT_DIR. It intentionally has no
+                # session, tools, memory, workspace bootstrap or silent fallback.
+                env["OPENCLAW_AGENT_DIR"] = self.agent_dir
+                cmd = [
+                    self.command,
+                    "infer",
+                    "model",
+                    "run",
+                    "--local",
+                    "--model",
+                    selected_model,
+                    "--thinking",
+                    thinking,
+                    "--json",
+                    "--prompt",
+                    prompt,
+                ]
+            else:
+                # ConversationCore already serializes the complete history. A
+                # fresh OpenClaw session prevents that history from accumulating
+                # a second time inside the agent session on every Fusion turn.
+                session_id = str(uuid.uuid4())
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", prefix="fusion_dialogue_", suffix=".txt", delete=False
+                ) as handle:
+                    handle.write(prompt)
+                    temp_path = handle.name
+                cmd = [
+                    self.command,
+                    "agent",
+                    "--local",
+                    "--agent",
+                    self.agent,
+                    "--session-id",
+                    session_id,
+                    "--model",
+                    selected_model,
+                    "--thinking",
+                    thinking,
+                    "--json",
+                    "--timeout",
+                    str(int(self.timeout_seconds)),
+                    "--message-file",
+                    temp_path,
+                ]
             proc = run_owned(
                 cmd,
                 capture_output=True,
