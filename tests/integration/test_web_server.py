@@ -302,6 +302,14 @@ class WebServerIntegrationTests(unittest.TestCase):
                     "lo que vos quieras.",
                 ),
                 ("Lucy, borra desde y el signo en adelante", "delete_from", 0, ""),
+                ("Lucy, Después de O, borrar todo.", "delete_from", 0, ""),
+                (
+                    "Lucy, O podría contener el universo, cambiarlo por 1 2 3 4 5",
+                    "replace",
+                    0,
+                    "1 2 3 4 5",
+                ),
+                ("Lúci, después de O, borrar todo", "delete_from", 0, ""),
             )
             for transcript, kind, number, replacement in exact_console_cases:
                 status, exact = self._request(
@@ -317,7 +325,7 @@ class WebServerIntegrationTests(unittest.TestCase):
                 self.assertEqual(exact["instruction"]["kind"], kind)
                 self.assertEqual(exact["instruction"]["number"], number)
                 self.assertEqual(exact["instruction"]["text"], replacement)
-            self.assertEqual(exact["instruction"]["target"], "y el signo")
+            self.assertEqual(exact["instruction"]["target"], "O")
 
             status, unknown = self._request(
                 base,

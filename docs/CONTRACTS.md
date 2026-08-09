@@ -101,8 +101,12 @@ A bare `Lucy` utterance arms the next recorded utterance as its command for a
 bounded time window. When the local assistant is selected, the browser first
 waits for Ollama to confirm the model preload. It starts the new recorder before
 announcing the armed state, so neither model load nor recorder startup can be
-mistaken for active command listening. An invoked command never degrades to a
-literal `dictate` instruction.
+mistaken for active command listening. Common accented STT spellings such as
+`Lúci` use the same wake contract. Once speech begins, the browser reserves the
+wake state through transcription and consumes it only after receiving a valid
+transcript; a failed upload or transcription keeps the bounded command window
+available for one retry. An invoked command never degrades to a literal
+`dictate` instruction.
 
 The draft itself is browser-owned. Optional model assistance accepts at most a
 12,000-character excerpt around the caret. It cannot return a complete draft or
@@ -110,7 +114,9 @@ an unbounded operation. Ollama receives the schema through its native `format`
 field. OpenAI runs behind the isolated OpenClaw CLI, which receives the same
 serialized JSON schema in its prompt; PandaFusion validates the resulting
 object strictly before returning any editor instruction because that CLI does
-not expose OpenAI's native response-format parameter.
+not expose OpenAI's native response-format parameter. CLI diagnostics outside
+the JSON transport envelope are ignored, but the embedded OpenClaw result and
+the assistant instruction must both retain their expected object shapes.
 The browser applies validated operations while retaining undo ownership.
 Selecting OpenAI is explicit because that excerpt is sent to the isolated cloud
 provider.

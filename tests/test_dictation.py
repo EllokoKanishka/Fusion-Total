@@ -61,10 +61,34 @@ class DictationInstructionTests(unittest.TestCase):
         for utterance in (
             "Lucy, borrá de Buenos Aires para adelante",
             "Lucy.borra.Buenos Aires.hasta el final",
+            "Lucy, Después de O, borrar todo.",
         ):
             with self.subTest(utterance=utterance):
                 instruction = interpret_dictation_transcript(utterance, require_wake_word=True)
-                self.assertEqual((instruction.kind, instruction.target), ("delete_from", "Buenos Aires"))
+                expected_target = "O" if "Después" in utterance else "Buenos Aires"
+                self.assertEqual((instruction.kind, instruction.target), ("delete_from", expected_target))
+
+    def test_object_first_pronoun_replacement_is_bounded(self):
+        instruction = interpret_dictation_transcript(
+            "Lucy, O podría estar intentando contener toda la fuerza del universo entre ellas, "
+            "cambiarlo por 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+            require_wake_word=True,
+        )
+
+        self.assertEqual(instruction.kind, "replace")
+        self.assertEqual(
+            instruction.target,
+            "O podría estar intentando contener toda la fuerza del universo entre ellas",
+        )
+        self.assertEqual(instruction.text, "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18")
+
+    def test_accented_luci_is_a_wake_word(self):
+        instruction = interpret_dictation_transcript(
+            "Lúci, después de O, borrar todo",
+            require_wake_word=True,
+        )
+
+        self.assertEqual((instruction.kind, instruction.target), ("delete_from", "O"))
 
     def test_replace_delete_undo_and_redo_commands(self):
         replace = interpret_dictation_transcript("Reemplazá Borges por Spinoza")

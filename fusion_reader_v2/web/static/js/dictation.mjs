@@ -8,7 +8,7 @@ function cleanText(value) {
 }
 
 export function isBareLucyInvocation(value) {
-  return /^lucy(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
+  return /^l[uú]c(?:y|[ií])(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
 }
 
 export function invokedInterpretationPayload(transcript) {
@@ -38,8 +38,13 @@ export function createWakeCommandGate({ now = () => Date.now(), ttlMs = WAKE_COM
     clear() {
       armedUntil = 0;
     },
+    reserve() {
+      if (!this.isArmed()) return false;
+      armedUntil = Number.MAX_SAFE_INTEGER;
+      return true;
+    },
     hold() {
-      if (this.isArmed()) armedUntil = Number.MAX_SAFE_INTEGER;
+      return this.reserve();
     },
     isArmed() {
       if (!armedUntil || now() > armedUntil) {
@@ -104,11 +109,17 @@ function occurrenceRanges(value, target) {
   const lowered = source.toLocaleLowerCase('es');
   const loweredNeedle = needle.toLocaleLowerCase('es');
   const ranges = [];
+  const isWordCharacter = value => Boolean(value) && /[\p{L}\p{M}\p{N}_]/u.test(value);
+  const startsWithWord = isWordCharacter(loweredNeedle[0]);
+  const endsWithWord = isWordCharacter(loweredNeedle[loweredNeedle.length - 1]);
   let offset = 0;
   while (offset <= lowered.length - loweredNeedle.length) {
     const index = lowered.indexOf(loweredNeedle, offset);
     if (index < 0) break;
-    ranges.push([index, index + needle.length]);
+    const end = index + loweredNeedle.length;
+    const leftBounded = !startsWithWord || !isWordCharacter(source[index - 1]);
+    const rightBounded = !endsWithWord || !isWordCharacter(source[end]);
+    if (leftBounded && rightBounded) ranges.push([index, index + needle.length]);
     offset = index + Math.max(1, loweredNeedle.length);
   }
   if (ranges.length) return ranges;
@@ -782,7 +793,7 @@ export function createDictationController({
       if (speechMs >= 45 && !voiceDetected) {
         voiceDetected = true;
         if (wakeGate.isArmed()) {
-          wakeGate.hold();
+          wakeGate.reserve();
           windowRef.clearTimeout(wakeExpiryTimer);
           wakeExpiryTimer = 0;
         }
@@ -800,9 +811,9 @@ export function createDictationController({
     monitorId = windowRef.requestAnimationFrame(monitorRecorder);
   }
 
-  async function uploadRecording(blob, mime, claimedWakeCommand = false) {
+  async function uploadRecording(blob, mime, reservedWakeCommand = false) {
     processing = true;
-    setStatus(claimedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
+    setStatus(reservedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
     try {
       const params = new URLSearchParams({
         filename: mime.includes('ogg') ? 'dictation.ogg' : 'dictation.webm',
@@ -816,7 +827,8 @@ export function createDictationController({
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
-      if (!claimedWakeCommand && elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
+      if (elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
+        if (reservedWakeCommand) wakeGate.claim();
         addActivity(`Oí: “${transcript}”`);
         if (!await prepareAssistantForWake()) return;
         armWakeCommand();
@@ -825,6 +837,7 @@ export function createDictationController({
       }
       let instruction = data.instruction;
       let appliedTranscript = transcript;
+      const claimedWakeCommand = reservedWakeCommand && wakeGate.claim();
       if (claimedWakeCommand) {
         const payload = invokedInterpretationPayload(transcript);
         appliedTranscript = payload.text;
@@ -836,6 +849,11 @@ export function createDictationController({
       log(`Dictado: ${appliedTranscript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {
       addActivity(`Falló la transcripción: ${error.message}.`);
+      if (reservedWakeCommand && active && elements.dictationCommandsToggle.checked) {
+        wakeGate.arm();
+        scheduleWakeExpiry();
+        addActivity('Lucy sigue atenta; repetí la orden completa.');
+      }
     } finally {
       processing = false;
       if (active && !speaking) {
@@ -886,12 +904,12 @@ export function createDictationController({
         if (active && !processing && !speaking) windowRef.setTimeout(startRecorderCycle, 180);
         return;
       }
-      const claimedWakeCommand = wakeGate.claim();
-      if (claimedWakeCommand) {
+      const reservedWakeCommand = wakeGate.reserve();
+      if (reservedWakeCommand) {
         windowRef.clearTimeout(wakeExpiryTimer);
         wakeExpiryTimer = 0;
       }
-      uploadRecording(blob, blob.type || mime, claimedWakeCommand);
+      uploadRecording(blob, blob.type || mime, reservedWakeCommand);
     }, { once: true });
     recorder.start(250);
     setStatus(
