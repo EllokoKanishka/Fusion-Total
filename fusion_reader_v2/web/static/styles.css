@@ -49,6 +49,26 @@ aside {
   grid-column: 1;
   border-right: 1px solid var(--line);
 }
+.brand-header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-left: 8px;
+  margin-bottom: 12px;
+}
+.brand-emblem {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  object-fit: cover;
+  border: 1px solid var(--accent-2);
+  border-radius: 15px;
+  box-shadow:
+    0 0 0 3px var(--accent-2-soft),
+    0 8px 20px rgba(0, 0, 0, .28);
+}
 .right-sidebar {
   grid-column: 3;
   border-left: 1px solid var(--line);
