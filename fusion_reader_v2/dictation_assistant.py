@@ -104,11 +104,13 @@ class DictationAssistant:
             }
         ]
         labels = {
-            "local": "IA local ligera",
-            "openai": "OpenAI nano",
+            "local": "Qwen3 4B — rápido",
+            "local14b": "Qwen3 14B Q8 — mejor comprensión",
+            "openai": "OpenAI — experimental",
         }
         descriptions = {
-            "local": "Usa Ollama sólo cuando las reglas no alcanzan.",
+            "local": "Usa Qwen3 4B sólo cuando las reglas no alcanzan.",
+            "local14b": "Usa Qwen3 14B Q8 para mayor precisión y comprensión de órdenes complejas.",
             "openai": "Envía la orden y un contexto acotado a OpenAI mediante OpenClaw.",
         }
         for provider_id, provider in self.providers.items():

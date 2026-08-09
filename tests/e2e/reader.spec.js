@@ -52,7 +52,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationVoiceSelect')).toBeVisible();
   await expect(page.locator('#dictationVoiceSelect')).toHaveValue(await page.locator('#voiceSelect').inputValue());
   await expect(page.locator('#dictationAssistantSelect')).toBeVisible();
-  await expect(page.locator('#dictationAssistantSelect option')).toHaveCount(3);
+  await expect(page.locator('#dictationAssistantSelect option')).toHaveCount(4);
   await expect(page.locator('#dictationAssistantSelect')).toHaveValue('rules');
   await expect(page.locator('.left-sidebar')).toBeHidden();
   await expect(page.locator('main')).toBeHidden();

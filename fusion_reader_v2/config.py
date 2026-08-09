@@ -139,6 +139,7 @@ class ProviderSettings:
     chat_provider: str
     dictation_assistant: str
     dictation_model: str
+    dictation_14b_model: str
     dictation_timeout_seconds: float
     openai_chat_model: str
     openai_dictation_model: str
@@ -170,7 +171,7 @@ class ProviderSettings:
             raise ConfigurationError("invalid STT provider")
         if self.chat_provider not in {"local", "openai"}:
             raise ConfigurationError("invalid chat provider")
-        if self.dictation_assistant not in {"rules", "local", "openai"}:
+        if self.dictation_assistant not in {"rules", "local", "local14b", "openai"}:
             raise ConfigurationError("invalid dictation assistant")
         if self.openai_chat_agent != "fusion-dialogue":
             raise ConfigurationError("Fusion OpenAI dialogue must use the fusion-dialogue OpenClaw agent")
@@ -275,6 +276,7 @@ def create_settings(
             chat_provider=env.get("FUSION_READER_CHAT_PROVIDER", "local").strip().lower(),
             dictation_assistant=env.get("FUSION_READER_DICTATION_ASSISTANT", "rules").strip().lower(),
             dictation_model=env.get("FUSION_READER_DICTATION_MODEL", "qwen3:4b").strip(),
+            dictation_14b_model=env.get("FUSION_READER_DICTATION_14B_MODEL", "qwen3:14b-q8_0").strip(),
             dictation_timeout_seconds=_floating(env, "FUSION_READER_DICTATION_TIMEOUT", 60.0, minimum=1.0),
             openai_chat_model=env.get("FUSION_READER_OPENAI_CHAT_MODEL", "openai/gpt-5.6-sol").strip(),
             openai_dictation_model=env.get("FUSION_READER_OPENAI_DICTATION_MODEL", "openai/gpt-5-nano").strip(),

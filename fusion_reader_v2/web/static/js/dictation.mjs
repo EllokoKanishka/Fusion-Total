@@ -431,6 +431,7 @@ export function createDictationController({
     const installation = data && data.installation && typeof data.installation === 'object' ? data.installation : {};
     const warmup = data && data.warmup && typeof data.warmup === 'object' ? data.warmup : {};
     const installing = ['queued', 'running'].includes(String(installation.state || ''));
+    const isLocalProvider = Boolean(selected && !selected.cloud && select.value !== 'rules');
     elements.dictationAssistantStatus.dataset.ready = String(ready);
     elements.dictationAssistantStatus.textContent = installing
       ? `instalando ${installation.model || selected.model || 'modelo local'}…`
@@ -439,9 +440,9 @@ export function createDictationController({
         : (select.value === 'rules'
             ? 'sin modelo'
             : (ready
-                ? (warmup.state === 'ready' ? 'local · modelo preparado' : 'local · se prepara al decir Lucy')
+                ? (warmup.state === 'ready' && warmup.model === selected.model ? 'local · modelo preparado' : 'local · se prepara al decir Lucy')
                 : 'modelo local no instalado'));
-    elements.dictationAssistantInstallBtn.hidden = select.value !== 'local' || (ready && !installing);
+    elements.dictationAssistantInstallBtn.hidden = !isLocalProvider || (ready && !installing);
     elements.dictationAssistantInstallBtn.disabled = installing;
     elements.dictationAssistantInstallBtn.textContent = installing
       ? 'Instalando…'
@@ -528,7 +529,8 @@ export function createDictationController({
   }
 
   async function prepareAssistantForWake() {
-    if (String(elements.dictationAssistantSelect.value || 'rules') !== 'local') return true;
+    const value = String(elements.dictationAssistantSelect.value || 'rules');
+    if (!['local', 'local14b'].includes(value)) return true;
     setStatus('Preparando el modelo local…', 'processing');
     try {
       const data = await api('/api/dictation/assistant/warm', {});
