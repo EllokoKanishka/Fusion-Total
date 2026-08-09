@@ -130,6 +130,7 @@ def create_router() -> Router:
         "/api/chat/reset",
         "/api/dialogue/turn",
         "/api/dictation/interpret",
+        "/api/dictation/speak",
         "/api/voice/test",
         "/api/chat",
     )

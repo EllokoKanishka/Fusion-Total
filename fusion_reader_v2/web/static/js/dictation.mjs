@@ -399,12 +399,14 @@ export function createDictationController({
     try {
       for (let index = 0; index < parts.length && sequence === speechSequence; index += 1) {
         setStatus(`Leyendo ${label}: ${index + 1} de ${parts.length}…`, 'speaking');
-        const data = await api('/api/voice/test', { text: parts[index], play: false });
+        const data = await api('/api/dictation/speak', { text: parts[index] });
+        if (!data.audio_url) throw new Error('La voz no devolvió un audio reproducible.');
         await playAudioUrl(data.audio_url, sequence);
       }
       if (sequence === speechSequence) addActivity(`Lectura terminada (${label}).`);
     } catch (error) {
-      addActivity(`No pude leer: ${error.message}.`);
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      addActivity(`No pude leer: ${detail}.`);
     } finally {
       if (sequence === speechSequence) {
         speaking = false;
@@ -432,6 +434,10 @@ export function createDictationController({
       editor.selectionStart = selection.start;
       editor.selectionEnd = selection.end;
       return speakText(selection.text, item.scope || 'selección');
+    }
+    if (item.kind === 'noop' && /^lucy\b/i.test(String(transcript || '').trim())) {
+      addActivity('Lucy oyó la invocación, pero no reconoció una orden segura. No cambié el texto.');
+      return;
     }
     mutate(item);
   }

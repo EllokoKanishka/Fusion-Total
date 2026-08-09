@@ -238,7 +238,7 @@ class WebServerIntegrationTests(unittest.TestCase):
     def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            server = self._start(root, stt=NullSTTProvider("Borrá piedra y escribí agua"))
+            server = self._start(root, stt=NullSTTProvider("Lucy, borrá piedra y escribí agua"))
             base = f"http://127.0.0.1:{server.server_address[1]}"
 
             status, typed = self._request(
@@ -260,6 +260,12 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(audio["instruction"]["kind"], "replace")
             self.assertEqual(audio["instruction"]["target"], "piedra")
             self.assertFalse(list(server.context.upload_root.glob("fusion_reader_upload_*")))
+
+            status, speech = self._request(base, "/api/dictation/speak", {"text": "Texto seleccionado."})
+            self.assertEqual(status, 200)
+            self.assertTrue(speech["ok"])
+            self.assertTrue(speech["audio_url"])
+            self.assertEqual(self._request(base, speech["audio_url"])[0], 200)
 
     def test_quick_text_endpoint_is_transient_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

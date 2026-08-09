@@ -77,9 +77,16 @@ Dictation routes:
   bounded `instruction` object;
 - `POST /api/dictation/interpret`: JSON `text` plus optional
   `commands_enabled`; useful for typed corrections and accessibility;
+- `POST /api/dictation/speak`: JSON `text`; generates interactive TTS with the
+  same session voice as the main reader and returns a cache-backed `audio_url`;
 - instruction kinds are additive and currently include `dictate`, `insert`,
   `replace`, `delete`, `clear`, `undo`, `redo`, `read`, `stop_listening` and
   `noop`.
+
+Audio dictation treats an utterance as a command only when it begins with the
+wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
+through `/api/dictation/interpret` remain explicit and do not need the wake
+word.
 
 The draft itself is browser-owned. These routes never accept a complete draft
 and never perform an unbounded model-authored rewrite.

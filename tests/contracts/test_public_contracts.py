@@ -45,6 +45,7 @@ PUBLIC_METHOD_PARAMETERS = {
     "dialogue_turn_audio": ("path", "mime", "model", "chunk_index", "audio_meta"),
     "dictation_turn_text": ("text", "commands_enabled"),
     "dictation_turn_audio": ("path", "mime", "commands_enabled"),
+    "dictation_speak": ("text",),
     "dialogue_reset": (),
     "laboratory_mode_status": (),
     "set_laboratory_mode": ("mode",),

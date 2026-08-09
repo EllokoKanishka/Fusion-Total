@@ -85,7 +85,12 @@ Propiedades:
 - vive en un escritorio exclusivo de pantalla completa, separado de Texto rápido
   y Laboratorio; al cerrarlo restaura la interfaz principal;
 - usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
-- distingue dictado de órdenes con un control explícito que puede desactivarse;
+- distingue dictado de órdenes mediante la invocación explícita “Lucy”; el
+  control puede desactivarse para que absolutamente todo entre como texto;
+- comparte el catálogo y la voz TTS seleccionada con el lector principal;
+- la transcripción literal usa el STT especializado local (default operativo:
+  faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
+  conversacional 14B ni por OpenAI;
 - soporta insertar, reemplazar, borrar, limpiar, deshacer, rehacer y leer por
   selección, párrafo, hoja virtual o ancla textual;
 - el backend nunca recibe ni reescribe el borrador completo: sólo audio efímero

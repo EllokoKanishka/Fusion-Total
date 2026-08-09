@@ -34,6 +34,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/notes/create',
     '/api/dialogue/turn',
     '/api/dictation/transcribe',
+    '/api/dictation/speak',
     '/api/tools/pdf-to-docx',
     '/api/media/transcribe',
     '/api/media/translate',
@@ -52,6 +53,7 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="mediaInfo"[^>]+aria-live="polite"/);
   assert.match(html, /id="dictationToggleBtn"[^>]+aria-expanded="false"[^>]+aria-controls="dictationWorkspace"/);
   assert.match(html, /id="dictationEditor"[^>]+aria-label="Borrador de dictado"/);
+  assert.match(html, /id="dictationVoiceSelect"[^>]+aria-label="Voz de lectura en dictado"/);
   assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
 });
 
@@ -80,6 +82,7 @@ test('UI element collection is isolated and resolves each declared element once'
   assert.equal(new Set(ELEMENT_IDS).size, ELEMENT_IDS.length);
   assert.deepEqual(calls, ELEMENT_IDS);
   assert.equal(elements.dialogueBtn.id, 'dialogueBtn');
-  assert.equal(elements.voiceSelect.id, 'voiceSelect');
-  assert.equal(elements.dictationEditor.id, 'dictationEditor');
+    assert.equal(elements.voiceSelect.id, 'voiceSelect');
+    assert.equal(elements.dictationVoiceSelect.id, 'dictationVoiceSelect');
+    assert.equal(elements.dictationEditor.id, 'dictationEditor');
 });

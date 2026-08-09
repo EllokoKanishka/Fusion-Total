@@ -124,7 +124,8 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 1. abrir `Dictado` desde la barra superior;
 2. pulsar `Iniciar dictado` y aprobar el permiso de micrófono;
 3. hacer una pausa breve para cerrar cada tramo;
-4. mantener `Interpretar órdenes` activo para corregir o leer por voz, o
+4. mantener `Órdenes con «Lucy»` activo para corregir o leer por voz: sólo las
+   frases que empiezan con “Lucy” se ejecutan como órdenes; o
    desactivarlo cuando todo lo pronunciado deba entrar literalmente;
 5. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
    conservar un archivo.
@@ -133,8 +134,10 @@ El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
 escribe en el upload temporal únicamente durante la transcripción y se elimina
 en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectura.
 
-Órdenes base: `borrá X y escribí Y`, `reemplazá X por Y`, `deshacer`, `rehacer`,
-`léeme el último párrafo`, `léeme la última hoja` y `léeme desde X`.
+Órdenes base: `Lucy, borrá X y escribí Y`, `Lucy, reemplazá X por Y`,
+`Lucy, deshacer`, `Lucy, rehacer`, `Lucy, pará acá`,
+`Lucy, léeme el último párrafo`, `Lucy, léeme la última hoja` y
+`Lucy, léeme desde X`.
 
 ## Si STT 8021 está caído
 

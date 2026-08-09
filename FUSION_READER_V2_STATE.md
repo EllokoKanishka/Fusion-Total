@@ -54,9 +54,10 @@ y laboratorio, no como dependencia del producto v2.
   PDF y, opcionalmente, Ollama traduce al castellano antes de reutilizar el TTS
   y la voz seleccionada para exportar WAV.
 - `Dictado` abre un escritorio exclusivo de pantalla completa: captura audio en
-  el navegador, reutiliza el STT local, aplica sólo operaciones editoriales
-  acotadas y conserva el borrador en `localStorage`; el audio temporal se elimina
-  después de cada turno.
+  el navegador, reutiliza el STT local en castellano, aplica sólo operaciones
+  editoriales acotadas cuando la frase invoca a “Lucy” y conserva el borrador en
+  `localStorage`; comparte la voz del lector y elimina el audio temporal después
+  de cada turno.
 - diálogo: `Local 14B` sigue siendo el default; el usuario puede seleccionar
   OpenAI explícitamente mediante OpenClaw `fusion-dialogue`. La voz, la lectura
   y multimedia permanecen locales y no hay fallback silencioso.

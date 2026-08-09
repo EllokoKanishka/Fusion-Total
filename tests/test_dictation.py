@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from fusion_reader_v2 import NullSTTProvider, interpret_dictation_transcript
-from tests.helpers import EmptyTranscriptSTTProvider, test_app
+from tests.helpers import EmptyTranscriptSTTProvider, FailingTTSProvider, test_app
 
 
 class DictationInstructionTests(unittest.TestCase):
@@ -18,6 +18,38 @@ class DictationInstructionTests(unittest.TestCase):
     def test_commands_can_be_disabled_to_remove_ambiguity(self):
         instruction = interpret_dictation_transcript("Borrá la palabra memoria", commands_enabled=False)
         self.assertEqual(instruction.kind, "dictate")
+
+    def test_live_audio_commands_require_lucy_wake_word(self):
+        literal = interpret_dictation_transcript(
+            "Borrá la palabra memoria",
+            require_wake_word=True,
+        )
+        command = interpret_dictation_transcript(
+            "Lucy, borrá la palabra memoria",
+            require_wake_word=True,
+        )
+        unknown = interpret_dictation_transcript(
+            "Lucy, inventá una orden ilimitada",
+            require_wake_word=True,
+        )
+        self.assertEqual((literal.kind, literal.text), ("dictate", "Borrá la palabra memoria"))
+        self.assertEqual((command.kind, command.target), ("delete", "la palabra memoria"))
+        self.assertEqual(unknown.kind, "noop")
+
+    def test_lucy_can_stop_dictation_with_natural_spanish(self):
+        for utterance in ("Lucy, pará acá", "Lucy, paramos acá", "Lucy, detener el dictado"):
+            with self.subTest(utterance=utterance):
+                self.assertEqual(
+                    interpret_dictation_transcript(utterance, require_wake_word=True).kind,
+                    "stop_listening",
+                )
+
+    def test_lucy_pause_preamble_can_lead_into_a_bounded_command(self):
+        instruction = interpret_dictation_transcript(
+            "Lucy, paramos acá. Borrá piedra y escribí agua",
+            require_wake_word=True,
+        )
+        self.assertEqual((instruction.kind, instruction.target, instruction.text), ("replace", "piedra", "agua"))
 
     def test_delete_and_write_becomes_bounded_replacement(self):
         instruction = interpret_dictation_transcript("No, borrá archivo inmóvil y escribí tejido vivo")
@@ -74,7 +106,7 @@ class DictationInstructionTests(unittest.TestCase):
                 self.assertEqual((instruction.scope, instruction.target), expected)
 
     def test_audio_turn_reuses_local_stt_and_returns_instruction(self):
-        app = test_app(stt=NullSTTProvider("Borrá piedra y escribí agua"))
+        app = test_app(stt=NullSTTProvider("Lucy, borrá piedra y escribí agua"))
         with tempfile.TemporaryDirectory() as temporary:
             audio = Path(temporary) / "dictation.webm"
             audio.write_bytes(b"audio")
@@ -82,6 +114,24 @@ class DictationInstructionTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["stt_provider"], "null_stt")
         self.assertEqual(result["instruction"]["kind"], "replace")
+
+    def test_audio_turn_preserves_command_like_speech_without_wake_word(self):
+        app = test_app(stt=NullSTTProvider("Borrá piedra y escribí agua"))
+        with tempfile.TemporaryDirectory() as temporary:
+            audio = Path(temporary) / "dictation.webm"
+            audio.write_bytes(b"audio")
+            result = app.dictation_turn_audio(audio, mime="audio/webm")
+        self.assertEqual(result["instruction"]["kind"], "dictate")
+        self.assertEqual(result["instruction"]["text"], "Borrá piedra y escribí agua")
+
+    def test_dictation_speech_returns_a_human_error_when_tts_is_down(self):
+        app = test_app(tts=FailingTTSProvider())
+        result = app.dictation_speak("Texto seleccionado")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "dictation_speech_failed")
+        self.assertEqual(result["technical_detail"], "tts_down")
+        self.assertNotEqual(result["detail"], "request_failed")
+        self.assertIn("No pude leer", result["detail"])
 
     def test_audio_turn_reports_stt_failure_without_touching_editor_state(self):
         app = test_app(stt=EmptyTranscriptSTTProvider())
