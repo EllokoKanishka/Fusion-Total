@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import unittest
 import urllib.error
 from unittest import mock
@@ -64,6 +65,91 @@ class OllamaProviderMatrixTests(unittest.TestCase):
             self.assertEqual(provider.chat([], model="other").detail, "http_429")
         with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=OSError("down")):
             self.assertIn("down", provider.chat([]).detail)
+
+    def test_ollama_structured_chat_enforces_schema_and_reports_load_time(self) -> None:
+        provider = conversation.OllamaChatProvider(base_url="http://local", default_model="qwen3.5:4b")
+        schema = {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["noop"]}},
+            "required": ["kind"],
+            "additionalProperties": False,
+        }
+        captured = {}
+
+        def respond(request, timeout=0):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return Response(
+                {
+                    "message": {"content": '{"kind":"noop"}'},
+                    "load_duration": 1_250_000_000,
+                }
+            )
+
+        with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=respond):
+            result = provider.chat_structured(
+                [{"role": "user", "content": "orden"}],
+                schema=schema,
+                think=False,
+                num_predict=32,
+                keep_alive="10m",
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.load_duration_ms, 1250)
+        self.assertEqual(captured["format"], schema)
+        self.assertEqual(captured["keep_alive"], "10m")
+        self.assertFalse(captured["think"])
+
+    def test_ollama_preload_uses_an_empty_generate_request(self) -> None:
+        provider = conversation.OllamaChatProvider(base_url="http://local", default_model="qwen3.5:4b")
+        captured = {}
+
+        def respond(request, timeout=0):
+            captured["url"] = request.full_url
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return Response({"done": True, "load_duration": 2_000_000_000})
+
+        with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=respond):
+            result = provider.preload_model(keep_alive="10m")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["load_duration_ms"], 2000)
+        self.assertTrue(captured["url"].endswith("/api/generate"))
+        self.assertEqual(captured["model"], "qwen3.5:4b")
+        self.assertEqual(captured["keep_alive"], "10m")
+
+        http_error = urllib.error.HTTPError("http://local", 503, "down", {}, None)
+        with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=http_error):
+            failed = provider.preload_model()
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["detail"], "http_503")
+
+        with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=OSError("offline")):
+            offline = provider.preload_model()
+        self.assertFalse(offline["ok"])
+        self.assertIn("offline", offline["detail"])
+
+    def test_ollama_model_install_is_explicit_owned_and_verified(self) -> None:
+        provider = conversation.OllamaChatProvider(base_url="http://local", default_model="qwen3:4b")
+        completed = subprocess.CompletedProcess(["ollama", "pull", "qwen3:4b"], 0, "ok", "")
+        with (
+            mock.patch.object(conversation.shutil, "which", return_value="/usr/bin/ollama"),
+            mock.patch.object(conversation, "run_owned", return_value=completed) as owned,
+            mock.patch.object(
+                provider,
+                "health",
+                return_value={"ok": True, "provider": "ollama", "model_present": True},
+            ),
+        ):
+            result = provider.install_model()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"], "installed")
+        self.assertEqual(owned.call_args.args[0], ["/usr/bin/ollama", "pull", "qwen3:4b"])
+
+        with mock.patch.object(conversation.shutil, "which", return_value=None):
+            missing = provider.install_model()
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["detail"], "ollama_cli_unavailable")
 
 
 class ConversationHelperMatrixTests(unittest.TestCase):

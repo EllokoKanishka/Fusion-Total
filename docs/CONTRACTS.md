@@ -1,4 +1,4 @@
-# Fusion Reader v2 Public Contracts
+# Panda Fusión Public Contracts
 
 This document defines deliberate compatibility promises. Internal modules may
 change during consolidation, but these contracts remain stable unless a
@@ -35,6 +35,7 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 - notes CRUD;
 - document chat and explicit external research;
 - text/audio dialogue and reset;
+- dictation text interpretation and ephemeral audio transcription;
 - explicit dialogue-provider selection (`local` or `openai`) through
   `POST /api/chat/provider`; the selected value is session-persistent;
 - laboratory anchor, profile, veil, and reasoning modes;
@@ -68,6 +69,57 @@ responses may be normalized to a stable envelope while preserving the legacy
 Dynamic values are not snapshot identity: timestamps, process IDs, durations,
 UUIDs, temporary paths, and the current Git commit are ignored when comparing
 contract snapshots.
+
+Dictation routes:
+
+- `POST /api/dictation/transcribe`: raw browser audio; query parameters
+  `filename` and `commands=0|1`; returns `transcript`, STT metadata and one
+  bounded `instruction` object;
+- `POST /api/dictation/interpret`: JSON `text` plus optional
+  `commands_enabled`; useful for typed corrections and accessibility;
+- `POST /api/dictation/speak`: JSON `text`; generates interactive TTS with the
+  same session voice as the main reader and returns a cache-backed `audio_url`;
+- `GET /api/dictation/assistant`: returns the selected bounded assistant and its
+  catalog; `POST` to the same route changes the session-persistent selection;
+- `POST /api/dictation/assistant/install`: explicitly starts the one-time local
+  installation of the configured Ollama dictation model; installation state is
+  exposed by `GET /api/dictation/assistant` and never blocks STT or TTS;
+- `POST /api/dictation/assistant/warm`: preloads the selected local model with a
+  bounded keep-alive before the browser exposes the armed listening state;
+- `POST /api/dictation/assist`: accepts one explicit command plus a bounded
+  draft excerpt and selection offsets, and returns one validated instruction;
+- instruction kinds are additive and currently include `dictate`, `insert`,
+  `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
+  `delete_last_words`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.
+
+Audio dictation treats an utterance as a command only when it begins with the
+wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
+through `/api/dictation/interpret` remain explicit and do not need the wake
+word.
+
+A bare `Lucy` utterance arms the next recorded utterance as its command for a
+bounded time window. When the local assistant is selected, the browser first
+waits for Ollama to confirm the model preload. It starts the new recorder before
+announcing the armed state, so neither model load nor recorder startup can be
+mistaken for active command listening. Common accented STT spellings such as
+`Lúci` use the same wake contract. Once speech begins, the browser reserves the
+wake state through transcription and consumes it only after receiving a valid
+transcript; a failed upload or transcription keeps the bounded command window
+available for one retry. An invoked command never degrades to a literal
+`dictate` instruction.
+
+The draft itself is browser-owned. Optional model assistance accepts at most a
+12,000-character excerpt around the caret. It cannot return a complete draft or
+an unbounded operation. Ollama receives the schema through its native `format`
+field. OpenAI runs behind the isolated OpenClaw CLI, which receives the same
+serialized JSON schema in its prompt; PandaFusion validates the resulting
+object strictly before returning any editor instruction because that CLI does
+not expose OpenAI's native response-format parameter. CLI diagnostics outside
+the JSON transport envelope are ignored, but the embedded OpenClaw result and
+the assistant instruction must both retain their expected object shapes.
+The browser applies validated operations while retaining undo ownership.
+Selecting OpenAI is explicit because that excerpt is sent to the isolated cloud
+provider.
 
 ## HTTP Routes
 

@@ -23,6 +23,8 @@ from .audio_export import (
 )
 from .conversation import ConversationCore
 from .dialogue import STTProvider, default_stt_provider
+from .dictation import interpret_dictation_transcript
+from .dictation_assistant import DictationAssistant
 from .metrics import VoiceMetric, VoiceMetricsStore
 from .notes import ReaderNotesStore
 from .local_web_bridge import default_external_research_bridge
@@ -59,6 +61,7 @@ class FusionReaderV2:
         voice: VoiceSettings | None = None,
         metrics: VoiceMetricsStore | None = None,
         conversation: ConversationCore | None = None,
+        dictation_assistant: DictationAssistant | None = None,
         external_research: ExternalResearchBridge | None = None,
         stt: STTProvider | None = None,
         notes: ReaderNotesStore | None = None,
@@ -76,6 +79,7 @@ class FusionReaderV2:
         self.voice = voice or VoiceSettings()
         self.metrics = metrics or VoiceMetricsStore()
         self.conversation = conversation or ConversationCore()
+        self.dictation_assistant = dictation_assistant or DictationAssistant()
         self.external_research = external_research or default_external_research_bridge()
         self.stt = stt or default_stt_provider()
         self.notes = notes or ReaderNotesStore()
@@ -1118,6 +1122,7 @@ class FusionReaderV2:
         out["profile"] = self.profile_status()
         out["veil"] = self.veil_status()
         out["chat_provider"] = self.chat_provider_status()
+        out["dictation_assistant"] = self.dictation_assistant_status()
         main_record = self._main_document_record()
         total = int(out.get("total") or 0)
         current = int(out.get("current") or 0)
@@ -2300,6 +2305,157 @@ class FusionReaderV2:
     def dialogue_reset(self) -> dict:
         return self._dialogue_service.reset()
 
+    def dictation_assistant_status(self) -> dict:
+        return self.dictation_assistant.status()
+
+    def set_dictation_assistant(self, provider_id: str) -> dict:
+        try:
+            selected = self.dictation_assistant.select(provider_id)
+        except ValueError:
+            return {"ok": False, "error": "invalid_dictation_assistant", "detail": "Asistente no reconocido."}
+        self._persist_session_state()
+        self._append_dialogue_trace(
+            {"ts": time.time(), "event": "dictation_assistant_changed", "selected_provider": selected}
+        )
+        return self.dictation_assistant_status()
+
+    def dictation_assist(
+        self,
+        text: str,
+        draft: str = "",
+        selection_start: int = 0,
+        selection_end: int = 0,
+    ) -> dict:
+        clean = str(text or "").strip()
+        if not clean:
+            return {"ok": False, "error": "empty_dictation_command", "detail": "La orden está vacía."}
+        result = self.dictation_assistant.interpret(
+            clean,
+            draft=str(draft or ""),
+            selection_start=selection_start,
+            selection_end=selection_end,
+        )
+        out = result.to_dict()
+        out["transcript"] = clean
+        if not result.ok:
+            out.update(
+                {
+                    "error": "dictation_assistant_failed",
+                    "detail": self._human_dictation_assistant_error(result.detail),
+                    "technical_detail": result.detail,
+                }
+            )
+        return out
+
+    @staticmethod
+    def _human_dictation_assistant_error(detail: str) -> str:
+        clean = str(detail or "").strip()
+        if clean == "rules_only":
+            return "El modo actual sólo usa reglas instantáneas."
+        if clean == "model_not_installed" or "not found" in clean.lower():
+            return "El modelo ligero local todavía no está instalado."
+        if clean in {"openclaw_unavailable", "openclaw_disabled"}:
+            return "El asistente OpenAI no está disponible mediante OpenClaw."
+        if clean in {"openclaw_timeout"} or "timed out" in clean.lower():
+            return "El asistente tardó demasiado y no cambié el texto."
+        if clean.startswith("assistant_"):
+            return "El asistente no devolvió una operación editorial segura; no cambié el texto."
+        return "El asistente no pudo interpretar la orden; no cambié el texto."
+
+    def dictation_turn_text(
+        self,
+        text: str,
+        commands_enabled: bool = True,
+        require_wake_word: bool = False,
+    ) -> dict:
+        clean = str(text or "").strip()
+        if not clean:
+            return {"ok": False, "error": "empty_dictation_text", "detail": "empty_dictation_text"}
+        instruction = interpret_dictation_transcript(
+            clean,
+            commands_enabled=commands_enabled,
+            require_wake_word=require_wake_word,
+        )
+        return {
+            "ok": True,
+            "transcript": clean,
+            "instruction": instruction.to_dict(),
+            "stt_provider": "text",
+            "stt_ms": 0,
+        }
+
+    def dictation_speak(self, text: str) -> dict:
+        clean = str(text or "").strip()
+        if not clean:
+            return {
+                "ok": False,
+                "error": "empty_dictation_speech",
+                "detail": "No encontré texto para leer.",
+            }
+        self._prioritize_dialogue()
+        started = time.perf_counter()
+        artifact = self._synthesize_cached_with_settings(
+            clean,
+            self.voice.voice,
+            self.voice.language,
+            interactive=True,
+        )
+        ready_ms = int((time.perf_counter() - started) * 1000)
+        out = {
+            "ok": artifact.ok,
+            "audio": str(artifact.path or ""),
+            "cached": artifact.cached,
+            "detail": artifact.detail,
+            "provider": artifact.provider,
+            "voice": self.voice.voice,
+            "language": self.voice.language,
+            "synthesis_ms": artifact.duration_ms,
+            "ready_ms": ready_ms,
+        }
+        if not artifact.ok:
+            out.update(
+                {
+                    "error": "dictation_speech_failed",
+                    "technical_detail": artifact.detail,
+                    "detail": self._human_tts_error(artifact.detail),
+                }
+            )
+        self._record_voice_metric("dictation_read", out, clean)
+        return out
+
+    def dictation_turn_audio(
+        self,
+        path: str | Path,
+        mime: str = "",
+        commands_enabled: bool = True,
+    ) -> dict:
+        self._prioritize_dialogue()
+        started = time.perf_counter()
+        transcript = self.stt.transcribe_file(path, mime=mime, language=self.voice.language)
+        if not transcript.ok:
+            return {
+                "ok": False,
+                "error": "dictation_transcription_failed",
+                "detail": transcript.detail or "dictation_transcription_failed",
+                "transcript": transcript.text,
+                "stt_provider": transcript.provider,
+                "stt_ms": transcript.duration_ms,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            }
+        instruction = interpret_dictation_transcript(
+            transcript.text,
+            commands_enabled=commands_enabled,
+            require_wake_word=True,
+        )
+        return {
+            "ok": True,
+            "transcript": transcript.text,
+            "instruction": instruction.to_dict(),
+            "stt_provider": transcript.provider,
+            "stt_ms": transcript.duration_ms,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
+
     def dialogue_turn_text(self, text: str, model: str = "", chunk_index: int | None = None) -> dict:
         text = str(text or "").strip()
         if not text:
@@ -3188,6 +3344,7 @@ class FusionReaderV2:
             profile=self.profile,
             veil=self.veil,
             chat_provider=str(getattr(getattr(self.conversation, "provider", None), "selected", "local") or "local"),
+            dictation_assistant=str(getattr(self.dictation_assistant, "selected", "rules") or "rules"),
         )
 
     def _apply_session_preferences(self, preferences: SessionPreferences) -> None:
@@ -3201,6 +3358,10 @@ class FusionReaderV2:
                 provider.select(preferences.chat_provider)
             except ValueError:
                 provider.select("local")
+        try:
+            self.dictation_assistant.select(preferences.dictation_assistant)
+        except ValueError:
+            self.dictation_assistant.select("rules")
 
     def _set_main_source(self, source_path: str, source_type: str) -> None:
         self._main_source_path = source_path

@@ -35,6 +35,23 @@ from fusion_reader_v2.web.routing import create_router
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
+STATIC_CONTENT_TYPES = {
+    "styles.css": "text/css; charset=utf-8",
+    "panda-fusion-emblem.webp": "image/webp",
+    "app.js": "text/javascript; charset=utf-8",
+    "busy_controls.js": "text/javascript; charset=utf-8",
+    "js/bootstrap.mjs": "text/javascript; charset=utf-8",
+    "js/api.mjs": "text/javascript; charset=utf-8",
+    "js/audio.mjs": "text/javascript; charset=utf-8",
+    "js/busy.mjs": "text/javascript; charset=utf-8",
+    "js/dialogue.mjs": "text/javascript; charset=utf-8",
+    "js/dictation.mjs": "text/javascript; charset=utf-8",
+    "js/ui.mjs": "text/javascript; charset=utf-8",
+    "js/preparation.mjs": "text/javascript; charset=utf-8",
+    "js/audio_export.mjs": "text/javascript; charset=utf-8",
+    "js/notes.mjs": "text/javascript; charset=utf-8",
+    "js/media.mjs": "text/javascript; charset=utf-8",
+}
 PORT = 8010
 UPLOAD_TEMP_SUFFIXES = {
     ".bin": ".bin",
@@ -316,22 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/static/"):
             filename = unquote(path.removeprefix("/static/"))
-            allowed = {
-                "styles.css": "text/css; charset=utf-8",
-                "app.js": "text/javascript; charset=utf-8",
-                "busy_controls.js": "text/javascript; charset=utf-8",
-                "js/bootstrap.mjs": "text/javascript; charset=utf-8",
-                "js/api.mjs": "text/javascript; charset=utf-8",
-                "js/audio.mjs": "text/javascript; charset=utf-8",
-                "js/busy.mjs": "text/javascript; charset=utf-8",
-                "js/dialogue.mjs": "text/javascript; charset=utf-8",
-                "js/ui.mjs": "text/javascript; charset=utf-8",
-                "js/preparation.mjs": "text/javascript; charset=utf-8",
-                "js/audio_export.mjs": "text/javascript; charset=utf-8",
-                "js/notes.mjs": "text/javascript; charset=utf-8",
-                "js/media.mjs": "text/javascript; charset=utf-8",
-            }
-            content_type = allowed.get(filename)
+            content_type = STATIC_CONTENT_TYPES.get(filename)
             asset = STATIC_ROOT / filename
             if not content_type or not asset.is_file():
                 self._json(404, {"ok": False, "error": "static_asset_not_found"})
@@ -364,29 +366,13 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/static/"):
             filename = unquote(path.removeprefix("/static/"))
             asset = STATIC_ROOT / filename
-            if (
-                filename
-                not in {
-                    "styles.css",
-                    "app.js",
-                    "busy_controls.js",
-                    "js/bootstrap.mjs",
-                    "js/api.mjs",
-                    "js/audio.mjs",
-                    "js/busy.mjs",
-                    "js/dialogue.mjs",
-                    "js/ui.mjs",
-                    "js/preparation.mjs",
-                    "js/audio_export.mjs",
-                    "js/notes.mjs",
-                    "js/media.mjs",
-                }
-                or not asset.is_file()
-            ):
+            content_type = STATIC_CONTENT_TYPES.get(filename)
+            if not content_type or not asset.is_file():
                 self.send_response(404)
                 self.end_headers()
                 return
             self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(asset.stat().st_size))
             self.end_headers()
             return

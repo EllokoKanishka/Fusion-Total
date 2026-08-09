@@ -252,6 +252,16 @@ usa principalmente biblioteca estándar:
   - URL base de Ollama; default `http://127.0.0.1:11434`
 - `FUSION_READER_CHAT_MODEL`
   - modelo local principal
+- `FUSION_READER_DICTATION_ASSISTANT`
+  - asistente de escritura: `rules` (default), `local` u `openai`
+- `FUSION_READER_DICTATION_MODEL`
+  - modelo Ollama ligero; default `qwen3:4b`
+- `FUSION_READER_DICTATION_TIMEOUT`
+  - timeout del clasificador local; default 60 segundos
+- `FUSION_READER_OPENAI_DICTATION_MODEL`
+  - modelo de nube para órdenes editoriales; default `openai/gpt-5-nano`
+- `FUSION_READER_OPENAI_DICTATION_TIMEOUT`
+  - timeout del clasificador mediante OpenClaw; default 90 segundos
 - `FUSION_READER_BOHEMIA_CHAT_MODEL`
   - override del perfil Bohemia
 - `FUSION_READER_CHAT_TIMEOUT`

@@ -229,6 +229,51 @@ exit 0
         self.assertIn("python-started-fallback", log_content)
         self.assertIn("xdg-open http://127.0.0.1:19010/", log_content)
 
+    def test_installed_service_uses_voice_first_systemd_entrypoint(self):
+        installer = (self.repo_root / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
+        entrypoint = (self.repo_root / "scripts" / "start_pandafusion_systemd.sh").read_text(encoding="utf-8")
+
+        self.assertIn('ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
+        self.assertIn("KillMode=control-group", installer)
+        self.assertIn("start_reader_neural_tts_gpu_5090.sh", entrypoint)
+        self.assertIn("start_reader_neural_tts.sh", entrypoint)
+        self.assertLess(
+            entrypoint.index("start_reader_neural_tts_gpu_5090.sh"),
+            entrypoint.index("start_reader_neural_tts.sh"),
+        )
+        self.assertIn('export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"', entrypoint)
+        self.assertIn('export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"', entrypoint)
+        self.assertIn("-m scripts.fusion_reader_v2_server", entrypoint)
+
+    def test_systemd_entrypoint_selects_ready_cpu_fallback_before_web_server(self):
+        self.mock_python.write_text(
+            f'''#!/usr/bin/env bash
+echo "tts-url=$FUSION_READER_ALLTALK_URL args=$*" >> "{self.side_effects_log}"
+exit 0
+''',
+            encoding="utf-8",
+        )
+        self.mock_python.chmod(0o755)
+        runtime = Path(self.tmp_dir) / "runtime"
+        environment = {
+            **self.test_env,
+            "FUSION_READER_RUNTIME_ROOT": str(runtime),
+            "FUSION_READER_LOG_ROOT": str(runtime / "logs"),
+        }
+
+        result = subprocess.run(
+            [str(self.repo_root / "scripts" / "start_pandafusion_systemd.sh")],
+            cwd=str(self.repo_root),
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log_content = self.side_effects_log.read_text(encoding="utf-8")
+        self.assertIn("tts-url=http://127.0.0.1:7851", log_content)
+        self.assertIn("-m scripts.fusion_reader_v2_server", log_content)
+
 
 if __name__ == "__main__":
     unittest.main()

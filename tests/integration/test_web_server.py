@@ -16,7 +16,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
+from fusion_reader_v2.dialogue import NullSTTProvider
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
 from fusion_reader_v2.web.jobs import register_pdf_to_docx_download
@@ -38,9 +40,9 @@ class WebServerIntegrationTests(unittest.TestCase):
         settings = replace(settings, ports=replace(settings.ports, api=0))
         return settings
 
-    def _start(self, root: Path, *, synthetic_tts: bool = False):
+    def _start(self, root: Path, *, synthetic_tts: bool = False, stt=None, dictation_assistant=None):
         tts = SyntheticWavTTSProvider() if synthetic_tts else None
-        app_context = managed_test_app(root=root / "app", tts=tts)
+        app_context = managed_test_app(root=root / "app", tts=tts, stt=stt, dictation_assistant=dictation_assistant)
         app = app_context.__enter__()
         server = web_server.create_http_server(app, self._settings(root))
         thread = threading.Thread(target=server.serve_forever, name="fusion-test-http")
@@ -140,10 +142,12 @@ class WebServerIntegrationTests(unittest.TestCase):
             server = self._start(Path(tmp))
             base = f"http://127.0.0.1:{server.server_address[1]}"
             for path, marker in (
-                ("/", b"Fusion Reader v2"),
+                ("/", "Panda Fusión".encode("utf-8")),
                 ("/static/styles.css", b"--accent"),
+                ("/static/panda-fusion-emblem.webp", b"RIFF"),
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
+                ("/static/js/dictation.mjs", b"createDictationController"),
                 ("/health/live", b'"status": "live"'),
                 ("/health/ready", b'"reader_ready": true'),
             ):
@@ -233,6 +237,127 @@ class WebServerIntegrationTests(unittest.TestCase):
                     self.assertEqual(payload["error"], error)
                     self.assertTrue(payload["request_id"])
 
+    def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assistant = DictationAssistant(
+                {
+                    "local": NullChatProvider(
+                        '{"kind":"delete_from","text":"","target":"Buenos Aires",'
+                        '"scope":"","number":0,"all_matches":false}'
+                    )
+                }
+            )
+            server = self._start(
+                root,
+                stt=NullSTTProvider("Lucy, borrá piedra y escribí agua"),
+                dictation_assistant=assistant,
+            )
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+
+            status, assistant_status = self._request(base, "/api/dictation/assistant")
+            self.assertEqual(status, 200)
+            self.assertEqual(assistant_status["selected"], "rules")
+            self.assertEqual(len(assistant_status["available"]), 2)
+            self._request(base, "/api/dictation/assistant", {"provider": "local"})
+            status, assisted = self._request(
+                base,
+                "/api/dictation/assist",
+                {
+                    "text": "Lucy, mejorá el final",
+                    "draft": "Una tarde en Buenos Aires. Lo sé.",
+                    "selection_start": 34,
+                    "selection_end": 34,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(assisted["instruction"]["kind"], "delete_from")
+
+            status, typed = self._request(
+                base,
+                "/api/dictation/interpret",
+                {"text": "Léeme la última hoja", "commands_enabled": True},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(typed["instruction"]["scope"], "last_page")
+
+            status, invoked = self._request(
+                base,
+                "/api/dictation/interpret",
+                {
+                    "text": "Lucy, borrá las últimas 20 palabras",
+                    "commands_enabled": True,
+                    "require_wake_word": True,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(invoked["instruction"]["kind"], "delete_last_words")
+            self.assertEqual(invoked["instruction"]["number"], 20)
+
+            exact_console_cases = (
+                ("Lucy, borrar 10 palabras", "delete_last_words", 10, ""),
+                (
+                    "Lucy, Cambia las últimas 20 palabras por lo que vos quieras.",
+                    "replace_last_words",
+                    20,
+                    "lo que vos quieras.",
+                ),
+                ("Lucy, borra desde y el signo en adelante", "delete_from", 0, ""),
+                ("Lucy, Después de O, borrar todo.", "delete_from", 0, ""),
+                (
+                    "Lucy, O podría contener el universo, cambiarlo por 1 2 3 4 5",
+                    "replace",
+                    0,
+                    "1 2 3 4 5",
+                ),
+                ("Lúci, después de O, borrar todo", "delete_from", 0, ""),
+            )
+            for transcript, kind, number, replacement in exact_console_cases:
+                status, exact = self._request(
+                    base,
+                    "/api/dictation/interpret",
+                    {
+                        "text": transcript,
+                        "commands_enabled": True,
+                        "require_wake_word": True,
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(exact["instruction"]["kind"], kind)
+                self.assertEqual(exact["instruction"]["number"], number)
+                self.assertEqual(exact["instruction"]["text"], replacement)
+            self.assertEqual(exact["instruction"]["target"], "O")
+
+            status, unknown = self._request(
+                base,
+                "/api/dictation/interpret",
+                {
+                    "text": "Lucy, inventá una edición desconocida",
+                    "commands_enabled": True,
+                    "require_wake_word": True,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(unknown["instruction"]["kind"], "noop")
+
+            request = urllib.request.Request(
+                base + "/api/dictation/transcribe?filename=dictation.webm&commands=1",
+                data=b"synthetic-audio",
+                headers={"Content-Type": "audio/webm"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=5.0) as response:
+                audio = json.loads(response.read())
+            self.assertEqual(audio["instruction"]["kind"], "replace")
+            self.assertEqual(audio["instruction"]["target"], "piedra")
+            self.assertFalse(list(server.context.upload_root.glob("fusion_reader_upload_*")))
+
+            status, speech = self._request(base, "/api/dictation/speak", {"text": "Texto seleccionado."})
+            self.assertEqual(status, 200)
+            self.assertTrue(speech["ok"])
+            self.assertTrue(speech["audio_url"])
+            self.assertEqual(self._request(base, speech["audio_url"])[0], 200)
+
     def test_quick_text_endpoint_is_transient_and_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -292,12 +417,19 @@ class WebServerIntegrationTests(unittest.TestCase):
                 with self.subTest(path=path):
                     self.assertEqual(self._request(base, path)[0], 200)
 
-            for path in ("/", "/health", "/api/status", "/static/app.js", "/static/missing.js"):
+            for path, expected, content_type in (
+                ("/", 200, "text/html; charset=utf-8"),
+                ("/health", 200, "application/json"),
+                ("/api/status", 200, "application/json"),
+                ("/static/app.js", 200, "text/javascript; charset=utf-8"),
+                ("/static/panda-fusion-emblem.webp", 200, "image/webp"),
+                ("/static/missing.js", 404, None),
+            ):
                 request = urllib.request.Request(base + path, method="HEAD")
-                expected = 404 if path.endswith("missing.js") else 200
                 try:
                     with urllib.request.urlopen(request, timeout=5.0) as response:
                         self.assertEqual(response.status, expected)
+                        self.assertEqual(response.headers.get("Content-Type"), content_type)
                 except urllib.error.HTTPError as exc:
                     self.assertEqual(exc.code, expected)
 

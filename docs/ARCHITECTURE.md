@@ -1,9 +1,11 @@
-# Fusion Reader v2 — Arquitectura Vigente
+# Panda Fusión — Arquitectura Vigente
 
 ## Norte
 
-Fusion Reader v2 es un lector conversacional por voz neural. La lectura sigue
+Panda Fusión es un lector conversacional por voz neural. La lectura sigue
 siendo el centro del producto.
+
+`fusion_reader_v2` continúa como identificador interno compatible.
 
 ## Capas principales
 
@@ -60,6 +62,65 @@ Propiedades:
 - TTS neural por defecto para respuesta oral;
 - `Dialogar` puede degradar `Supremo -> Pensamiento` para cuidar latencia oral.
 - la UI principal expone ahora el provider STT activo y si está en fallback.
+
+## Dictado editable
+
+Componentes principales:
+
+- `fusion_reader_v2/dictation.py`: interpreta órdenes españolas y devuelve
+  operaciones acotadas, sin mutar documentos;
+- `fusion_reader_v2/dictation_assistant.py`: clasifica órdenes no cubiertas por
+  la gramática mediante un modelo opcional y valida una única operación segura;
+- `fusion_reader_v2/web/routes/dictation.py`: transcripción efímera y órdenes
+  escritas;
+- `fusion_reader_v2/web/static/js/dictation.mjs`: captura, editor, historial,
+  lectura selectiva y autosalvado local.
+
+```text
+Micrófono -> MediaRecorder -> STTProvider -> gramática rápida -> textarea
+                                               | noop invocado con Lucy
+                                               v
+                          asistente opcional -> instrucción acotada -> textarea
+
+Texto seleccionado --------------------------------> TTSProvider -> audio
+```
+
+Propiedades:
+
+- vive en un escritorio exclusivo de pantalla completa, separado de Texto rápido
+  y Laboratorio; al cerrarlo restaura la interfaz principal;
+- usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
+- distingue dictado de órdenes mediante la invocación explícita “Lucy”; el
+  control puede desactivarse para que absolutamente todo entre como texto;
+- “Lucy” sola arma una ventana acotada para la siguiente frase y el navegador
+  no anuncia ese estado hasta que el modelo local, si fue elegido, confirmó su
+  precarga y el nuevo grabador ya está activo; una vez detectada voz, reserva la
+  invocación hasta obtener una transcripción válida para que el transporte no la
+  consuma antes de interpretar la orden;
+- comparte el catálogo y la voz TTS seleccionada con el lector principal;
+- la transcripción literal usa el STT especializado local (default operativo:
+  faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
+  conversacional 14B ni por OpenAI;
+- el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local,
+  Qwen3 14B Q8 local y OpenAI GPT-5 nano mediante el agente aislado
+  `fusion-dialogue`; los modelos sólo se invocan cuando una orden con “Lucy”
+  escapa a la gramática;
+- si el Qwen seleccionado falta, una acción explícita inicia `ollama pull` como
+  proceso poseído y cancelable durante el cierre; 4B y 14B comparten una sola
+  ranura serializada para impedir descargas simultáneas y estados cruzados;
+- STT, asistente y TTS son procesos separados: cambiar o fallar el asistente no
+  reinicia Whisper, AllTalk ni el modelo conversacional 14B;
+- soporta insertar, reemplazar, reescribir selección, borrar coincidencias o
+  desde un ancla hasta el final, borrar o reemplazar las últimas N palabras, limpiar,
+  deshacer, rehacer y leer por
+  selección, párrafo, hoja virtual o ancla textual;
+- para una escalada opcional el navegador envía como máximo una ventana de
+  12.000 caracteres alrededor del cursor; el modelo nunca devuelve un borrador
+  completo y toda operación sigue bajo el historial local de deshacer;
+- `localStorage` conserva el borrador por origen; pasar al lector o descargar TXT
+  siempre requiere una acción explícita;
+- una hoja virtual equivale a aproximadamente 1800 caracteres y no pretende
+  reproducir la paginación editorial de un PDF o DOCX.
 
 ## Modos de razonamiento
 
@@ -294,6 +355,12 @@ el último adaptador:
 ConversationCore -> Local: Ollama qwen3 14B
                  -> Cloud: OpenClaw fusion-dialogue -> OpenAI
 ```
+
+El adaptador OpenClaw ofrece dos ejecuciones explícitas. `agent` usa una sesión
+nueva y prompt por archivo en cada turno; `infer` usa inferencia local one-shot,
+sin sesión ni herramientas, y transporta el prompt por argv. `infer` sólo se
+habilita por configuración y usa el directorio de autenticación aislado de
+`fusion-dialogue`; una falla no conmuta silenciosamente a otro provider.
 
 La selección persiste en la sesión y nunca cambia STT, TTS, navegación,
 lectura ni caché. El servicio multimedia recibe expresamente el provider local:

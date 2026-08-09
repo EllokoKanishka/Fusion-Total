@@ -146,6 +146,40 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(len(session_ids), 2)
         self.assertNotEqual(session_ids[0], session_ids[1])
 
+    def test_openclaw_structured_chat_serializes_the_schema_and_stays_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = Path(tmp) / "openclaw"
+            command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            prompt_seen = ""
+
+            def fake_run(cmd, **kwargs):
+                del kwargs
+                nonlocal prompt_seen
+                prompt_path = Path(cmd[cmd.index("--message-file") + 1])
+                prompt_seen = prompt_path.read_text(encoding="utf-8")
+                payload = {"result": {"payloads": [{"text": '{"kind":"noop"}'}]}}
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+            provider = OpenClawChatProvider(command=str(command), environment={"PATH": ""})
+            schema = {
+                "type": "object",
+                "properties": {"kind": {"type": "string", "enum": ["noop"]}},
+                "required": ["kind"],
+                "additionalProperties": False,
+            }
+            with mock.patch("fusion_reader_v2.conversation.run_owned", side_effect=fake_run):
+                result = provider.chat_structured(
+                    [{"role": "user", "content": "clasificá"}],
+                    schema=schema,
+                    think=False,
+                    keep_alive="10m",
+                )
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(result.answer, '{"kind":"noop"}')
+        self.assertIn('"additionalProperties":false', prompt_seen)
+        self.assertIn("no uses Markdown", prompt_seen)
+
     def test_openclaw_provider_parses_new_root_payload_format(self) -> None:
         payload = {
             "payloads": [{"text": "Respuesta desde OpenClaw nuevo."}],
@@ -158,6 +192,35 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(answer, "Respuesta desde OpenClaw nuevo.")
         self.assertEqual(model, "gpt-5.6-sol")
         self.assertEqual(detail, "")
+
+    def test_openclaw_provider_ignores_cli_diagnostics_around_json(self) -> None:
+        payload = {"result": {"payloads": [{"text": '{"kind":"noop"}'}]}}
+        raw = f"[plugins] optional plugin unavailable\n{json.dumps(payload)}\nopenclaw finished\n"
+
+        answer, model, detail = OpenClawChatProvider._extract_answer(raw)
+
+        self.assertEqual(answer, '{"kind":"noop"}')
+        self.assertEqual(model, "")
+        self.assertEqual(detail, "")
+
+    def test_openclaw_provider_uses_stderr_json_when_stdout_is_only_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = Path(tmp) / "openclaw"
+            command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            payload = {"result": {"payloads": [{"text": '{"kind":"noop"}'}]}}
+            completed = subprocess.CompletedProcess(
+                [str(command)],
+                0,
+                "[plugins] optional plugin unavailable",
+                json.dumps(payload),
+            )
+            provider = OpenClawChatProvider(command=str(command), environment={"PATH": ""})
+
+            with mock.patch("fusion_reader_v2.conversation.run_owned", return_value=completed):
+                result = provider.chat([{"role": "user", "content": "clasificá"}])
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(result.answer, '{"kind":"noop"}')
 
     def test_openclaw_provider_reports_infer_error_without_fallback(self) -> None:
         payload = {

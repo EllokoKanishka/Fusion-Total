@@ -15,7 +15,7 @@ from pathlib import Path
 from unicodedata import normalize
 
 from .config import environment_copy, environment_has, environment_value
-from .owned_subprocess import run_owned
+from .owned_subprocess import CancelSignal, run_owned
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class ChatResult:
     duration_ms: int = 0
     reasoning_mode: str = ""
     reasoning_passes: int = 1
+    load_duration_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,8 +116,61 @@ class OllamaChatProvider(ChatProvider):
             "detail": "ready",
         }
 
-    def chat(
-        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    def install_model(self, model: str = "", *, cancel_event: CancelSignal | None = None) -> dict:
+        """Install one explicitly configured Ollama model without invoking a shell."""
+        selected_model = str(model or self.default_model).strip()
+        if not selected_model:
+            return {"ok": False, "provider": self.name, "detail": "missing_model"}
+        ollama = shutil.which("ollama")
+        if not ollama:
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": "ollama_cli_unavailable",
+            }
+        try:
+            result = run_owned(
+                [ollama, "pull", selected_model],
+                timeout=30 * 60,
+                cancel_event=cancel_event,
+                text=True,
+                output_limit=256 * 1024,
+                check=False,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": str(exc),
+            }
+        if result.returncode != 0:
+            detail = str(result.stderr or result.stdout or "ollama_pull_failed").strip()
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": detail[-2000:] or "ollama_pull_failed",
+            }
+        health = self.health()
+        installed = health.get("model_present") is not False
+        return {
+            "ok": bool(health.get("ok")) and installed,
+            "provider": self.name,
+            "model": selected_model,
+            "detail": "installed" if installed else "model_not_installed",
+        }
+
+    def _chat(
+        self,
+        messages: list[dict],
+        *,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        schema: dict | None = None,
+        keep_alive: str | int | None = None,
     ) -> ChatResult:
         started = time.perf_counter()
         selected_model = model or self.default_model
@@ -137,6 +191,10 @@ class OllamaChatProvider(ChatProvider):
                 "num_predict": selected_num_predict,
             },
         }
+        if schema is not None:
+            payload["format"] = schema
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
         req = urllib.request.Request(
             f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode("utf-8"),
@@ -148,15 +206,23 @@ class OllamaChatProvider(ChatProvider):
                 data = json.loads(resp.read().decode("utf-8"))
             message = data.get("message") if isinstance(data, dict) else None
             answer = str((message or {}).get("content") or "").strip()
+            load_duration_ms = (
+                int(max(0, int(data.get("load_duration") or 0)) / 1_000_000) if isinstance(data, dict) else 0
+            )
             if not answer:
                 return ChatResult(
                     False,
                     model=selected_model,
                     detail="empty_answer",
                     duration_ms=int((time.perf_counter() - started) * 1000),
+                    load_duration_ms=load_duration_ms,
                 )
             return ChatResult(
-                True, answer=answer, model=selected_model, duration_ms=int((time.perf_counter() - started) * 1000)
+                True,
+                answer=answer,
+                model=selected_model,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                load_duration_ms=load_duration_ms,
             )
         except urllib.error.HTTPError as exc:
             return ChatResult(
@@ -169,6 +235,68 @@ class OllamaChatProvider(ChatProvider):
             return ChatResult(
                 False, model=selected_model, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
             )
+
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
+        return self._chat(messages, model=model, think=think, num_predict=num_predict)
+
+    def chat_structured(
+        self,
+        messages: list[dict],
+        *,
+        schema: dict,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | int | None = None,
+    ) -> ChatResult:
+        return self._chat(
+            messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+            schema=schema,
+            keep_alive=keep_alive,
+        )
+
+    def preload_model(self, model: str = "", *, keep_alive: str | int = "10m") -> dict:
+        started = time.perf_counter()
+        selected_model = str(model or self.default_model).strip()
+        payload = {"model": selected_model, "stream": False, "keep_alive": keep_alive}
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            load_duration_ms = (
+                int(max(0, int(data.get("load_duration") or 0)) / 1_000_000) if isinstance(data, dict) else 0
+            )
+            return {
+                "ok": True,
+                "provider": self.name,
+                "model": selected_model,
+                "state": "ready",
+                "keep_alive": keep_alive,
+                "load_duration_ms": load_duration_ms,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            }
+        except urllib.error.HTTPError as exc:
+            detail = f"http_{exc.code}"
+        except Exception as exc:
+            detail = str(exc)
+        return {
+            "ok": False,
+            "provider": self.name,
+            "model": selected_model,
+            "state": "error",
+            "detail": detail,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
 
 
 class OpenClawChatProvider(ChatProvider):
@@ -248,10 +376,23 @@ class OpenClawChatProvider(ChatProvider):
 
     @staticmethod
     def _extract_answer(raw: str) -> tuple[str, str, str]:
+        clean = str(raw or "").strip()
         try:
-            payload = json.loads(str(raw or "").strip())
+            payload = json.loads(clean)
         except (TypeError, ValueError):
-            return "", "", "openclaw_invalid_json"
+            payload = None
+            decoder = json.JSONDecoder()
+            for index, character in enumerate(clean):
+                if character != "{":
+                    continue
+                try:
+                    candidate, _ = decoder.raw_decode(clean[index:])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(candidate, dict):
+                    nested_result = candidate.get("result")
+                    if "payloads" in candidate or (isinstance(nested_result, dict) and "payloads" in nested_result):
+                        payload = candidate
         if not isinstance(payload, dict):
             return "", "", "openclaw_invalid_json"
         outputs_value = payload.get("outputs")
@@ -383,8 +524,9 @@ class OpenClawChatProvider(ChatProvider):
                     Path(temp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
-        raw = (proc.stdout or proc.stderr or "").strip()
-        answer, reported_model, detail = self._extract_answer(raw)
+        answer, reported_model, detail = self._extract_answer(proc.stdout or "")
+        if detail == "openclaw_invalid_json" and proc.stderr:
+            answer, reported_model, detail = self._extract_answer(proc.stderr)
         duration_ms = int((time.perf_counter() - started) * 1000)
         if proc.returncode != 0 and not answer:
             return ChatResult(
@@ -396,6 +538,42 @@ class OpenClawChatProvider(ChatProvider):
         if detail:
             return ChatResult(False, model=reported_model or selected_model, detail=detail, duration_ms=duration_ms)
         return ChatResult(True, answer=answer, model=reported_model or selected_model, duration_ms=duration_ms)
+
+    def chat_structured(
+        self,
+        messages: list[dict],
+        *,
+        schema: dict,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | int | None = None,
+    ) -> ChatResult:
+        """Request JSON-only output and leave final validation to the caller.
+
+        OpenClaw's agent CLI does not expose OpenAI's native response-format
+        parameter. The isolated model gets the exact schema here, and the
+        dictation assistant rejects any non-conforming result before editing.
+        """
+
+        del keep_alive
+        contract = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        bounded_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Respondé exclusivamente con un objeto JSON que cumpla exactamente este esquema; "
+                    f"no uses Markdown ni agregues claves: {contract}"
+                ),
+            },
+            *messages,
+        ]
+        return self.chat(
+            bounded_messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+        )
 
 
 class SelectableChatProvider(ChatProvider):

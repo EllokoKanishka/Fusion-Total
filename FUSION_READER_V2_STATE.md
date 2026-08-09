@@ -1,6 +1,6 @@
-# Fusion Reader v2: estado de continuidad
+# Panda Fusión: estado de continuidad
 
-Fecha: 2026-07-17
+Fecha: 2026-08-09
 Versión del paquete: `2.0.0`
 
 ## Norte
@@ -53,9 +53,30 @@ y laboratorio, no como dependencia del producto v2.
   normaliza a FLAC, Whisper transcribe con idioma y tiempos, ReportLab genera
   PDF y, opcionalmente, Ollama traduce al castellano antes de reutilizar el TTS
   y la voz seleccionada para exportar WAV.
+- `Dictado` abre un escritorio exclusivo de pantalla completa: captura audio en
+  el navegador, reutiliza el STT local en castellano, aplica sólo operaciones
+  editoriales acotadas cuando la frase invoca a “Lucy” y conserva el borrador en
+  `localStorage`; comparte la voz del lector y elimina el audio temporal después
+  de cada turno.
+- las órdenes conocidas de Dictado son instantáneas; las desconocidas pueden
+  escalar, por elección explícita, a Qwen3 4B local, Qwen3 14B Q8 local o GPT-5
+  nano mediante `fusion-dialogue`. Sólo reciben una ventana acotada del borrador
+  y devuelven una operación validada y reversible; STT y TTS permanecen aislados.
+- “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden;
+  con asistente local primero precarga el modelo y la UI anuncia ese estado
+  únicamente después de reabrir el grabador. Si el
+  modelo Qwen configurado falta, la interfaz permite instalar 4B o 14B
+  explícitamente en un único trabajo poseído y cancelable. Las instalaciones se
+  serializan para que dos pestañas o un cambio de selector no lancen pulls
+  simultáneos ni crucen estados; nunca bloquean el arranque, Whisper ni AllTalk.
+- la unidad de usuario instalada arranca TTS GPU/CPU antes del servidor web; si
+  el motor aún no responde, ambos selectores conservan el catálogo conocido de
+  veinte voces con estado degradado hasta recuperar el catálogo dinámico real.
 - diálogo: `Local 14B` sigue siendo el default; el usuario puede seleccionar
-  OpenAI explícitamente mediante OpenClaw `fusion-dialogue`. La voz, la lectura
-  y multimedia permanecen locales y no hay fallback silencioso.
+  OpenAI explícitamente mediante OpenClaw `fusion-dialogue`. El adaptador cloud
+  admite el modo compatible `agent` y el modo opt-in stateless `infer`; ambos
+  fallan cerrados. La voz, la lectura y multimedia permanecen locales y no hay
+  fallback silencioso.
 
 ## Persistencia
 

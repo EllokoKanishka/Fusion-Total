@@ -36,7 +36,32 @@ class CompositionTests(unittest.TestCase):
             self.assertIsNotNone(bundle.stt)
             self.assertIsNotNone(bundle.conversation)
             self.assertIsNotNone(bundle.research)
+            self.assertIsNotNone(bundle.dictation_assistant)
+            self.assertEqual(bundle.dictation_assistant.selected, "rules")
+            self.assertEqual(bundle.dictation_assistant.providers["local"].default_model, "qwen3:4b")
+            self.assertEqual(bundle.dictation_assistant.providers["local14b"].default_model, "qwen3:14b-q8_0")
             self.assertFalse(settings.paths.runtime.exists())
+
+    def test_dictation_assistant_selection_is_independent_from_dialogue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = create_settings(
+                repository_root=Path.cwd(),
+                environ={
+                    "HOME": tmp,
+                    "FUSION_READER_CHAT_PROVIDER": "local",
+                    "FUSION_READER_DICTATION_ASSISTANT": "openai",
+                    "FUSION_READER_DICTATION_MODEL": "qwen3:1.7b",
+                    "FUSION_READER_OPENAI_DICTATION_MODEL": "openai/gpt-5-nano",
+                },
+            )
+            bundle = create_providers(settings)
+            self.assertEqual(bundle.conversation.provider.selected, "local")
+            self.assertEqual(bundle.dictation_assistant.selected, "openai")
+            self.assertEqual(bundle.dictation_assistant.providers["local"].default_model, "qwen3:1.7b")
+            self.assertEqual(
+                bundle.dictation_assistant.providers["openai"].default_model,
+                "openai/gpt-5-nano",
+            )
 
     def test_settings_none_build_disabled_null_providers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

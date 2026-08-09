@@ -1,4 +1,4 @@
-# Fusion Reader v2 — Operación
+# Panda Fusión — Operación
 
 La fase de reparación/consolidación está cerrada en
 `docs/CLOSURE_AND_BACKLOG_V2.md`; este archivo conserva los procedimientos
@@ -14,6 +14,20 @@ El contrato vigente de carga, lectura, cache, cancelación y reproductor está e
 ./scripts/start_fusion_reader_v2_stt.sh
 ./scripts/start_fusion_reader_v2.sh
 ```
+
+La instalación de escritorio genera `pandafusion.service` con
+`scripts/start_pandafusion_systemd.sh` como entrada. Ese proceso inicia primero
+el TTS GPU propio de Fusion (`7853`), cae al TTS CPU (`7851`) si hace falta y
+recién entonces ejecuta el servidor web. Por eso un reinicio normal conserva la
+ruta de voz completa:
+
+```bash
+systemctl --user restart pandafusion.service
+```
+
+Después de actualizar desde una instalación anterior, ejecutar una sola vez
+`./scripts/install_launcher.sh` para regenerar la unidad de usuario con este
+contrato; luego los reinicios comunes ya incluyen la voz.
 
 UI:
 
@@ -61,6 +75,11 @@ La etiqueta superior de voz distingue la ruta de síntesis:
 - `TTS no disponible`: no hay voz utilizable.
 
 Si Dialogar parece lento, mirar primero esa etiqueta o `services.tts.url` en `/api/status`.
+
+Si el TTS está iniciando o caído, los selectores muestran el catálogo conocido
+de veinte voces de Fusion como fallback y lo marcan en su ayuda. Eso permite
+conservar la elección, pero no declara esas voces listas: el catálogo dinámico
+del AllTalk activo vuelve a ser la autoridad apenas responde.
 
 ## Verify
 
@@ -119,6 +138,60 @@ La traza de Dialogar muestra diagnóstico de captura:
 
 Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando silencio o el micrófono equivocado. Si hay amplitud razonable pero `hallucinated_transcript`, ajustar después umbrales/duración o revisar STT, sin tocar `Leer`.
 
+## Dictado
+
+1. abrir `Dictado` desde la barra superior;
+2. pulsar `Iniciar dictado` y aprobar el permiso de micrófono;
+3. hacer una pausa breve para cerrar cada tramo;
+4. mantener `Órdenes con «Lucy»` activo para corregir o leer por voz: sólo las
+   frases que empiezan con “Lucy” se ejecutan como órdenes; o
+   desactivarlo cuando todo lo pronunciado deba entrar literalmente;
+5. elegir `Reglas instantáneas`, `Qwen3 4B — rápido`, `Qwen3 14B Q8 — mejor
+   comprensión` u `OpenAI nano`; la gramática siempre resuelve primero las
+   órdenes conocidas y el modelo se carga o llama sólo ante una orden no
+   reconocida;
+6. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
+   conservar un archivo.
+
+El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
+escribe en el upload temporal únicamente durante la transcripción y se elimina
+en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectura.
+
+Órdenes base: `Lucy, borrá X y escribí Y`, `Lucy, reemplazá X por Y`,
+`Lucy, deshacer`, `Lucy, rehacer`, `Lucy, pará acá`,
+`Lucy, léeme el último párrafo`, `Lucy, léeme la última hoja` y
+`Lucy, léeme desde X`, `Lucy, borrá de X para adelante`,
+`Lucy, borrá las últimas 20 palabras`, `Lucy, borrá 10 palabras` y
+`Lucy, cambiá las últimas 20 palabras por Y`, `Lucy, después de X borrá todo`
+y `Lucy, X, cambialo por Y`.
+
+El default `Reglas instantáneas` no carga ningún LLM. Para instalar los modelos
+locales opcionales, seleccionar `Qwen3 4B — rápido` o `Qwen3 14B Q8 — mejor comprensión`
+y pulsar el botón de instalación (`qwen3:4b` o `qwen3:14b-q8_0`); la descarga
+corre en un único trabajo propio y el dictado/lector siguen disponibles. Si otra
+pestaña intenta instalar el segundo modelo mientras hay un pull activo, recibe
+el estado del trabajo en curso y no inicia una descarga paralela. La alternativa
+por terminal es:
+
+```bash
+ollama pull qwen3:4b
+ollama pull qwen3:14b-q8_0
+```
+
+Al decir `Lucy` sola con el asistente local elegido, Panda Fusión hace una
+precarga verificable y mantiene el modelo residente durante diez minutos. El
+cartel azul aparece sólo después de esa confirmación. La consola muestra tiempo
+de carga y tiempo total; `modelo preparado` no significa meramente instalado.
+
+OpenAI usa `openai/gpt-5-nano` mediante el mismo agente aislado
+`fusion-dialogue`, pero con sesión nueva y prompt editorial. Sólo viajan la
+orden y una ventana máxima de 12.000 caracteres alrededor del cursor; audio,
+libros completos y el historial del diálogo no viajan. El adaptador entrega el
+esquema JSON al agente y PandaFusion valida la respuesta de forma cerrada antes
+de editar; OpenClaw CLI no expone el parámetro nativo de Structured Outputs.
+La voz permanece local. Si el asistente falla, la orden queda en `noop` y el
+texto no cambia.
+
 ## Si STT 8021 está caído
 
 Antes de diagnosticar STT de diálogo, recordar que las conferencias largas
@@ -176,6 +249,10 @@ provider sin iniciar ni cargar modelos pesados.
    `openclaw models auth login --provider openai`
 6. verificar el agente sin mutar nada con
    `python3 scripts/setup_fusion_openai_dialogue.py`
+7. si se usa `FUSION_READER_OPENAI_EXECUTION_MODE=infer`, confirmar en
+   `chat_provider` los valores `execution_mode=infer`, `session_mode=stateless`
+   y `prompt_transport=argv`; si el binario no soporta `infer`, Panda Fusión
+   debe fallar cerrado y conservar sana la lectura
 
 La instalación y las fronteras de privacidad están en
 `docs/OPENAI_DIALOGUE_PROVIDER.md`.

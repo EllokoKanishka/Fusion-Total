@@ -8,6 +8,12 @@ OpenAI vuelve como texto y la pronuncia la voz AllTalk/XTTS ya seleccionada.
 El procesamiento de audio, video y documentos también queda fijado al provider
 local aunque el diálogo esté usando OpenAI.
 
+Dictado puede seleccionar por separado `OpenAI nano` para clasificar una orden
+editorial no reconocida. Reutiliza el agente aislado `fusion-dialogue`, pero no
+el historial conversacional: abre una sesión nueva, envía sólo la orden y una
+ventana máxima de 12.000 caracteres, y acepta únicamente una operación
+editorial validada. No sube audio ni cambia el selector de Dialogar.
+
 El default de instalación permanece en `Local 14B`. La interfaz permite elegir:
 
 - `Local 14B`;
@@ -86,10 +92,11 @@ FUSION_READER_CHAT_PROVIDER=local
 FUSION_READER_OPENAI_CHAT_ENABLED=1
 FUSION_READER_OPENAI_CHAT_MODEL=openai/gpt-5.6-sol
 FUSION_READER_OPENAI_CHAT_AGENT=fusion-dialogue
+FUSION_READER_OPENAI_DICTATION_MODEL=openai/gpt-5-nano
 FUSION_READER_OPENAI_EXECUTION_MODE=agent
 ```
 
-Para probar la ruta liviana en una rama de evaluación:
+Para activar la ruta liviana explícitamente:
 
 ```dotenv
 FUSION_READER_OPENAI_EXECUTION_MODE=infer
@@ -108,6 +115,11 @@ consecutivos tardaron 10.22 s, 10.27 s, 11.22 s, 9.52 s y 10.02 s. El contexto
 se conservó y la latencia dejó de crecer entre turnos. Estos valores son una
 referencia de esa instalación, no un límite garantizado para otras redes o
 cuentas.
+
+La ruta `infer` también completó una prueba directa y una prueba integrada de
+cinco turnos en la instalación real. Como esta consolidación reconstruye el
+cambio sobre un `main` posterior, la comprobación integrada debe repetirse con
+el nuevo head antes de fusionarlo o activarlo de forma permanente.
 
 ## Diagnóstico
 

@@ -24,6 +24,7 @@ class SessionPreferences:
     profile: str
     veil: str
     chat_provider: str = "local"
+    dictation_assistant: str = "rules"
 
 
 class SessionPersistenceService:
@@ -77,6 +78,7 @@ class SessionPersistenceService:
             "profile": preferences.profile,
             "veil": preferences.veil,
             "chat_provider": preferences.chat_provider,
+            "dictation_assistant": preferences.dictation_assistant,
             "voice": self.voice.voice,
             "reference_documents": [
                 {
@@ -117,6 +119,9 @@ class SessionPersistenceService:
             profile=str(raw.get("profile") or "academica").strip().lower(),
             veil=str(raw.get("veil") or "lucy").strip().lower(),
             chat_provider=str(raw.get("chat_provider") or current.chat_provider or "local").strip().lower(),
+            dictation_assistant=str(raw.get("dictation_assistant") or current.dictation_assistant or "rules")
+            .strip()
+            .lower(),
         )
         self.apply_preferences(preferences)
         saved_voice = str(raw.get("voice") or "").strip()

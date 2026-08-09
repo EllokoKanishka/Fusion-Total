@@ -1,15 +1,21 @@
 :root {
   color-scheme: dark;
-  --bg: #090b0b;
-  --panel: #111514;
-  --panel-2: #171c1a;
-  --line: #31403a;
-  --text: #f1f5ef;
-  --muted: #98a59f;
-  --accent: #21d07a;
-  --accent-2: #38c6d8;
-  --danger: #ff7474;
-  --warn: #ffc857;
+  --bg: #06171b;
+  --panel: #0a2227;
+  --panel-2: #0e2b31;
+  --surface: #081c21;
+  --surface-deep: #051317;
+  --surface-hover: #123237;
+  --line: #53645e;
+  --line-soft: rgba(83, 100, 94, .55);
+  --text: #d8c6aa;
+  --muted: #9d9b88;
+  --accent: #a9ad78;
+  --accent-soft: rgba(169, 173, 120, .16);
+  --accent-2: #c0ad8b;
+  --accent-2-soft: rgba(192, 173, 139, .15);
+  --danger: #d08371;
+  --warn: #c5a66c;
 }
 * { box-sizing: border-box; }
 body {
@@ -43,6 +49,26 @@ aside {
   grid-column: 1;
   border-right: 1px solid var(--line);
 }
+.brand-header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-left: 8px;
+  margin-bottom: 12px;
+}
+.brand-emblem {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  object-fit: cover;
+  border: 1px solid var(--accent-2);
+  border-radius: 15px;
+  box-shadow:
+    0 0 0 3px var(--accent-2-soft),
+    0 8px 20px rgba(0, 0, 0, .28);
+}
 .right-sidebar {
   grid-column: 3;
   border-left: 1px solid var(--line);
@@ -58,7 +84,7 @@ aside {
 .media-job-card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #0b0e0d;
+  background: var(--surface);
   padding: 9px 10px 10px;
 }
 .media-tool-card summary {
@@ -124,7 +150,7 @@ main {
 .lab {
   grid-column: 2;
   grid-row: 2;
-  background: #0c0f0e;
+  background: var(--surface-deep);
   padding: 18px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
@@ -153,7 +179,7 @@ h2 {
   margin: 12px 0;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #0b0e0d;
+  background: var(--surface);
   padding: 9px 10px 10px;
 }
 .quick-text-panel summary {
@@ -172,7 +198,7 @@ h2 {
   resize: vertical;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #070909;
+  background: var(--surface-deep);
   color: var(--text);
   line-height: 1.45;
   padding: 9px 10px;
@@ -205,7 +231,7 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
-  background: #0b0e0d;
+  background: var(--surface);
   padding: 10px;
   cursor: pointer;
   min-height: 126px;
@@ -220,7 +246,7 @@ h2 {
 .upload-zone.dragover,
 .upload-zone:focus-visible {
   border-color: var(--accent);
-  background: #101814;
+  background: var(--surface-hover);
 }
 .upload-icon {
   width: 30px;
@@ -254,7 +280,7 @@ h2 {
   margin-top: 8px;
   border: 1px dashed var(--line);
   border-radius: 8px;
-  background: #0b0e0d;
+  background: var(--surface);
   padding: 8px 10px;
   display: grid;
   gap: 6px;
@@ -265,7 +291,7 @@ h2 {
 .mini-tool.dragover,
 .mini-tool:focus-visible {
   border-color: var(--accent-2);
-  background: #101415;
+  background: var(--surface-hover);
 }
 .mini-tool strong {
   font-size: 12px;
@@ -281,7 +307,7 @@ h2 {
   height: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #070909;
+  background: var(--surface-deep);
   overflow: hidden;
   margin-top: 10px;
 }
@@ -345,7 +371,7 @@ h2 {
 .reference-card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #080a0a;
+  background: var(--surface);
   padding: 0;
   overflow: hidden;
 }
@@ -412,7 +438,7 @@ h2 {
 .lab-focus {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #0a0d0c;
+  background: var(--surface);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
@@ -445,7 +471,7 @@ h2 {
 .note-row {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #080a0a;
+  background: var(--surface);
   padding: 0;
 }
 .note-row.current {
@@ -616,7 +642,7 @@ button {
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #101513;
+  background: var(--surface-hover);
   color: var(--text);
   padding: 6px 10px;
   cursor: pointer;
@@ -625,7 +651,7 @@ button {
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #06100b;
+  color: #15201d;
   font-weight: 700;
 }
 button.wide {
@@ -637,7 +663,7 @@ button.danger-btn {
 }
 .danger-btn:hover {
   background: var(--danger);
-  color: #000;
+  color: #1f0e0b;
 }
 button.compact-btn {
   min-height: 24px;
@@ -666,7 +692,7 @@ input[type="number"] {
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #080a0a;
+  background: var(--surface-deep);
   color: var(--text);
   padding: 6px 8px;
   font-size: 13px;
@@ -695,7 +721,7 @@ textarea {
   resize: vertical;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #080a0a;
+  background: var(--surface-deep);
   color: var(--text);
   padding: 8px 10px;
   line-height: 1.4;
@@ -710,7 +736,7 @@ textarea {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #080a0a;
+  background: var(--surface-deep);
   padding: 10px;
   display: grid;
   align-content: start;
@@ -759,7 +785,7 @@ textarea {
   padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #0a0d0c;
+  background: var(--surface);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.1;
@@ -768,7 +794,7 @@ textarea {
 .reasoning-tab.active {
   border-color: var(--accent-2);
   color: var(--text);
-  background: rgba(56, 198, 216, 0.14);
+  background: var(--accent-2-soft);
 }
 .profile-tabs {
   display: flex;
@@ -782,7 +808,7 @@ textarea {
   padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: #0a0d0c;
+  background: var(--surface);
   color: var(--muted);
   font-size: 11px;
   line-height: 1.1;
@@ -791,10 +817,10 @@ textarea {
 .profile-tab.active {
   border-color: var(--accent);
   color: var(--text);
-  background: rgba(33, 208, 122, 0.14);
+  background: var(--accent-soft);
 }
 .compact-select {
-  background: #080a0a;
+  background: var(--surface-deep);
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
@@ -830,7 +856,7 @@ textarea {
 }
 .mode-toggle-btn.active {
   border-color: var(--accent-2);
-  background: rgba(56, 198, 216, 0.14);
+  background: var(--accent-2-soft);
   color: var(--text);
 }
 .dialogue-info {
@@ -904,3 +930,214 @@ textarea {
 .clear-document-btn { margin-top: 4px; }
 .progress-native { width: 100%; height: 8px; accent-color: var(--accent-2); }
 .pdf-cancel-link { margin-left: 8px; font-size: .8em; color: var(--danger); text-decoration: none; }
+
+.app.dictation-open {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.app.dictation-open > :not(.dictation-workspace) {
+  display: none;
+}
+.dictation-workspace[hidden] {
+  display: none;
+}
+.dictation-workspace {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 0;
+  background: var(--bg);
+  padding: clamp(16px, 2vw, 30px);
+  display: grid;
+  grid-template-rows: auto auto auto auto auto minmax(260px, 1fr) auto auto auto auto;
+  align-content: start;
+  gap: 10px;
+}
+.dictation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dictation-header .sub {
+  margin-bottom: 0;
+}
+.dictation-toggle-btn[aria-expanded="true"] {
+  border-color: var(--accent-2);
+  background: var(--accent-2-soft);
+}
+.dictation-toolbar,
+.dictation-editor-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+.dictation-voice-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dictation-assistant-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.dictation-assistant-select {
+  min-width: 230px;
+}
+
+.dictation-assistant-status {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.dictation-assistant-status[data-ready="false"] {
+  color: var(--warn);
+}
+.dictation-voice-select {
+  min-width: min(240px, 42vw);
+  max-width: 320px;
+}
+#dictationMicBtn.recording {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #240d09;
+}
+.dictation-status {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.dictation-status[data-mode="listening"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dictation-status[data-mode="armed"] {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  box-shadow: 0 0 0 1px var(--accent-2-soft) inset;
+}
+.dictation-status[data-mode="processing"],
+.dictation-status[data-mode="speaking"] {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+.dictation-status[data-mode="error"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.dictation-title-label,
+.dictation-activity-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.dictation-title-input,
+.dictation-command-row input {
+  min-height: 32px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  color: var(--text);
+  padding: 6px 9px;
+}
+.dictation-title-input:focus,
+.dictation-command-row input:focus,
+.dictation-editor:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.dictation-editor {
+  min-height: 38vh;
+  height: 100%;
+  resize: none;
+  padding: 18px clamp(16px, 2vw, 28px);
+  border-color: var(--line);
+  background: #0a252b;
+  color: var(--text);
+  caret-color: var(--accent);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 17px;
+  line-height: 1.65;
+}
+.dictation-stats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.dictation-command-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+.dictation-help {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.dictation-help summary {
+  cursor: pointer;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+.dictation-help p {
+  margin: 8px 0 0;
+}
+.dictation-activity {
+  max-height: 118px;
+  margin-top: 6px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  padding: 7px 9px;
+}
+.dictation-activity:empty::before {
+  content: "Las transcripciones y operaciones aparecerán acá.";
+  color: var(--muted);
+  font-size: 11px;
+}
+.dictation-activity-row {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.dictation-activity-row:first-child {
+  color: var(--text);
+}
+.dictation-activity-row:last-child {
+  border-bottom: 0;
+}
+.dictation-player {
+  min-height: 32px;
+}
+
+@media (max-width: 980px) {
+  .dictation-workspace {
+    padding: 14px;
+  }
+  .dictation-editor {
+    min-height: 42vh;
+  }
+}

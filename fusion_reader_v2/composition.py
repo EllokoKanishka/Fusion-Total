@@ -12,6 +12,7 @@ from .dialogue import (
     STTProvider,
     WhisperCliSTTProvider,
 )
+from .dictation_assistant import DictationAssistant
 from .facade import FusionReaderV2, VoiceSettings
 from .local_web_bridge import AutoExternalResearchBridge, SearxngResearchBridge
 from .metrics import VoiceMetricsStore
@@ -34,6 +35,7 @@ class ProviderBundle:
     stt: STTProvider
     conversation: ConversationCore
     research: ExternalResearchBridge
+    dictation_assistant: DictationAssistant | None = None
 
 
 def create_providers(settings: Settings) -> ProviderBundle:
@@ -68,6 +70,28 @@ def create_providers(settings: Settings) -> ProviderBundle:
         stt=create_stt_provider(settings.providers),
         conversation=conversation,
         research=create_research_provider(settings.providers),
+        dictation_assistant=DictationAssistant(
+            {
+                "local": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=settings.providers.dictation_model,
+                    timeout_seconds=settings.providers.dictation_timeout_seconds,
+                ),
+                "local14b": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=settings.providers.dictation_14b_model,
+                    timeout_seconds=settings.providers.dictation_timeout_seconds,
+                ),
+                "openai": OpenClawChatProvider(
+                    command=settings.providers.openclaw_command,
+                    agent=settings.providers.openai_chat_agent,
+                    default_model=settings.providers.openai_dictation_model,
+                    timeout_seconds=settings.providers.openai_dictation_timeout_seconds,
+                    enabled=settings.providers.openai_chat_enabled,
+                ),
+            },
+            selected=settings.providers.dictation_assistant,
+        ),
     )
 
 
@@ -138,6 +162,7 @@ def create_fusion_reader(
         tts=bundle.tts,
         stt=bundle.stt,
         conversation=bundle.conversation,
+        dictation_assistant=bundle.dictation_assistant,
         external_research=bundle.research,
         cache=AudioCache(
             effective.paths.cache,
