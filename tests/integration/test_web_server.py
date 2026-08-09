@@ -417,12 +417,19 @@ class WebServerIntegrationTests(unittest.TestCase):
                 with self.subTest(path=path):
                     self.assertEqual(self._request(base, path)[0], 200)
 
-            for path in ("/", "/health", "/api/status", "/static/app.js", "/static/missing.js"):
+            for path, expected, content_type in (
+                ("/", 200, "text/html; charset=utf-8"),
+                ("/health", 200, "application/json"),
+                ("/api/status", 200, "application/json"),
+                ("/static/app.js", 200, "text/javascript; charset=utf-8"),
+                ("/static/panda-fusion-emblem.webp", 200, "image/webp"),
+                ("/static/missing.js", 404, None),
+            ):
                 request = urllib.request.Request(base + path, method="HEAD")
-                expected = 404 if path.endswith("missing.js") else 200
                 try:
                     with urllib.request.urlopen(request, timeout=5.0) as response:
                         self.assertEqual(response.status, expected)
+                        self.assertEqual(response.headers.get("Content-Type"), content_type)
                 except urllib.error.HTTPError as exc:
                     self.assertEqual(exc.code, expected)
 
