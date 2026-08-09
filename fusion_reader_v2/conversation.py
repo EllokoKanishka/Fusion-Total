@@ -15,7 +15,7 @@ from pathlib import Path
 from unicodedata import normalize
 
 from .config import environment_copy, environment_has, environment_value
-from .owned_subprocess import run_owned
+from .owned_subprocess import CancelSignal, run_owned
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,52 @@ class OllamaChatProvider(ChatProvider):
             "model_present": model_present,
             "available_models": available[:12],
             "detail": "ready",
+        }
+
+    def install_model(self, model: str = "", *, cancel_event: CancelSignal | None = None) -> dict:
+        """Install one explicitly configured Ollama model without invoking a shell."""
+        selected_model = str(model or self.default_model).strip()
+        if not selected_model:
+            return {"ok": False, "provider": self.name, "detail": "missing_model"}
+        ollama = shutil.which("ollama")
+        if not ollama:
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": "ollama_cli_unavailable",
+            }
+        try:
+            result = run_owned(
+                [ollama, "pull", selected_model],
+                timeout=30 * 60,
+                cancel_event=cancel_event,
+                text=True,
+                output_limit=256 * 1024,
+                check=False,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": str(exc),
+            }
+        if result.returncode != 0:
+            detail = str(result.stderr or result.stdout or "ollama_pull_failed").strip()
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": selected_model,
+                "detail": detail[-2000:] or "ollama_pull_failed",
+            }
+        health = self.health()
+        installed = health.get("model_present") is not False
+        return {
+            "ok": bool(health.get("ok")) and installed,
+            "provider": self.name,
+            "model": selected_model,
+            "detail": "installed" if installed else "model_not_installed",
         }
 
     def chat(

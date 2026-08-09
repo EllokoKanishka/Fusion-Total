@@ -235,6 +235,7 @@
         <label class="dictation-assistant-label" for="dictationAssistantSelect">Asistente</label>
         <select id="dictationAssistantSelect" class="compact-select dictation-assistant-select" aria-label="Asistente de escritura"></select>
         <span id="dictationAssistantStatus" class="dictation-assistant-status" aria-live="polite"></span>
+        <button id="dictationAssistantInstallBtn" class="compact-btn" type="button" hidden>Instalar modelo local</button>
       </div>
       <div id="dictationStatus" class="dictation-status" aria-live="polite">Dictado en pausa.</div>
       <label class="dictation-title-label" for="dictationTitleInput">Título del borrador</label>
@@ -255,7 +256,7 @@
       </div>
       <details class="dictation-help">
         <summary>Órdenes que entiende</summary>
-        <p>El dictado normal se escribe literalmente. Para ejecutar una acción, invocá primero a Lucy: “Lucy, borrá X y escribí Y”, “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
+        <p>El dictado normal se escribe literalmente. Para ejecutar una acción, podés decir la frase completa —“Lucy, borrá X”— o decir sólo “Lucy”, hacer una pausa y dictar la orden cuando aparezca <em>Lucy está escuchando tu orden</em>. También entiende “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
       </details>
       <div>
         <strong class="dictation-activity-title">Consola</strong>

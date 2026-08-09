@@ -998,6 +998,11 @@ textarea {
   border-color: var(--accent);
   color: var(--accent);
 }
+.dictation-status[data-mode="armed"] {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  box-shadow: 0 0 0 1px rgba(56, 198, 216, 0.2) inset;
+}
 .dictation-status[data-mode="processing"],
 .dictation-status[data-mode="speaking"] {
   border-color: var(--accent-2);

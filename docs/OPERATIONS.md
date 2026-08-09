@@ -162,7 +162,9 @@ en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectu
 `Lucy, léeme desde X`, `Lucy, borrá de X para adelante`.
 
 El default `Reglas instantáneas` no carga ningún LLM. Para instalar el modelo
-local ligero opcional:
+local ligero opcional, seleccionar `IA local ligera` y pulsar `Instalar
+qwen3:4b`; la descarga corre en un trabajo propio y el dictado/lector siguen
+disponibles. La alternativa por terminal es:
 
 ```bash
 ollama pull qwen3:4b

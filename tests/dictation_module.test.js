@@ -73,3 +73,23 @@ test('assistant context is bounded around the caret', async () => {
   assert.equal(context.draft.length, 12000);
   assert.equal(context.draft.slice(context.selection_start, context.selection_end), 'a'.repeat(10));
 });
+
+test('bare Lucy arms one following utterance instead of becoming an empty command', async () => {
+  const { createWakeCommandGate, isBareLucyInvocation } = await import(moduleUrl);
+  let now = 1000;
+  const gate = createWakeCommandGate({ now: () => now, ttlMs: 20000 });
+
+  assert.equal(isBareLucyInvocation(' Lucy… '), true);
+  assert.equal(isBareLucyInvocation('Lucy, borrá el final'), false);
+  gate.arm();
+  gate.hold();
+  now += 60000;
+  assert.equal(gate.isArmed(), true);
+  assert.equal(gate.claim(), true);
+  assert.equal(gate.command('borrá desde Buenos Aires'), 'Lucy, borrá desde Buenos Aires');
+  assert.equal(gate.claim(), false);
+
+  gate.arm();
+  now += 20001;
+  assert.equal(gate.isArmed(), false);
+});

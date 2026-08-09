@@ -62,6 +62,10 @@ y laboratorio, no como dependencia del producto v2.
   escalar, por elección explícita, a Qwen3 4B local o GPT-5 nano mediante
   `fusion-dialogue`. Sólo reciben una ventana acotada del borrador y devuelven
   una operación validada y reversible; STT y TTS permanecen aislados.
+- “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden;
+  la UI anuncia ese estado únicamente después de reabrir el grabador. Si el
+  Qwen3 4B configurado falta, la interfaz permite instalarlo explícitamente en
+  un trabajo poseído y cancelable sin bloquear el arranque, Whisper ni AllTalk.
 - la unidad de usuario instalada arranca TTS GPU/CPU antes del servidor web; si
   el motor aún no responde, ambos selectores conservan el catálogo conocido de
   veinte voces con estado degradado hasta recuperar el catálogo dinámico real.

@@ -92,6 +92,8 @@ Propiedades:
 - usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
 - distingue dictado de órdenes mediante la invocación explícita “Lucy”; el
   control puede desactivarse para que absolutamente todo entre como texto;
+- “Lucy” sola arma una ventana acotada para la siguiente frase y el navegador
+  no anuncia ese estado hasta que el nuevo grabador ya está activo;
 - comparte el catálogo y la voz TTS seleccionada con el lector principal;
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
@@ -99,6 +101,8 @@ Propiedades:
 - el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local
   y OpenAI GPT-5 nano mediante el agente aislado `fusion-dialogue`; los modelos
   sólo se invocan cuando una orden con “Lucy” escapa a la gramática;
+- si Qwen3 4B falta, una acción explícita de la interfaz inicia `ollama pull`
+  como proceso poseído y cancelable durante el cierre; nunca bloquea el arranque;
 - STT, asistente y TTS son procesos separados: cambiar o fallar el asistente no
   reinicia Whisper, AllTalk ni el modelo conversacional 14B;
 - soporta insertar, reemplazar, reescribir selección, borrar coincidencias o

@@ -19,6 +19,12 @@ class Context:
     def status(self) -> dict:
         return {"ok": True, "services": {}}
 
+    def dictation_model_install_status(self) -> dict:
+        return {"ok": True, "state": "idle", "terminal": True}
+
+    def start_dictation_model_install(self) -> dict:
+        return {"ok": True, "state": "queued", "terminal": False, "model": "qwen3:4b"}
+
 
 class Responder:
     def __init__(self) -> None:
@@ -130,6 +136,8 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["selected"], "rules")
         self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant", {"provider": "local"}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["selected"], "local")
+        self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant/install", {}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["state"], "queued")
         self.assertTrue(
             handle_dictation_post(
                 responder,

@@ -133,6 +133,7 @@ def create_router() -> Router:
         "/api/dialogue/turn",
         "/api/dictation/interpret",
         "/api/dictation/assistant",
+        "/api/dictation/assistant/install",
         "/api/dictation/assist",
         "/api/dictation/speak",
         "/api/voice/test",
