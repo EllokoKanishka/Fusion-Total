@@ -11,6 +11,26 @@ from fusion_reader_v2.config import create_settings
 from tests.helpers import SyntheticWavTTSProvider, test_app
 
 
+class InstallableNullChatProvider(NullChatProvider):
+    default_model = "qwen3:4b"
+
+    def __init__(self, answer: str) -> None:
+        super().__init__(answer)
+        self.installed = False
+
+    def health(self) -> dict:
+        return {
+            "ok": True,
+            "provider": "ollama",
+            "model": self.default_model,
+            "model_present": self.installed,
+        }
+
+    def install_model(self, model: str = "", *, cancel_event=None) -> dict:
+        self.installed = model == self.default_model and not cancel_event.is_set()
+        return {"ok": self.installed, "model": model, "detail": "installed"}
+
+
 def main() -> None:
     tempdir = tempfile.TemporaryDirectory(prefix="fusion_reader_e2e_")
     root = Path(tempdir.name)
@@ -18,7 +38,7 @@ def main() -> None:
         tts=SyntheticWavTTSProvider(output_root=root / "tts"),
         dictation_assistant=DictationAssistant(
             {
-                "local": NullChatProvider(
+                "local": InstallableNullChatProvider(
                     '{"kind":"delete_from","text":"","target":"Buenos Aires","scope":"","number":0,"all_matches":false}'
                 ),
                 "openai": NullChatProvider(

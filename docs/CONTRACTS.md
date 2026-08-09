@@ -81,6 +81,9 @@ Dictation routes:
   same session voice as the main reader and returns a cache-backed `audio_url`;
 - `GET /api/dictation/assistant`: returns the selected bounded assistant and its
   catalog; `POST` to the same route changes the session-persistent selection;
+- `POST /api/dictation/assistant/install`: explicitly starts the one-time local
+  installation of the configured Ollama dictation model; installation state is
+  exposed by `GET /api/dictation/assistant` and never blocks STT or TTS;
 - `POST /api/dictation/assist`: accepts one explicit command plus a bounded
   draft excerpt and selection offsets, and returns one validated instruction;
 - instruction kinds are additive and currently include `dictate`, `insert`,
@@ -91,6 +94,10 @@ Audio dictation treats an utterance as a command only when it begins with the
 wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
 through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
+
+A bare `Lucy` utterance arms the next recorded utterance as its command for a
+bounded time window. The browser starts the new recorder before announcing the
+armed state, so the first words after the wake word are not lost.
 
 The draft itself is browser-owned. Optional model assistance accepts at most a
 12,000-character excerpt around the caret. It cannot return a complete draft or

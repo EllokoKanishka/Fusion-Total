@@ -27,6 +27,9 @@ class WebContext:
     _threads_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _closed: bool = field(default=False, init=False)
     _started_monotonic: float = field(default_factory=time.monotonic, init=False)
+    _dictation_model_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _dictation_model_cancel: threading.Event = field(default_factory=threading.Event, init=False)
+    _dictation_model_job: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         limits = self.settings.limits
@@ -109,12 +112,87 @@ class WebContext:
             thread.start()
             return thread
 
+    def dictation_model_install_status(self) -> dict:
+        with self._dictation_model_lock:
+            return dict(self._dictation_model_job or {"state": "idle", "terminal": True})
+
+    def _run_dictation_model_install(self, provider, model: str) -> None:
+        with self._dictation_model_lock:
+            self._dictation_model_job.update(
+                {"state": "running", "terminal": False, "detail": "Descargando el modelo local…"}
+            )
+        result = provider.install_model(model, cancel_event=self._dictation_model_cancel)
+        cancelled = self._dictation_model_cancel.is_set()
+        with self._dictation_model_lock:
+            if cancelled:
+                self._dictation_model_job.update(
+                    {"ok": False, "state": "cancelled", "terminal": True, "detail": "Instalación cancelada."}
+                )
+            elif result.get("ok"):
+                self._dictation_model_job.update(
+                    {"ok": True, "state": "done", "terminal": True, "detail": "Modelo local instalado."}
+                )
+            else:
+                self._dictation_model_job.update(
+                    {
+                        "ok": False,
+                        "state": "error",
+                        "terminal": True,
+                        "detail": str(result.get("detail") or "No pude instalar el modelo local."),
+                    }
+                )
+
+    def start_dictation_model_install(self) -> dict:
+        assistant = self.app.dictation_assistant
+        provider = getattr(assistant, "providers", {}).get("local")
+        model = str(getattr(provider, "default_model", "") or "").strip()
+        installer = getattr(provider, "install_model", None)
+        if provider is None or not model or not callable(installer):
+            return {
+                "ok": False,
+                "state": "error",
+                "terminal": True,
+                "model": model,
+                "detail": "El proveedor local no admite instalación automática.",
+            }
+        health = dict(provider.health() or {})
+        if health.get("ok") and health.get("model_present") is not False:
+            return {
+                "ok": True,
+                "state": "done",
+                "terminal": True,
+                "model": model,
+                "detail": "El modelo local ya está instalado.",
+            }
+        with self._dictation_model_lock:
+            if str(self._dictation_model_job.get("state") or "") in {"queued", "running"}:
+                return dict(self._dictation_model_job)
+            self._dictation_model_cancel = threading.Event()
+            self._dictation_model_job = {
+                "ok": True,
+                "state": "queued",
+                "terminal": False,
+                "model": model,
+                "detail": "Preparando la descarga del modelo local…",
+            }
+        try:
+            self.start_thread(
+                target=self._run_dictation_model_install,
+                args=(provider, model),
+                name="fusion-reader-v2-dictation-model-install",
+            )
+        except Exception as exc:
+            with self._dictation_model_lock:
+                self._dictation_model_job.update({"ok": False, "state": "error", "terminal": True, "detail": str(exc)})
+        return self.dictation_model_install_status()
+
     def shutdown_jobs(self, timeout: float = 10.0) -> dict:
         with self._threads_lock:
             if self._closed and not self._threads:
                 return {"ok": True, "state": "closed", "alive_threads": []}
             self._closed = True
             threads = list(self._threads)
+        self._dictation_model_cancel.set()
         for pdf_job in self.pdf_jobs.snapshot().values():
             if pdf_job.state not in {"done", "cancelled", "error"}:
                 pdf_job.cancelled = True

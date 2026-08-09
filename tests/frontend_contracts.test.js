@@ -36,6 +36,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/dictation/transcribe',
     '/api/dictation/speak',
     '/api/dictation/assistant',
+    '/api/dictation/assistant/install',
     '/api/dictation/assist',
     '/api/tools/pdf-to-docx',
     '/api/media/transcribe',
@@ -57,6 +58,7 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="dictationEditor"[^>]+aria-label="Borrador de dictado"/);
   assert.match(html, /id="dictationVoiceSelect"[^>]+aria-label="Voz de lectura en dictado"/);
   assert.match(html, /id="dictationAssistantSelect"[^>]+aria-label="Asistente de escritura"/);
+  assert.match(html, /id="dictationAssistantInstallBtn"[^>]+type="button"[^>]+hidden/);
   assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
 });
 

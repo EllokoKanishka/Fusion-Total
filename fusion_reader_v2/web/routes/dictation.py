@@ -21,10 +21,18 @@ class DictationResponder(Protocol):
     def _read_body_to_temp(self, filename: str) -> Path: ...
 
 
+def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
+    out = dict(payload)
+    status = getattr(getattr(responder, "context", None), "dictation_model_install_status", None)
+    if callable(status):
+        out["installation"] = status()
+    return out
+
+
 def handle_dictation_get(responder: DictationResponder, path: str) -> bool:
     if path != "/api/dictation/assistant":
         return False
-    responder._json(200, responder.app.dictation_assistant_status())
+    responder._json(200, _assistant_status(responder, responder.app.dictation_assistant_status()))
     return True
 
 
@@ -56,8 +64,25 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/assistant/install":
+        install = getattr(getattr(responder, "context", None), "start_dictation_model_install", None)
+        if not callable(install):
+            responder._json(
+                503,
+                {"ok": False, "error": "installer_unavailable", "detail": "Instalador local no disponible."},
+            )
+        else:
+            result = dict(install() or {})
+            responder._json(200 if result.get("ok", True) else 503, result)
+        return True
     if path == "/api/dictation/assistant":
-        responder._json(200, responder.app.set_dictation_assistant(str(payload.get("provider") or "")))
+        responder._json(
+            200,
+            _assistant_status(
+                responder,
+                responder.app.set_dictation_assistant(str(payload.get("provider") or "")),
+            ),
+        )
         return True
     if path == "/api/dictation/assist":
         responder._json(

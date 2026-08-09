@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import unittest
 import urllib.error
 from unittest import mock
@@ -64,6 +65,28 @@ class OllamaProviderMatrixTests(unittest.TestCase):
             self.assertEqual(provider.chat([], model="other").detail, "http_429")
         with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=OSError("down")):
             self.assertIn("down", provider.chat([]).detail)
+
+    def test_ollama_model_install_is_explicit_owned_and_verified(self) -> None:
+        provider = conversation.OllamaChatProvider(base_url="http://local", default_model="qwen3:4b")
+        completed = subprocess.CompletedProcess(["ollama", "pull", "qwen3:4b"], 0, "ok", "")
+        with (
+            mock.patch.object(conversation.shutil, "which", return_value="/usr/bin/ollama"),
+            mock.patch.object(conversation, "run_owned", return_value=completed) as owned,
+            mock.patch.object(
+                provider,
+                "health",
+                return_value={"ok": True, "provider": "ollama", "model_present": True},
+            ),
+        ):
+            result = provider.install_model()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"], "installed")
+        self.assertEqual(owned.call_args.args[0], ["/usr/bin/ollama", "pull", "qwen3:4b"])
+
+        with mock.patch.object(conversation.shutil, "which", return_value=None):
+            missing = provider.install_model()
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["detail"], "ollama_cli_unavailable")
 
 
 class ConversationHelperMatrixTests(unittest.TestCase):

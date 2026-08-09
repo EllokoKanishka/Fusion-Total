@@ -71,6 +71,11 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.locator('#dictationUndoBtn').click();
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la lectora.');
   await page.locator('#dictationAssistantSelect').selectOption('local');
+  await expect(page.locator('#dictationAssistantInstallBtn')).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#dictationAssistantInstallBtn').click();
+  await expect(page.locator('#dictationAssistantStatus')).toContainText('local · carga bajo demanda');
+  await expect(page.locator('#dictationAssistantInstallBtn')).toBeHidden();
   await page.locator('#dictationEditor').fill('Una tarde en Buenos Aires. Lo sé.');
   await page.locator('#dictationCommandInput').fill('borrá Bonos Aires Loces');
   const assistantBefore = requestCounts.get('/api/dictation/assist') || 0;

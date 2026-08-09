@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from fusion_reader_v2 import DictationAssistant, NullChatProvider
+from fusion_reader_v2.config import create_settings
+from fusion_reader_v2.web.context import WebContext
 from tests.helpers import FailingChatProvider, managed_test_app
 
 
@@ -147,6 +150,44 @@ class DictationAssistantTests(unittest.TestCase):
             second = DictationAssistant({"local": NullChatProvider("{}")})
             with managed_test_app(root=root, dictation_assistant=second) as restored:
                 self.assertEqual(restored.dictation_assistant_status()["selected"], "local")
+
+    def test_local_model_install_job_is_owned_and_makes_provider_ready(self) -> None:
+        class InstallableProvider(NullChatProvider):
+            default_model = "qwen3:4b"
+
+            def __init__(self) -> None:
+                super().__init__("{}")
+                self.installed = False
+
+            def health(self) -> dict:
+                return {
+                    "ok": True,
+                    "provider": "ollama",
+                    "model": self.default_model,
+                    "model_present": self.installed,
+                }
+
+            def install_model(self, model: str = "", *, cancel_event=None) -> dict:
+                self.installed = model == self.default_model and not cancel_event.is_set()
+                return {"ok": self.installed, "model": model, "detail": "installed"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            provider = InstallableProvider()
+            assistant = DictationAssistant({"local": provider}, selected="local")
+            with managed_test_app(root=root, dictation_assistant=assistant) as app:
+                settings = create_settings(environ={"HOME": tmp}, repository_root=root)
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                started = context.start_dictation_model_install()
+                self.assertIn(started["state"], {"queued", "running", "done"})
+                deadline = time.monotonic() + 2
+                status = context.dictation_model_install_status()
+                while not status.get("terminal") and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                    status = context.dictation_model_install_status()
+                self.assertEqual(status["state"], "done")
+                self.assertTrue(app.dictation_assistant_status()["ready"])
+                self.assertTrue(context.shutdown_jobs(timeout=2)["ok"])
 
 
 if __name__ == "__main__":

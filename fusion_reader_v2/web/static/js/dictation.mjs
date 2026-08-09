@@ -1,9 +1,46 @@
 const DEFAULT_PAGE_CHARS = 1800;
 const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
+const WAKE_COMMAND_WINDOW_MS = 20000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 
 function cleanText(value) {
   return String(value || '').trim();
+}
+
+export function isBareLucyInvocation(value) {
+  return /^lucy(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
+}
+
+export function createWakeCommandGate({ now = () => Date.now(), ttlMs = WAKE_COMMAND_WINDOW_MS } = {}) {
+  let armedUntil = 0;
+  return {
+    arm() {
+      armedUntil = now() + Math.max(1000, Number(ttlMs || WAKE_COMMAND_WINDOW_MS));
+      return armedUntil;
+    },
+    clear() {
+      armedUntil = 0;
+    },
+    hold() {
+      if (this.isArmed()) armedUntil = Number.MAX_SAFE_INTEGER;
+    },
+    isArmed() {
+      if (!armedUntil || now() > armedUntil) {
+        armedUntil = 0;
+        return false;
+      }
+      return true;
+    },
+    claim() {
+      const armed = this.isArmed();
+      armedUntil = 0;
+      return armed;
+    },
+    command(transcript) {
+      const clean = cleanText(transcript);
+      return clean ? `Lucy, ${clean}` : 'Lucy';
+    }
+  };
 }
 
 function snapshot(editor) {
@@ -286,6 +323,8 @@ export function createDictationController({
   const activity = [];
   let saveTimer = 0;
   let manualTimer = 0;
+  let assistantInstallTimer = 0;
+  let wakeExpiryTimer = 0;
   let manualBaseline = null;
   let stream = null;
   let audioContext = null;
@@ -304,6 +343,7 @@ export function createDictationController({
   let lastTick = 0;
   let noiseFloor = 0.012;
   let chunks = [];
+  const wakeGate = createWakeCommandGate({ now: () => Date.now() });
 
   function setStatus(message, mode = '') {
     elements.dictationStatus.textContent = message;
@@ -346,10 +386,19 @@ export function createDictationController({
     if (!select.value) select.value = 'rules';
     const selected = available.find(item => String(item.id || '') === select.value) || {};
     const ready = data && typeof data.ready === 'boolean' ? data.ready : true;
+    const installation = data && data.installation && typeof data.installation === 'object' ? data.installation : {};
+    const installing = ['queued', 'running'].includes(String(installation.state || ''));
     elements.dictationAssistantStatus.dataset.ready = String(ready);
-    elements.dictationAssistantStatus.textContent = selected.cloud
-      ? (ready ? 'nube · sólo al invocar' : 'nube no disponible')
-      : (select.value === 'rules' ? 'sin modelo' : (ready ? 'local · carga bajo demanda' : 'modelo local no disponible'));
+    elements.dictationAssistantStatus.textContent = installing
+      ? `instalando ${installation.model || selected.model || 'modelo local'}…`
+      : selected.cloud
+        ? (ready ? 'nube · sólo al invocar' : 'nube no disponible')
+        : (select.value === 'rules' ? 'sin modelo' : (ready ? 'local · carga bajo demanda' : 'modelo local no instalado'));
+    elements.dictationAssistantInstallBtn.hidden = select.value !== 'local' || (ready && !installing);
+    elements.dictationAssistantInstallBtn.disabled = installing;
+    elements.dictationAssistantInstallBtn.textContent = installing
+      ? 'Instalando…'
+      : `Instalar ${selected.model || 'modelo local'}`;
   }
 
   async function refreshAssistantStatus() {
@@ -372,6 +421,63 @@ export function createDictationController({
       addActivity(`No pude cambiar el asistente: ${error.message}.`);
       await refreshAssistantStatus();
     }
+  }
+
+  async function pollAssistantInstallation() {
+    windowRef.clearTimeout(assistantInstallTimer);
+    assistantInstallTimer = 0;
+    try {
+      const data = await api('/api/dictation/assistant');
+      renderAssistantStatus(data);
+      const installation = data.installation || {};
+      if (['queued', 'running'].includes(String(installation.state || ''))) {
+        assistantInstallTimer = windowRef.setTimeout(pollAssistantInstallation, 1200);
+        return;
+      }
+      if (installation.state === 'done') addActivity(`${installation.model || 'El modelo local'} quedó instalado y listo.`);
+      if (installation.state === 'error') addActivity(`No pude instalar el modelo local: ${installation.detail || 'error desconocido'}.`);
+    } catch (error) {
+      addActivity(`No pude consultar la instalación: ${error.message}.`);
+    }
+  }
+
+  async function installAssistantModel() {
+    const label = cleanText(elements.dictationAssistantSelect.selectedOptions?.[0]?.textContent) || 'el modelo local';
+    if (!windowRef.confirm(`¿Descargar e instalar ${label}? La descarga se hace una sola vez y puede ocupar varios GB.`)) return;
+    elements.dictationAssistantInstallBtn.disabled = true;
+    elements.dictationAssistantInstallBtn.textContent = 'Preparando…';
+    try {
+      const data = await api('/api/dictation/assistant/install', {});
+      addActivity(`Instalación iniciada: ${data.model || label}. Podés seguir usando el dictado.`);
+      await pollAssistantInstallation();
+    } catch (error) {
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      addActivity(`No pude iniciar la instalación: ${detail}.`);
+      await refreshAssistantStatus();
+    }
+  }
+
+  function clearWakeCommand() {
+    wakeGate.clear();
+    windowRef.clearTimeout(wakeExpiryTimer);
+    wakeExpiryTimer = 0;
+  }
+
+  function scheduleWakeExpiry() {
+    windowRef.clearTimeout(wakeExpiryTimer);
+    wakeExpiryTimer = windowRef.setTimeout(() => {
+      if (!wakeGate.isArmed()) {
+        wakeExpiryTimer = 0;
+        addActivity('La espera de la orden venció; volvé a decir “Lucy”.');
+        if (active && !processing && !speaking) setStatus('Escuchando… hacé una pausa y aplico el tramo.', 'listening');
+      }
+    }, WAKE_COMMAND_WINDOW_MS + 20);
+  }
+
+  function armWakeCommand() {
+    wakeGate.arm();
+    scheduleWakeExpiry();
+    addActivity('Lucy quedó atenta. Decí ahora la orden completa.');
   }
 
   function updateStats() {
@@ -615,7 +721,14 @@ export function createDictationController({
     if (level >= threshold) {
       speechMs += delta;
       silenceMs = 0;
-      if (speechMs >= 45) voiceDetected = true;
+      if (speechMs >= 45 && !voiceDetected) {
+        voiceDetected = true;
+        if (wakeGate.isArmed()) {
+          wakeGate.hold();
+          windowRef.clearTimeout(wakeExpiryTimer);
+          wakeExpiryTimer = 0;
+        }
+      }
     } else {
       silenceMs += delta;
       speechMs = Math.max(0, speechMs - delta * 0.5);
@@ -629,9 +742,9 @@ export function createDictationController({
     monitorId = windowRef.requestAnimationFrame(monitorRecorder);
   }
 
-  async function uploadRecording(blob, mime) {
+  async function uploadRecording(blob, mime, claimedWakeCommand = false) {
     processing = true;
-    setStatus('Transcribiendo y aplicando…', 'processing');
+    setStatus(claimedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
     try {
       const params = new URLSearchParams({
         filename: mime.includes('ogg') ? 'dictation.ogg' : 'dictation.webm',
@@ -644,15 +757,31 @@ export function createDictationController({
       });
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
-      const invoked = /^lucy(?:\b|(?=[,.:;!?_-]))/i.test(String(data.transcript || '').trim());
-      await applyInstruction(data.instruction, data.transcript, invoked);
-      log(`Dictado: ${data.transcript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
+      const transcript = String(data.transcript || '').trim();
+      if (!claimedWakeCommand && elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
+        addActivity(`Oí: “${transcript}”`);
+        armWakeCommand();
+        log(`Dictado: ${transcript || 'sin texto'} (${data.stt_provider || 'STT'}). Esperando orden.`);
+        return;
+      }
+      let instruction = data.instruction;
+      let appliedTranscript = transcript;
+      if (claimedWakeCommand) {
+        appliedTranscript = wakeGate.command(transcript);
+        const interpreted = await api('/api/dictation/interpret', {
+          text: appliedTranscript,
+          commands_enabled: true
+        });
+        instruction = interpreted.instruction;
+      }
+      const invoked = claimedWakeCommand || /^lucy(?:\b|(?=[,.:;!?_-]))/i.test(appliedTranscript);
+      await applyInstruction(instruction, appliedTranscript, invoked);
+      log(`Dictado: ${appliedTranscript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {
       addActivity(`Falló la transcripción: ${error.message}.`);
     } finally {
       processing = false;
       if (active && !speaking) {
-        setStatus('Escuchando el próximo tramo…', 'listening');
         startRecorderCycle();
       }
     }
@@ -693,13 +822,25 @@ export function createDictationController({
       chunks = [];
       recorder = null;
       if (shouldDiscard || blob.size < 900) {
+        if (wakeGate.isArmed() && !wakeExpiryTimer) {
+          wakeGate.arm();
+          scheduleWakeExpiry();
+        }
         if (active && !processing && !speaking) windowRef.setTimeout(startRecorderCycle, 180);
         return;
       }
-      uploadRecording(blob, blob.type || mime);
+      const claimedWakeCommand = wakeGate.claim();
+      if (claimedWakeCommand) {
+        windowRef.clearTimeout(wakeExpiryTimer);
+        wakeExpiryTimer = 0;
+      }
+      uploadRecording(blob, blob.type || mime, claimedWakeCommand);
     }, { once: true });
     recorder.start(250);
-    setStatus('Escuchando… hacé una pausa y aplico el tramo.', 'listening');
+    setStatus(
+      wakeGate.isArmed() ? 'Lucy está escuchando tu orden…' : 'Escuchando… hacé una pausa y aplico el tramo.',
+      wakeGate.isArmed() ? 'armed' : 'listening'
+    );
     monitorId = windowRef.requestAnimationFrame(monitorRecorder);
   }
 
@@ -730,6 +871,7 @@ export function createDictationController({
 
   function stopListening() {
     active = false;
+    clearWakeCommand();
     stopRecorderCycle(true);
     if (stream) stream.getTracks().forEach(track => track.stop());
     if (audioContext) audioContext.close().catch(() => {});
@@ -812,6 +954,10 @@ export function createDictationController({
   });
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
   elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
+  elements.dictationAssistantInstallBtn.addEventListener('click', installAssistantModel);
+  elements.dictationCommandsToggle.addEventListener('change', () => {
+    if (!elements.dictationCommandsToggle.checked) clearWakeCommand();
+  });
   elements.dictationCommandInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -846,8 +992,10 @@ export function createDictationController({
       stopSpeech();
       windowRef.clearTimeout(saveTimer);
       windowRef.clearTimeout(manualTimer);
+      windowRef.clearTimeout(assistantInstallTimer);
+      windowRef.clearTimeout(wakeExpiryTimer);
     }
   };
 }
 
-export { DEFAULT_ASSISTANT_CONTEXT_CHARS, DEFAULT_PAGE_CHARS, STORAGE_KEY };
+export { DEFAULT_ASSISTANT_CONTEXT_CHARS, DEFAULT_PAGE_CHARS, STORAGE_KEY, WAKE_COMMAND_WINDOW_MS };
