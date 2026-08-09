@@ -15,6 +15,20 @@ El contrato vigente de carga, lectura, cache, cancelación y reproductor está e
 ./scripts/start_fusion_reader_v2.sh
 ```
 
+La instalación de escritorio genera `pandafusion.service` con
+`scripts/start_pandafusion_systemd.sh` como entrada. Ese proceso inicia primero
+el TTS GPU propio de Fusion (`7853`), cae al TTS CPU (`7851`) si hace falta y
+recién entonces ejecuta el servidor web. Por eso un reinicio normal conserva la
+ruta de voz completa:
+
+```bash
+systemctl --user restart pandafusion.service
+```
+
+Después de actualizar desde una instalación anterior, ejecutar una sola vez
+`./scripts/install_launcher.sh` para regenerar la unidad de usuario con este
+contrato; luego los reinicios comunes ya incluyen la voz.
+
 UI:
 
 ```text
@@ -61,6 +75,11 @@ La etiqueta superior de voz distingue la ruta de síntesis:
 - `TTS no disponible`: no hay voz utilizable.
 
 Si Dialogar parece lento, mirar primero esa etiqueta o `services.tts.url` en `/api/status`.
+
+Si el TTS está iniciando o caído, los selectores muestran el catálogo conocido
+de veinte voces de Fusion como fallback y lo marcan en su ayuda. Eso permite
+conservar la elección, pero no declara esas voces listas: el catálogo dinámico
+del AllTalk activo vuelve a ser la autoridad apenas responde.
 
 ## Verify
 
