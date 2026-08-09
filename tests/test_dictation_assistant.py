@@ -51,6 +51,25 @@ class DictationAssistantTests(unittest.TestCase):
         self.assertIn("Buenos Aires", prompt)
         self.assertIn("único objeto JSON", prompt)
 
+    def test_structured_provider_receives_the_bounded_instruction_schema(self) -> None:
+        class StructuredProvider(NullChatProvider):
+            def chat_structured(self, messages, *, schema, **kwargs):
+                self.schema = schema
+                self.kwargs = kwargs
+                return super().chat(messages, think=kwargs.get("think"), num_predict=kwargs.get("num_predict"))
+
+        provider = StructuredProvider('{"kind":"noop","text":"","target":"","scope":"","number":0,"all_matches":false}')
+        assistant = DictationAssistant({"local": provider}, selected="local")
+
+        result = assistant.interpret("Lucy, hacé algo prudente", draft="Texto")
+
+        self.assertTrue(result.ok)
+        self.assertFalse(provider.kwargs["think"])
+        self.assertEqual(provider.kwargs["keep_alive"], "10m")
+        self.assertFalse(provider.schema["additionalProperties"])
+        self.assertIn("delete_last_words", provider.schema["properties"]["kind"]["enum"])
+        self.assertIn("replace_last_words", provider.schema["properties"]["kind"]["enum"])
+
     def test_selection_rewrite_is_allowed_but_unbounded_output_is_rejected(self) -> None:
         allowed = DictationAssistant._parse_instruction(
             '{"kind":"replace_selection","text":"Una versión mejor.","target":"",'
@@ -124,6 +143,8 @@ class DictationAssistantTests(unittest.TestCase):
             ('{"kind":"undo","number":true}', "assistant_invalid_instruction"),
             ('{"kind":"undo","number":"many"}', "assistant_invalid_instruction"),
             ('{"kind":"undo","all_matches":"yes"}', "assistant_invalid_instruction"),
+            ('{"kind":"delete_last_words","number":0}', "assistant_invalid_word_count"),
+            ('{"kind":"replace_last_words","number":20,"text":""}', "assistant_missing_text"),
         )
         for raw, expected in cases:
             with self.subTest(raw=raw):
@@ -171,6 +192,15 @@ class DictationAssistantTests(unittest.TestCase):
                 self.installed = model == self.default_model and not cancel_event.is_set()
                 return {"ok": self.installed, "model": model, "detail": "installed"}
 
+            def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:
+                return {
+                    "ok": self.installed and model == self.default_model,
+                    "model": model,
+                    "keep_alive": keep_alive,
+                    "load_duration_ms": 123,
+                    "duration_ms": 150,
+                }
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             provider = InstallableProvider()
@@ -187,7 +217,67 @@ class DictationAssistantTests(unittest.TestCase):
                     status = context.dictation_model_install_status()
                 self.assertEqual(status["state"], "done")
                 self.assertTrue(app.dictation_assistant_status()["ready"])
+                warmed = context.warm_dictation_model()
+                self.assertEqual(warmed["state"], "ready")
+                self.assertEqual(warmed["load_duration_ms"], 123)
+                self.assertGreater(warmed["ready_until_ts"], time.time())
                 self.assertTrue(context.shutdown_jobs(timeout=2)["ok"])
+
+    def test_local_model_warmup_fails_closed_and_expires(self) -> None:
+        class WarmProvider(NullChatProvider):
+            default_model = "qwen3:4b"
+
+            def __init__(self, *, healthy=True, preload_ok=True) -> None:
+                super().__init__("{}")
+                self.healthy = healthy
+                self.preload_ok = preload_ok
+                self.preload_calls = 0
+
+            def health(self) -> dict:
+                return {
+                    "ok": self.healthy,
+                    "provider": "ollama",
+                    "model_present": self.healthy,
+                }
+
+            def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:
+                self.preload_calls += 1
+                return {"ok": self.preload_ok, "model": model, "detail": "warm_failed"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = create_settings(environ={"HOME": tmp}, repository_root=root)
+
+            rules = DictationAssistant({"local": WarmProvider()})
+            with managed_test_app(root=root / "rules", dictation_assistant=rules) as app:
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                self.assertEqual(context.warm_dictation_model()["state"], "not_required")
+
+            no_preload = DictationAssistant({"local": NullChatProvider("{}")}, selected="local")
+            with managed_test_app(root=root / "missing", dictation_assistant=no_preload) as app:
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                self.assertEqual(context.warm_dictation_model()["state"], "error")
+
+            unhealthy = DictationAssistant({"local": WarmProvider(healthy=False)}, selected="local")
+            with managed_test_app(root=root / "unhealthy", dictation_assistant=unhealthy) as app:
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                self.assertEqual(context.warm_dictation_model()["state"], "error")
+
+            provider = WarmProvider(preload_ok=False)
+            failed = DictationAssistant({"local": provider}, selected="local")
+            with managed_test_app(root=root / "failed", dictation_assistant=failed) as app:
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                self.assertEqual(context.warm_dictation_model()["state"], "error")
+
+            provider = WarmProvider()
+            ready = DictationAssistant({"local": provider}, selected="local")
+            with managed_test_app(root=root / "ready", dictation_assistant=ready) as app:
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                self.assertEqual(context.warm_dictation_model()["state"], "ready")
+                self.assertEqual(context.warm_dictation_model()["state"], "ready")
+                self.assertEqual(provider.preload_calls, 1)
+                context._dictation_model_warm["ready_until_ts"] = 0
+                self.assertEqual(context.dictation_model_warm_status()["state"], "cold")
 
 
 if __name__ == "__main__":

@@ -133,6 +133,49 @@ class DictationInstructionTests(unittest.TestCase):
         self.assertEqual(result["instruction"]["kind"], "dictate")
         self.assertEqual(result["instruction"]["text"], "Borrá piedra y escribí agua")
 
+    def test_invoked_unknown_command_never_degrades_to_literal_dictation(self):
+        instruction = interpret_dictation_transcript(
+            "Lucy, inventá una edición no soportada",
+            require_wake_word=True,
+        )
+
+        self.assertEqual(instruction.kind, "noop")
+        self.assertEqual(instruction.text, "")
+
+    def test_delete_last_words_is_a_bounded_rule(self):
+        numeric = interpret_dictation_transcript(
+            "Lucy, borrá las últimas 20 palabras",
+            require_wake_word=True,
+        )
+        spoken = interpret_dictation_transcript(
+            "Lucy, elimina las últimas veinte palabras",
+            require_wake_word=True,
+        )
+
+        self.assertEqual((numeric.kind, numeric.number), ("delete_last_words", 20))
+        self.assertEqual((spoken.kind, spoken.number), ("delete_last_words", 20))
+
+    def test_console_word_commands_are_bounded_rules(self):
+        delete = interpret_dictation_transcript(
+            "Lucy, borrar 10 palabras.",
+            require_wake_word=True,
+        )
+        replace = interpret_dictation_transcript(
+            "Lucy, Cambia las últimas 20 palabras por lo que vos quieras.",
+            require_wake_word=True,
+        )
+        delete_from = interpret_dictation_transcript(
+            "Lucy, borra desde y el signo en adelante.",
+            require_wake_word=True,
+        )
+
+        self.assertEqual((delete.kind, delete.number), ("delete_last_words", 10))
+        self.assertEqual(
+            (replace.kind, replace.number, replace.text),
+            ("replace_last_words", 20, "lo que vos quieras."),
+        )
+        self.assertEqual((delete_from.kind, delete_from.target), ("delete_from", "y el signo"))
+
     def test_dictation_speech_returns_a_human_error_when_tts_is_down(self):
         app = test_app(tts=FailingTTSProvider())
         result = app.dictation_speak("Texto seleccionado")

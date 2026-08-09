@@ -27,6 +27,7 @@ class ChatResult:
     duration_ms: int = 0
     reasoning_mode: str = ""
     reasoning_passes: int = 1
+    load_duration_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -161,8 +162,15 @@ class OllamaChatProvider(ChatProvider):
             "detail": "installed" if installed else "model_not_installed",
         }
 
-    def chat(
-        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    def _chat(
+        self,
+        messages: list[dict],
+        *,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        schema: dict | None = None,
+        keep_alive: str | int | None = None,
     ) -> ChatResult:
         started = time.perf_counter()
         selected_model = model or self.default_model
@@ -183,6 +191,10 @@ class OllamaChatProvider(ChatProvider):
                 "num_predict": selected_num_predict,
             },
         }
+        if schema is not None:
+            payload["format"] = schema
+        if keep_alive is not None:
+            payload["keep_alive"] = keep_alive
         req = urllib.request.Request(
             f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode("utf-8"),
@@ -194,15 +206,23 @@ class OllamaChatProvider(ChatProvider):
                 data = json.loads(resp.read().decode("utf-8"))
             message = data.get("message") if isinstance(data, dict) else None
             answer = str((message or {}).get("content") or "").strip()
+            load_duration_ms = (
+                int(max(0, int(data.get("load_duration") or 0)) / 1_000_000) if isinstance(data, dict) else 0
+            )
             if not answer:
                 return ChatResult(
                     False,
                     model=selected_model,
                     detail="empty_answer",
                     duration_ms=int((time.perf_counter() - started) * 1000),
+                    load_duration_ms=load_duration_ms,
                 )
             return ChatResult(
-                True, answer=answer, model=selected_model, duration_ms=int((time.perf_counter() - started) * 1000)
+                True,
+                answer=answer,
+                model=selected_model,
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                load_duration_ms=load_duration_ms,
             )
         except urllib.error.HTTPError as exc:
             return ChatResult(
@@ -215,6 +235,68 @@ class OllamaChatProvider(ChatProvider):
             return ChatResult(
                 False, model=selected_model, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
             )
+
+    def chat(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
+        return self._chat(messages, model=model, think=think, num_predict=num_predict)
+
+    def chat_structured(
+        self,
+        messages: list[dict],
+        *,
+        schema: dict,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | int | None = None,
+    ) -> ChatResult:
+        return self._chat(
+            messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+            schema=schema,
+            keep_alive=keep_alive,
+        )
+
+    def preload_model(self, model: str = "", *, keep_alive: str | int = "10m") -> dict:
+        started = time.perf_counter()
+        selected_model = str(model or self.default_model).strip()
+        payload = {"model": selected_model, "stream": False, "keep_alive": keep_alive}
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            load_duration_ms = (
+                int(max(0, int(data.get("load_duration") or 0)) / 1_000_000) if isinstance(data, dict) else 0
+            )
+            return {
+                "ok": True,
+                "provider": self.name,
+                "model": selected_model,
+                "state": "ready",
+                "keep_alive": keep_alive,
+                "load_duration_ms": load_duration_ms,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            }
+        except urllib.error.HTTPError as exc:
+            detail = f"http_{exc.code}"
+        except Exception as exc:
+            detail = str(exc)
+        return {
+            "ok": False,
+            "provider": self.name,
+            "model": selected_model,
+            "state": "error",
+            "detail": detail,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
 
 
 class OpenClawChatProvider(ChatProvider):
@@ -397,6 +479,42 @@ class OpenClawChatProvider(ChatProvider):
         if detail:
             return ChatResult(False, model=reported_model or selected_model, detail=detail, duration_ms=duration_ms)
         return ChatResult(True, answer=answer, model=reported_model or selected_model, duration_ms=duration_ms)
+
+    def chat_structured(
+        self,
+        messages: list[dict],
+        *,
+        schema: dict,
+        model: str = "",
+        think: bool | None = None,
+        num_predict: int | None = None,
+        keep_alive: str | int | None = None,
+    ) -> ChatResult:
+        """Request JSON-only output and leave final validation to the caller.
+
+        OpenClaw's agent CLI does not expose OpenAI's native response-format
+        parameter. The isolated model gets the exact schema here, and the
+        dictation assistant rejects any non-conforming result before editing.
+        """
+
+        del keep_alive
+        contract = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        bounded_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Respondé exclusivamente con un objeto JSON que cumpla exactamente este esquema; "
+                    f"no uses Markdown ni agregues claves: {contract}"
+                ),
+            },
+            *messages,
+        ]
+        return self.chat(
+            bounded_messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+        )
 
 
 class SelectableChatProvider(ChatProvider):

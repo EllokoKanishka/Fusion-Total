@@ -63,7 +63,8 @@ y laboratorio, no como dependencia del producto v2.
   `fusion-dialogue`. Sólo reciben una ventana acotada del borrador y devuelven
   una operación validada y reversible; STT y TTS permanecen aislados.
 - “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden;
-  la UI anuncia ese estado únicamente después de reabrir el grabador. Si el
+  con asistente local primero precarga el modelo y la UI anuncia ese estado
+  únicamente después de reabrir el grabador. Si el
   Qwen3 4B configurado falta, la interfaz permite instalarlo explícitamente en
   un trabajo poseído y cancelable sin bloquear el arranque, Whisper ni AllTalk.
 - la unidad de usuario instalada arranca TTS GPU/CPU antes del servidor web; si

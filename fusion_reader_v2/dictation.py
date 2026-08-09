@@ -25,6 +25,34 @@ _LEADING_FILLER = re.compile(
 )
 _WAKE_WORD = re.compile(r"^lucy(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$", flags=re.IGNORECASE)
 _JOINED_COMMAND_SEPARATOR = re.compile(r"(?<=\w)[.:;]+(?=\w)")
+_SPANISH_CARDINALS = {
+    "una": 1,
+    "uno": 1,
+    "dos": 2,
+    "tres": 3,
+    "cuatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "siete": 7,
+    "ocho": 8,
+    "nueve": 9,
+    "diez": 10,
+    "once": 11,
+    "doce": 12,
+    "trece": 13,
+    "catorce": 14,
+    "quince": 15,
+    "dieciseis": 16,
+    "dieciséis": 16,
+    "diecisiete": 17,
+    "dieciocho": 18,
+    "diecinueve": 19,
+    "veinte": 20,
+    "treinta": 30,
+    "cuarenta": 40,
+    "cincuenta": 50,
+    "cien": 100,
+}
 
 
 def _clean_utterance(value: str) -> str:
@@ -35,6 +63,15 @@ def _command_text(value: str) -> str:
     clean = _clean_utterance(value)
     clean = _JOINED_COMMAND_SEPARATOR.sub(" ", clean)
     return _LEADING_FILLER.sub("", clean).strip()
+
+
+def _positive_count(value: str) -> int:
+    clean = str(value or "").strip().lower()
+    try:
+        number = int(clean)
+    except ValueError:
+        number = _SPANISH_CARDINALS.get(clean, 0)
+    return max(0, min(number, 10_000))
 
 
 def _read_instruction(command: str) -> DictationInstruction | None:
@@ -136,6 +173,30 @@ def interpret_dictation_transcript(
     ):
         return DictationInstruction("clear")
 
+    replace_last_words = re.fullmatch(
+        r"(?:reemplaz[aá]|reemplaza|reemplazar|cambi[aá]|cambia|cambiar|sustitu[ií]|sustituye|sustituir)\s+"
+        r"(?:las?\s+)?(?:[uú]ltimas?|finales?)\s+([\wáéíóúüñ]+)\s+palabras?\s+"
+        r"(?:por|con)\s+(.+)",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if replace_last_words:
+        number = _positive_count(replace_last_words.group(1))
+        replacement = str(replace_last_words.group(2) or "").strip()
+        if number and replacement:
+            return DictationInstruction("replace_last_words", text=replacement, number=number)
+
+    delete_last_words = re.fullmatch(
+        r"(?:borr[aá]|borra|borrar|elimin[aá]|elimina|eliminar|quit[aá]|quita|quitar)\s+"
+        r"(?:(?:las?\s+)?(?:[uú]ltimas?|finales?)\s+)?([\wáéíóúüñ]+)\s+palabras?\s*[.,;:!?]*",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if delete_last_words:
+        number = _positive_count(delete_last_words.group(1))
+        if number:
+            return DictationInstruction("delete_last_words", number=number)
+
     read = _read_instruction(command)
     if read is not None:
         return read
@@ -155,7 +216,7 @@ def interpret_dictation_transcript(
     delete_from_match = re.match(
         r"^(?:borr[aá]|borra|elimin[aá]|elimina|quit[aá]|quita)\s+"
         r"(?:(?:todo\s+)?(?:desde|a\s+partir\s+de|de)\s+)?(.+?)\s+"
-        r"(?:(?:para|hacia)\s+adelante|hasta\s+el\s+final)$",
+        r"(?:(?:(?:para|hacia|en)\s+adelante)|hasta\s+el\s+final)\s*[.,;:!?]*$",
         command,
         flags=re.IGNORECASE,
     )

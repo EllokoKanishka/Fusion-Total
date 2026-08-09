@@ -84,11 +84,13 @@ Dictation routes:
 - `POST /api/dictation/assistant/install`: explicitly starts the one-time local
   installation of the configured Ollama dictation model; installation state is
   exposed by `GET /api/dictation/assistant` and never blocks STT or TTS;
+- `POST /api/dictation/assistant/warm`: preloads the selected local model with a
+  bounded keep-alive before the browser exposes the armed listening state;
 - `POST /api/dictation/assist`: accepts one explicit command plus a bounded
   draft excerpt and selection offsets, and returns one validated instruction;
 - instruction kinds are additive and currently include `dictate`, `insert`,
-  `replace`, `replace_selection`, `delete`, `delete_from`, `clear`, `undo`,
-  `redo`, `read`, `stop_listening` and `noop`.
+  `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
+  `delete_last_words`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.
 
 Audio dictation treats an utterance as a command only when it begins with the
 wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
@@ -96,14 +98,22 @@ through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
 
 A bare `Lucy` utterance arms the next recorded utterance as its command for a
-bounded time window. The browser starts the new recorder before announcing the
-armed state, so the first words after the wake word are not lost.
+bounded time window. When the local assistant is selected, the browser first
+waits for Ollama to confirm the model preload. It starts the new recorder before
+announcing the armed state, so neither model load nor recorder startup can be
+mistaken for active command listening. An invoked command never degrades to a
+literal `dictate` instruction.
 
 The draft itself is browser-owned. Optional model assistance accepts at most a
 12,000-character excerpt around the caret. It cannot return a complete draft or
-an unbounded operation; the browser validates and applies the operation while
-retaining undo ownership. Selecting OpenAI is explicit because that excerpt is
-sent to the isolated cloud provider.
+an unbounded operation. Ollama receives the schema through its native `format`
+field. OpenAI runs behind the isolated OpenClaw CLI, which receives the same
+serialized JSON schema in its prompt; PandaFusion validates the resulting
+object strictly before returning any editor instruction because that CLI does
+not expose OpenAI's native response-format parameter.
+The browser applies validated operations while retaining undo ownership.
+Selecting OpenAI is explicit because that excerpt is sent to the isolated cloud
+provider.
 
 ## HTTP Routes
 

@@ -159,7 +159,9 @@ en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectu
 Órdenes base: `Lucy, borrá X y escribí Y`, `Lucy, reemplazá X por Y`,
 `Lucy, deshacer`, `Lucy, rehacer`, `Lucy, pará acá`,
 `Lucy, léeme el último párrafo`, `Lucy, léeme la última hoja` y
-`Lucy, léeme desde X`, `Lucy, borrá de X para adelante`.
+`Lucy, léeme desde X`, `Lucy, borrá de X para adelante`,
+`Lucy, borrá las últimas 20 palabras`, `Lucy, borrá 10 palabras` y
+`Lucy, cambiá las últimas 20 palabras por Y`.
 
 El default `Reglas instantáneas` no carga ningún LLM. Para instalar el modelo
 local ligero opcional, seleccionar `IA local ligera` y pulsar `Instalar
@@ -170,11 +172,19 @@ disponibles. La alternativa por terminal es:
 ollama pull qwen3:4b
 ```
 
+Al decir `Lucy` sola con el asistente local elegido, Panda Fusión hace una
+precarga verificable y mantiene el modelo residente durante diez minutos. El
+cartel azul aparece sólo después de esa confirmación. La consola muestra tiempo
+de carga y tiempo total; `modelo preparado` no significa meramente instalado.
+
 OpenAI usa `openai/gpt-5-nano` mediante el mismo agente aislado
 `fusion-dialogue`, pero con sesión nueva y prompt editorial. Sólo viajan la
 orden y una ventana máxima de 12.000 caracteres alrededor del cursor; audio,
-voz y el resto del borrador permanecen locales. Si el asistente falla, la orden
-queda en `noop` y el texto no cambia.
+libros completos y el historial del diálogo no viajan. El adaptador entrega el
+esquema JSON al agente y PandaFusion valida la respuesta de forma cerrada antes
+de editar; OpenClaw CLI no expone el parámetro nativo de Structured Outputs.
+La voz permanece local. Si el asistente falla, la orden queda en `noop` y el
+texto no cambia.
 
 ## Si STT 8021 está caído
 
