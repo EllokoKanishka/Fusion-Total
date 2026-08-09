@@ -55,16 +55,19 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la voz.');
   await page.locator('#dictationUndoBtn').click();
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la lectora.');
+  const dictationReaderBefore = requestCounts.get('/api/quick-text') || 0;
   await page.locator('#dictationUseReaderBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Dictado sin título');
+  await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(dictationReaderBefore + 1);
   await page.locator('#dictationCloseBtn').click();
   await expect(page.locator('#dictationWorkspace')).toBeHidden();
 
   await page.locator('#quickTextInput').fill('Fragmento temporal para leer sin crear un archivo.');
+  const quickTextBefore = requestCounts.get('/api/quick-text') || 0;
   await page.locator('#quickReadStartBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Texto rápido — Texto pegado');
   await expect(page.locator('#quickTextInfo')).toContainText('temporal');
-  await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(1);
+  await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(quickTextBefore + 1);
   await page.locator('#quickClearBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
 
