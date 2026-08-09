@@ -144,6 +144,7 @@ class WebServerIntegrationTests(unittest.TestCase):
             for path, marker in (
                 ("/", "Panda Fusión".encode("utf-8")),
                 ("/static/styles.css", b"--accent"),
+                ("/static/panda-fusion-emblem.webp", b"RIFF"),
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
                 ("/static/js/dictation.mjs", b"createDictationController"),

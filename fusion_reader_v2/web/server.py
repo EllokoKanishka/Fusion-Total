@@ -318,6 +318,7 @@ class Handler(BaseHTTPRequestHandler):
             filename = unquote(path.removeprefix("/static/"))
             allowed = {
                 "styles.css": "text/css; charset=utf-8",
+                "panda-fusion-emblem.webp": "image/webp",
                 "app.js": "text/javascript; charset=utf-8",
                 "busy_controls.js": "text/javascript; charset=utf-8",
                 "js/bootstrap.mjs": "text/javascript; charset=utf-8",
@@ -369,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 filename
                 not in {
                     "styles.css",
+                    "panda-fusion-emblem.webp",
                     "app.js",
                     "busy_controls.js",
                     "js/bootstrap.mjs",
