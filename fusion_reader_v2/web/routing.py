@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_get, handle_dialogue_post
-from fusion_reader_v2.web.routes.dictation import handle_dictation_post, handle_dictation_raw_post
+from fusion_reader_v2.web.routes.dictation import handle_dictation_get, handle_dictation_post, handle_dictation_raw_post
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
@@ -40,6 +40,7 @@ class Router:
             lambda: handle_preparation_get(responder, path),
             lambda: handle_notes_get(responder, path, raw_path),
             lambda: handle_dialogue_get(responder, path),
+            lambda: handle_dictation_get(responder, path),
             lambda: handle_tools_get(responder, path, raw_path),
             lambda: handle_media_get(responder, path),
         )
@@ -85,6 +86,7 @@ def create_router() -> Router:
         "/api/references",
         "/api/notes",
         "/api/dialogue/status",
+        "/api/dictation/assistant",
         "/api/import-status",
         "/api/media/status",
     )
@@ -130,6 +132,8 @@ def create_router() -> Router:
         "/api/chat/reset",
         "/api/dialogue/turn",
         "/api/dictation/interpret",
+        "/api/dictation/assistant",
+        "/api/dictation/assist",
         "/api/dictation/speak",
         "/api/voice/test",
         "/api/chat",

@@ -23,7 +23,8 @@ _LEADING_FILLER = re.compile(
     r"^(?:(?:no|bueno|a ver|lucy|che)\s*[,.:;-]?\s*)+",
     flags=re.IGNORECASE,
 )
-_WAKE_WORD = re.compile(r"^lucy\b\s*[,.:;-]?\s*(.*)$", flags=re.IGNORECASE)
+_WAKE_WORD = re.compile(r"^lucy(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$", flags=re.IGNORECASE)
+_JOINED_COMMAND_SEPARATOR = re.compile(r"(?<=\w)[.:;]+(?=\w)")
 
 
 def _clean_utterance(value: str) -> str:
@@ -32,6 +33,7 @@ def _clean_utterance(value: str) -> str:
 
 def _command_text(value: str) -> str:
     clean = _clean_utterance(value)
+    clean = _JOINED_COMMAND_SEPARATOR.sub(" ", clean)
     return _LEADING_FILLER.sub("", clean).strip()
 
 
@@ -149,6 +151,18 @@ def interpret_dictation_transcript(
             target=str(replace_match.group(1)).strip(" .,:;!?\"'"),
             text=str(replace_match.group(2)).strip(),
         )
+
+    delete_from_match = re.match(
+        r"^(?:borr[aá]|borra|elimin[aá]|elimina|quit[aá]|quita)\s+"
+        r"(?:(?:todo\s+)?(?:desde|a\s+partir\s+de|de)\s+)?(.+?)\s+"
+        r"(?:(?:para|hacia)\s+adelante|hasta\s+el\s+final)$",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if delete_from_match:
+        target = str(delete_from_match.group(1) or "").strip(" .,:;!?\"'")
+        if target:
+            return DictationInstruction("delete_from", target=target)
 
     delete_and_write = re.match(
         r"^(?:borr[aá]|borra|elimin[aá]|elimina|quit[aá]|quita)\s+(.+?)\s+y\s+(?:escrib[ií]|escribe|pon[eé]|pone|pon|agreg[aá]|agrega)\s+(.+)$",

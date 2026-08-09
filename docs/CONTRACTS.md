@@ -79,17 +79,24 @@ Dictation routes:
   `commands_enabled`; useful for typed corrections and accessibility;
 - `POST /api/dictation/speak`: JSON `text`; generates interactive TTS with the
   same session voice as the main reader and returns a cache-backed `audio_url`;
+- `GET /api/dictation/assistant`: returns the selected bounded assistant and its
+  catalog; `POST` to the same route changes the session-persistent selection;
+- `POST /api/dictation/assist`: accepts one explicit command plus a bounded
+  draft excerpt and selection offsets, and returns one validated instruction;
 - instruction kinds are additive and currently include `dictate`, `insert`,
-  `replace`, `delete`, `clear`, `undo`, `redo`, `read`, `stop_listening` and
-  `noop`.
+  `replace`, `replace_selection`, `delete`, `delete_from`, `clear`, `undo`,
+  `redo`, `read`, `stop_listening` and `noop`.
 
 Audio dictation treats an utterance as a command only when it begins with the
 wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
 through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
 
-The draft itself is browser-owned. These routes never accept a complete draft
-and never perform an unbounded model-authored rewrite.
+The draft itself is browser-owned. Optional model assistance accepts at most a
+12,000-character excerpt around the caret. It cannot return a complete draft or
+an unbounded operation; the browser validates and applies the operation while
+retaining undo ownership. Selecting OpenAI is explicit because that excerpt is
+sent to the isolated cloud provider.
 
 ## HTTP Routes
 

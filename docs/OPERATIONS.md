@@ -146,7 +146,10 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 4. mantener `Órdenes con «Lucy»` activo para corregir o leer por voz: sólo las
    frases que empiezan con “Lucy” se ejecutan como órdenes; o
    desactivarlo cuando todo lo pronunciado deba entrar literalmente;
-5. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
+5. elegir `Reglas instantáneas`, `IA local ligera` u `OpenAI nano`; la gramática
+   siempre resuelve primero las órdenes conocidas y el modelo se carga o llama
+   sólo ante una orden no reconocida;
+6. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
    conservar un archivo.
 
 El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
@@ -156,7 +159,20 @@ en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectu
 Órdenes base: `Lucy, borrá X y escribí Y`, `Lucy, reemplazá X por Y`,
 `Lucy, deshacer`, `Lucy, rehacer`, `Lucy, pará acá`,
 `Lucy, léeme el último párrafo`, `Lucy, léeme la última hoja` y
-`Lucy, léeme desde X`.
+`Lucy, léeme desde X`, `Lucy, borrá de X para adelante`.
+
+El default `Reglas instantáneas` no carga ningún LLM. Para instalar el modelo
+local ligero opcional:
+
+```bash
+ollama pull qwen3:4b
+```
+
+OpenAI usa `openai/gpt-5-nano` mediante el mismo agente aislado
+`fusion-dialogue`, pero con sesión nueva y prompt editorial. Sólo viajan la
+orden y una ventana máxima de 12.000 caracteres alrededor del cursor; audio,
+voz y el resto del borrador permanecen locales. Si el asistente falla, la orden
+queda en `noop` y el texto no cambia.
 
 ## Si STT 8021 está caído
 

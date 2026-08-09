@@ -8,7 +8,7 @@ from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_pos
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.dialogue import handle_dialogue_post
-from fusion_reader_v2.web.routes.dictation import handle_dictation_post
+from fusion_reader_v2.web.routes.dictation import handle_dictation_get, handle_dictation_post
 from fusion_reader_v2.web.routes.reading import handle_reading_post
 from fusion_reader_v2.web.routing import create_router
 
@@ -50,6 +50,15 @@ class App:
 
     def dictation_turn_text(self, text: str, commands_enabled: bool = True) -> dict:
         return {"ok": True, "text": text, "commands_enabled": commands_enabled}
+
+    def dictation_assistant_status(self) -> dict:
+        return {"ok": True, "selected": "rules", "available": []}
+
+    def set_dictation_assistant(self, provider: str) -> dict:
+        return {"ok": True, "selected": provider}
+
+    def dictation_assist(self, text: str, draft: str = "", selection_start: int = 0, selection_end: int = 0) -> dict:
+        return {"ok": True, "text": text, "draft": draft, "selection": [selection_start, selection_end]}
 
     def prepare_status(self) -> dict:
         return {"ok": True, "state": "idle"}
@@ -117,6 +126,18 @@ class WebRouteModuleTests(unittest.TestCase):
             )
         )  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["text"], "deshacer")
+        self.assertTrue(handle_dictation_get(responder, "/api/dictation/assistant"))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["selected"], "rules")
+        self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant", {"provider": "local"}))  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["selected"], "local")
+        self.assertTrue(
+            handle_dictation_post(
+                responder,
+                "/api/dictation/assist",
+                {"text": "reescribí", "draft": "texto", "selection_start": 0, "selection_end": 5},
+            )
+        )  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["selection"], [0, 5])
 
     def test_preparation_module_owns_status_start_and_cancel(self) -> None:
         responder = DomainResponder()

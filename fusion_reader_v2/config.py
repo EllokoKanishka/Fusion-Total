@@ -137,7 +137,12 @@ class ProviderSettings:
     ollama_url: str
     chat_model: str
     chat_provider: str
+    dictation_assistant: str
+    dictation_model: str
+    dictation_timeout_seconds: float
     openai_chat_model: str
+    openai_dictation_model: str
+    openai_dictation_timeout_seconds: float
     openai_chat_agent: str
     openai_chat_timeout_seconds: float
     openai_chat_enabled: bool
@@ -165,6 +170,8 @@ class ProviderSettings:
             raise ConfigurationError("invalid STT provider")
         if self.chat_provider not in {"local", "openai"}:
             raise ConfigurationError("invalid chat provider")
+        if self.dictation_assistant not in {"rules", "local", "openai"}:
+            raise ConfigurationError("invalid dictation assistant")
         if self.openai_chat_agent != "fusion-dialogue":
             raise ConfigurationError("Fusion OpenAI dialogue must use the fusion-dialogue OpenClaw agent")
         if self.openclaw_agent != "fusion-research":
@@ -266,7 +273,14 @@ def create_settings(
             ollama_url=(env.get("FUSION_READER_OLLAMA_URL") or f"http://127.0.0.1:{ports.ollama}").rstrip("/"),
             chat_model=env.get("FUSION_READER_CHAT_MODEL", "qwen3:14b-q8_0"),
             chat_provider=env.get("FUSION_READER_CHAT_PROVIDER", "local").strip().lower(),
+            dictation_assistant=env.get("FUSION_READER_DICTATION_ASSISTANT", "rules").strip().lower(),
+            dictation_model=env.get("FUSION_READER_DICTATION_MODEL", "qwen3:4b").strip(),
+            dictation_timeout_seconds=_floating(env, "FUSION_READER_DICTATION_TIMEOUT", 60.0, minimum=1.0),
             openai_chat_model=env.get("FUSION_READER_OPENAI_CHAT_MODEL", "openai/gpt-5.6-sol").strip(),
+            openai_dictation_model=env.get("FUSION_READER_OPENAI_DICTATION_MODEL", "openai/gpt-5-nano").strip(),
+            openai_dictation_timeout_seconds=_floating(
+                env, "FUSION_READER_OPENAI_DICTATION_TIMEOUT", 90.0, minimum=10.0
+            ),
             openai_chat_agent=env.get("FUSION_READER_OPENAI_CHAT_AGENT", "fusion-dialogue").strip(),
             openai_chat_timeout_seconds=_floating(env, "FUSION_READER_OPENAI_CHAT_TIMEOUT", 180.0, minimum=10.0),
             openai_chat_enabled=_truthy(env.get("FUSION_READER_OPENAI_CHAT_ENABLED"), default=True),

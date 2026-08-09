@@ -51,6 +51,9 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationWorkspace')).toBeVisible();
   await expect(page.locator('#dictationVoiceSelect')).toBeVisible();
   await expect(page.locator('#dictationVoiceSelect')).toHaveValue(await page.locator('#voiceSelect').inputValue());
+  await expect(page.locator('#dictationAssistantSelect')).toBeVisible();
+  await expect(page.locator('#dictationAssistantSelect option')).toHaveCount(3);
+  await expect(page.locator('#dictationAssistantSelect')).toHaveValue('rules');
   await expect(page.locator('.left-sidebar')).toBeHidden();
   await expect(page.locator('main')).toBeHidden();
   await expect(page.locator('.lab')).toBeHidden();
@@ -67,6 +70,15 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la voz.');
   await page.locator('#dictationUndoBtn').click();
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la lectora.');
+  await page.locator('#dictationAssistantSelect').selectOption('local');
+  await page.locator('#dictationEditor').fill('Una tarde en Buenos Aires. Lo sé.');
+  await page.locator('#dictationCommandInput').fill('borrá Bonos Aires Loces');
+  const assistantBefore = requestCounts.get('/api/dictation/assist') || 0;
+  await page.locator('#dictationCommandBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('Una tarde en ');
+  await expect.poll(() => requestCounts.get('/api/dictation/assist') || 0).toBe(assistantBefore + 1);
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('Una tarde en Buenos Aires. Lo sé.');
   await page.locator('#dictationEditor').selectText();
   const dictationSpeechBefore = requestCounts.get('/api/dictation/speak') || 0;
   await page.locator('#dictationReadBtn').click();
