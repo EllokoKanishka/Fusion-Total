@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -221,6 +222,59 @@ class DictationAssistantTests(unittest.TestCase):
                 self.assertEqual(warmed["state"], "ready")
                 self.assertEqual(warmed["load_duration_ms"], 123)
                 self.assertGreater(warmed["ready_until_ts"], time.time())
+                self.assertTrue(context.shutdown_jobs(timeout=2)["ok"])
+
+    def test_model_installations_are_serialized_across_provider_switches(self) -> None:
+        class BlockingProvider(NullChatProvider):
+            def __init__(self, model: str) -> None:
+                super().__init__("{}")
+                self.default_model = model
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.install_calls = 0
+
+            def health(self) -> dict:
+                return {
+                    "ok": True,
+                    "provider": "ollama",
+                    "model": self.default_model,
+                    "model_present": False,
+                }
+
+            def install_model(self, model: str = "", *, cancel_event=None) -> dict:
+                self.install_calls += 1
+                self.started.set()
+                self.release.wait(2)
+                return {
+                    "ok": not cancel_event.is_set(),
+                    "model": model,
+                    "detail": "installed",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local4b = BlockingProvider("qwen3:4b")
+            local14b = BlockingProvider("qwen3:14b-q8_0")
+            assistant = DictationAssistant(
+                {"local": local4b, "local14b": local14b},
+                selected="local",
+            )
+            with managed_test_app(root=root, dictation_assistant=assistant) as app:
+                settings = create_settings(environ={"HOME": tmp}, repository_root=root)
+                context = WebContext(app=app, settings=settings, runtime_info={})
+                first = context.start_dictation_model_install()
+                self.assertIn(first["state"], {"queued", "running"})
+                self.assertTrue(local4b.started.wait(1))
+
+                assistant.select("local14b")
+                second = context.start_dictation_model_install()
+
+                self.assertEqual(second["model"], "qwen3:4b")
+                self.assertIn(second["state"], {"queued", "running"})
+                self.assertEqual(local4b.install_calls, 1)
+                self.assertEqual(local14b.install_calls, 0)
+
+                local4b.release.set()
                 self.assertTrue(context.shutdown_jobs(timeout=2)["ok"])
 
     def test_local_model_warmup_fails_closed_and_expires(self) -> None:
