@@ -49,3 +49,27 @@ test('speech text is chunked without dropping long sentences', async () => {
   assert.equal(chunks.join(' '), input);
   assert.ok(chunks.every(chunk => chunk.length <= 180));
 });
+
+test('delete from removes an anchored tail and tolerates punctuation differences', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const target = editor('Una tarde en Buenos Aires. Lo sé.', 32);
+  const result = applyEditorInstruction(target, { kind: 'delete_from', target: 'Buenos.Aires' });
+  assert.equal(result.changed, true);
+  assert.equal(target.value, 'Una tarde en ');
+});
+
+test('selection rewrites never spill outside the selected range', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const target = editor('Antes. Párrafo torpe. Después.', 7, 21);
+  const result = applyEditorInstruction(target, { kind: 'replace_selection', text: 'Párrafo limpio.' });
+  assert.equal(result.changed, true);
+  assert.equal(target.value, 'Antes. Párrafo limpio. Después.');
+});
+
+test('assistant context is bounded around the caret', async () => {
+  const { dictationAssistantContext } = await import(moduleUrl);
+  const target = editor('a'.repeat(20000), 15000, 15010);
+  const context = dictationAssistantContext(target, 12000);
+  assert.equal(context.draft.length, 12000);
+  assert.equal(context.draft.slice(context.selection_start, context.selection_end), 'a'.repeat(10));
+});

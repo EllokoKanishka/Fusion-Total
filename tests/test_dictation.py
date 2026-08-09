@@ -57,6 +57,15 @@ class DictationInstructionTests(unittest.TestCase):
         self.assertEqual(instruction.target, "archivo inmóvil")
         self.assertEqual(instruction.text, "tejido vivo")
 
+    def test_delete_from_anchor_to_end_is_a_bounded_operation(self):
+        for utterance in (
+            "Lucy, borrá de Buenos Aires para adelante",
+            "Lucy.borra.Buenos Aires.hasta el final",
+        ):
+            with self.subTest(utterance=utterance):
+                instruction = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((instruction.kind, instruction.target), ("delete_from", "Buenos Aires"))
+
     def test_replace_delete_undo_and_redo_commands(self):
         replace = interpret_dictation_transcript("Reemplazá Borges por Spinoza")
         delete = interpret_dictation_transcript("Borrá todas las veces que aparece quizá")

@@ -1,4 +1,5 @@
 const DEFAULT_PAGE_CHARS = 1800;
+const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 
 function cleanText(value) {
@@ -56,6 +57,32 @@ function occurrenceRanges(value, target) {
     ranges.push([index, index + needle.length]);
     offset = index + Math.max(1, loweredNeedle.length);
   }
+  if (ranges.length) return ranges;
+  const normalizeWithMap = input => {
+    let text = '';
+    const map = [];
+    for (let index = 0; index < input.length; index += 1) {
+      const normalized = input[index].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+      for (const char of normalized) {
+        if (!/[a-z0-9ñ]/i.test(char)) continue;
+        text += char;
+        map.push(index);
+      }
+    }
+    return { text, map };
+  };
+  const normalizedSource = normalizeWithMap(source);
+  const normalizedNeedle = normalizeWithMap(needle).text;
+  if (normalizedNeedle.length < 3) return [];
+  let normalizedOffset = 0;
+  while (normalizedOffset <= normalizedSource.text.length - normalizedNeedle.length) {
+    const index = normalizedSource.text.indexOf(normalizedNeedle, normalizedOffset);
+    if (index < 0) break;
+    const start = normalizedSource.map[index];
+    const end = normalizedSource.map[index + normalizedNeedle.length - 1] + 1;
+    ranges.push([start, end]);
+    normalizedOffset = index + normalizedNeedle.length;
+  }
   return ranges;
 }
 
@@ -72,6 +99,21 @@ export function applyEditorInstruction(editor, instruction) {
     const text = kind === 'dictate' ? insertionText(editor, item.text) : String(item.text || '');
     replaceRange(editor, text, editor.selectionStart, editor.selectionEnd);
     return { changed: Boolean(text), message: kind === 'dictate' ? 'Texto agregado.' : 'Inserción aplicada.' };
+  }
+  if (kind === 'replace_selection') {
+    const start = Number(editor.selectionStart || 0);
+    const end = Number(editor.selectionEnd || start);
+    if (end <= start) return { changed: false, message: 'No hay una selección para reescribir.' };
+    const replacement = String(item.text || '');
+    replaceRange(editor, replacement, start, end);
+    return { changed: true, message: 'Selección reescrita.' };
+  }
+  if (kind === 'delete_from') {
+    const ranges = occurrenceRanges(editor.value, item.target);
+    if (!ranges.length) return { changed: false, message: `No encontré “${item.target || ''}”.` };
+    const range = preferredRange(ranges, Number(editor.selectionStart || editor.value.length));
+    replaceRange(editor, '', range[0], editor.value.length);
+    return { changed: true, message: `Texto borrado desde “${item.target}” hasta el final.` };
   }
   if (kind === 'replace' || kind === 'delete') {
     const ranges = occurrenceRanges(editor.value, item.target);
@@ -203,6 +245,22 @@ export function splitSpeechText(value, maxChars = 620) {
   return chunks;
 }
 
+export function dictationAssistantContext(editor, maxChars = DEFAULT_ASSISTANT_CONTEXT_CHARS) {
+  const value = String(editor.value || '');
+  const limit = Math.max(1000, Number(maxChars || DEFAULT_ASSISTANT_CONTEXT_CHARS));
+  const selectionStart = Math.max(0, Math.min(Number(editor.selectionStart || 0), value.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(Number(editor.selectionEnd || selectionStart), value.length));
+  let start = Math.max(0, selectionStart - Math.floor(limit / 2));
+  let end = Math.min(value.length, start + limit);
+  start = Math.max(0, end - limit);
+  return {
+    draft: value.slice(start, end),
+    selection_start: selectionStart - start,
+    selection_end: Math.min(selectionEnd, end) - start,
+    context_start: start
+  };
+}
+
 function recorderMimeType(windowRef) {
   const Recorder = windowRef && windowRef.MediaRecorder;
   if (!Recorder) return '';
@@ -263,6 +321,56 @@ export function createDictationController({
       row.className = 'dictation-activity-row';
       row.textContent = item;
       elements.dictationActivity.appendChild(row);
+    }
+  }
+
+  function renderAssistantStatus(data) {
+    const available = Array.isArray(data && data.available) ? data.available : [];
+    const select = elements.dictationAssistantSelect;
+    const previous = String(data && (data.selected || data.id) || select.value || 'rules');
+    select.innerHTML = '';
+    for (const item of available) {
+      const option = documentRoot.createElement('option');
+      option.value = String(item.id || 'rules');
+      option.textContent = `${item.label || item.id}${item.model ? ` · ${item.model}` : ''}`;
+      option.title = String(item.description || '');
+      select.appendChild(option);
+    }
+    if (!select.options.length) {
+      const option = documentRoot.createElement('option');
+      option.value = 'rules';
+      option.textContent = 'Reglas instantáneas';
+      select.appendChild(option);
+    }
+    select.value = previous;
+    if (!select.value) select.value = 'rules';
+    const selected = available.find(item => String(item.id || '') === select.value) || {};
+    const ready = data && typeof data.ready === 'boolean' ? data.ready : true;
+    elements.dictationAssistantStatus.dataset.ready = String(ready);
+    elements.dictationAssistantStatus.textContent = selected.cloud
+      ? (ready ? 'nube · sólo al invocar' : 'nube no disponible')
+      : (select.value === 'rules' ? 'sin modelo' : (ready ? 'local · carga bajo demanda' : 'modelo local no disponible'));
+  }
+
+  async function refreshAssistantStatus() {
+    try {
+      renderAssistantStatus(await api('/api/dictation/assistant'));
+    } catch (error) {
+      renderAssistantStatus({ selected: 'rules', ready: true, available: [] });
+      addActivity(`No pude consultar los asistentes: ${error.message}.`);
+    }
+  }
+
+  async function changeAssistant() {
+    const provider = String(elements.dictationAssistantSelect.value || 'rules');
+    try {
+      const data = await api('/api/dictation/assistant', { provider });
+      renderAssistantStatus(data);
+      const selected = (data.available || []).find(item => String(item.id || '') === data.selected) || {};
+      addActivity(`Asistente: ${selected.label || provider}${selected.model ? ` (${selected.model})` : ''}.`);
+    } catch (error) {
+      addActivity(`No pude cambiar el asistente: ${error.message}.`);
+      await refreshAssistantStatus();
     }
   }
 
@@ -416,7 +524,23 @@ export function createDictationController({
     }
   }
 
-  async function applyInstruction(instruction, transcript = '') {
+  async function requestAssistant(transcript) {
+    const context = dictationAssistantContext(editor);
+    setStatus('Lucy está interpretando la orden…', 'processing');
+    try {
+      const data = await api('/api/dictation/assist', { text: transcript, ...context });
+      const model = data.assistant_model || data.assistant_provider || 'asistente';
+      addActivity(`Lucy interpretó la orden con ${model} (${data.assistant_ms || 0} ms).`);
+      return applyInstruction(data.instruction, '', false, true);
+    } catch (error) {
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      addActivity(`${detail} No cambié el texto.`);
+    } finally {
+      setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+    }
+  }
+
+  async function applyInstruction(instruction, transcript = '', allowAssistant = false, assistantAttempted = false) {
     const item = instruction && typeof instruction === 'object' ? instruction : { kind: 'noop' };
     if (transcript) addActivity(`Oí: “${transcript}”`);
     if (item.kind === 'undo') return undo();
@@ -428,6 +552,9 @@ export function createDictationController({
     if (item.kind === 'read') {
       const selection = readTextForInstruction(editor, item);
       if (selection.error) {
+        if (allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
+          return requestAssistant(transcript);
+        }
         addActivity(selection.error);
         return;
       }
@@ -435,11 +562,20 @@ export function createDictationController({
       editor.selectionEnd = selection.end;
       return speakText(selection.text, item.scope || 'selección');
     }
-    if (item.kind === 'noop' && /^lucy\b/i.test(String(transcript || '').trim())) {
+    if (item.kind === 'noop' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
+      return requestAssistant(transcript);
+    }
+    if (item.kind === 'noop' && (/^lucy(?:\b|(?=[,.:;!?_-]))/i.test(String(transcript || '').trim()) || assistantAttempted)) {
       addActivity('Lucy oyó la invocación, pero no reconoció una orden segura. No cambié el texto.');
       return;
     }
-    mutate(item);
+    const result = mutate(item);
+    if (!result.changed && allowAssistant && !assistantAttempted &&
+        ['replace', 'delete', 'delete_from'].includes(String(item.kind || '')) &&
+        elements.dictationAssistantSelect.value !== 'rules') {
+      return requestAssistant(transcript);
+    }
+    return result;
   }
 
   async function interpretTypedCommand() {
@@ -451,7 +587,7 @@ export function createDictationController({
         text,
         commands_enabled: elements.dictationCommandsToggle.checked
       });
-      await applyInstruction(data.instruction, data.transcript);
+      await applyInstruction(data.instruction, data.transcript, true);
     } catch (error) {
       addActivity(`No pude interpretar la orden: ${error.message}.`);
     }
@@ -508,7 +644,8 @@ export function createDictationController({
       });
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
-      await applyInstruction(data.instruction, data.transcript);
+      const invoked = /^lucy(?:\b|(?=[,.:;!?_-]))/i.test(String(data.transcript || '').trim());
+      await applyInstruction(data.instruction, data.transcript, invoked);
       log(`Dictado: ${data.transcript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {
       addActivity(`Falló la transcripción: ${error.message}.`);
@@ -674,6 +811,7 @@ export function createDictationController({
     mutate({ kind: 'clear' });
   });
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
+  elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
   elements.dictationCommandInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -691,6 +829,7 @@ export function createDictationController({
   elements.dictationTitleInput.addEventListener('input', schedulePersist);
 
   restoreDraft();
+  refreshAssistantStatus();
 
   return {
     open,
@@ -711,4 +850,4 @@ export function createDictationController({
   };
 }
 
-export { DEFAULT_PAGE_CHARS, STORAGE_KEY };
+export { DEFAULT_ASSISTANT_CONTEXT_CHARS, DEFAULT_PAGE_CHARS, STORAGE_KEY };

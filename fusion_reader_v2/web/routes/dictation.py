@@ -21,6 +21,13 @@ class DictationResponder(Protocol):
     def _read_body_to_temp(self, filename: str) -> Path: ...
 
 
+def handle_dictation_get(responder: DictationResponder, path: str) -> bool:
+    if path != "/api/dictation/assistant":
+        return False
+    responder._json(200, responder.app.dictation_assistant_status())
+    return True
+
+
 def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
     if path != "/api/dictation/transcribe":
         return False
@@ -49,6 +56,20 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/assistant":
+        responder._json(200, responder.app.set_dictation_assistant(str(payload.get("provider") or "")))
+        return True
+    if path == "/api/dictation/assist":
+        responder._json(
+            200,
+            responder.app.dictation_assist(
+                str(payload.get("text") or ""),
+                draft=str(payload.get("draft") or ""),
+                selection_start=int(payload.get("selection_start") or 0),
+                selection_end=int(payload.get("selection_end") or 0),
+            ),
+        )
+        return True
     if path == "/api/dictation/speak":
         responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
         return True
@@ -64,4 +85,4 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
     return True
 
 
-__all__ = ["handle_dictation_post", "handle_dictation_raw_post"]
+__all__ = ["handle_dictation_get", "handle_dictation_post", "handle_dictation_raw_post"]

@@ -19,6 +19,7 @@ from .dialogue import (
     default_stt_provider,
 )
 from .dictation import DictationInstruction, interpret_dictation_transcript
+from .dictation_assistant import DictationAssistant, DictationAssistantResult
 from .local_web_bridge import AutoExternalResearchBridge, SearxngResearchBridge, default_external_research_bridge
 from .notes import ReaderNote, ReaderNotesStore
 from .openclaw_bridge import (
@@ -49,6 +50,8 @@ __all__ = [
     "ConfigurationError",
     "Document",
     "DictationInstruction",
+    "DictationAssistant",
+    "DictationAssistantResult",
     "ExternalResearchBridge",
     "ExternalResearchResult",
     "FusionReaderV2",

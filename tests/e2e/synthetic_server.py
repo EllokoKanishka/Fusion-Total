@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
+from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.composition import create_http_server
 from fusion_reader_v2.config import create_settings
 from tests.helpers import SyntheticWavTTSProvider, test_app
@@ -15,6 +16,17 @@ def main() -> None:
     root = Path(tempdir.name)
     app = test_app(
         tts=SyntheticWavTTSProvider(output_root=root / "tts"),
+        dictation_assistant=DictationAssistant(
+            {
+                "local": NullChatProvider(
+                    '{"kind":"delete_from","text":"","target":"Buenos Aires","scope":"","number":0,"all_matches":false}'
+                ),
+                "openai": NullChatProvider(
+                    '{"kind":"replace_selection","text":"Versión de nube.","target":"",'
+                    '"scope":"","number":0,"all_matches":false}'
+                ),
+            }
+        ),
         root=root,
         register_cleanup=False,
     )

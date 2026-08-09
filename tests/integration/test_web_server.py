@@ -16,6 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
 from fusion_reader_v2.dialogue import NullSTTProvider
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
@@ -39,9 +40,9 @@ class WebServerIntegrationTests(unittest.TestCase):
         settings = replace(settings, ports=replace(settings.ports, api=0))
         return settings
 
-    def _start(self, root: Path, *, synthetic_tts: bool = False, stt=None):
+    def _start(self, root: Path, *, synthetic_tts: bool = False, stt=None, dictation_assistant=None):
         tts = SyntheticWavTTSProvider() if synthetic_tts else None
-        app_context = managed_test_app(root=root / "app", tts=tts, stt=stt)
+        app_context = managed_test_app(root=root / "app", tts=tts, stt=stt, dictation_assistant=dictation_assistant)
         app = app_context.__enter__()
         server = web_server.create_http_server(app, self._settings(root))
         thread = threading.Thread(target=server.serve_forever, name="fusion-test-http")
@@ -238,8 +239,38 @@ class WebServerIntegrationTests(unittest.TestCase):
     def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            server = self._start(root, stt=NullSTTProvider("Lucy, borrá piedra y escribí agua"))
+            assistant = DictationAssistant(
+                {
+                    "local": NullChatProvider(
+                        '{"kind":"delete_from","text":"","target":"Buenos Aires",'
+                        '"scope":"","number":0,"all_matches":false}'
+                    )
+                }
+            )
+            server = self._start(
+                root,
+                stt=NullSTTProvider("Lucy, borrá piedra y escribí agua"),
+                dictation_assistant=assistant,
+            )
             base = f"http://127.0.0.1:{server.server_address[1]}"
+
+            status, assistant_status = self._request(base, "/api/dictation/assistant")
+            self.assertEqual(status, 200)
+            self.assertEqual(assistant_status["selected"], "rules")
+            self.assertEqual(len(assistant_status["available"]), 2)
+            self._request(base, "/api/dictation/assistant", {"provider": "local"})
+            status, assisted = self._request(
+                base,
+                "/api/dictation/assist",
+                {
+                    "text": "Lucy, mejorá el final",
+                    "draft": "Una tarde en Buenos Aires. Lo sé.",
+                    "selection_start": 34,
+                    "selection_end": 34,
+                },
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(assisted["instruction"]["kind"], "delete_from")
 
             status, typed = self._request(
                 base,

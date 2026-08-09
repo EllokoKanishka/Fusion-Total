@@ -73,6 +73,7 @@ def managed_test_app(
     external_research=None,
     audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT,
     conversation=None,
+    dictation_assistant=None,
 ):
     app = test_app(
         tts=tts,
@@ -81,6 +82,7 @@ def managed_test_app(
         external_research=external_research,
         audio_export_root=audio_export_root,
         conversation=conversation,
+        dictation_assistant=dictation_assistant,
         register_cleanup=False,
     )
     try:
@@ -96,6 +98,7 @@ def test_app(
     external_research=None,
     audio_export_root=_DEFAULT_AUDIO_EXPORT_ROOT,
     conversation=None,
+    dictation_assistant=None,
     register_cleanup: bool = True,
 ) -> FusionReaderV2:
     tempdir = None
@@ -120,6 +123,7 @@ def test_app(
         metrics=VoiceMetricsStore(root / "voice_metrics.jsonl"),
         notes=ReaderNotesStore(root / "notes"),
         conversation=conversation or ConversationCore(NullChatProvider("Entendido.")),
+        dictation_assistant=dictation_assistant,
         external_research=external_research
         or NullExternalResearchBridge(ExternalResearchResult(False, detail="bridge_unused")),
         session_state_path=root / "session_state.json",

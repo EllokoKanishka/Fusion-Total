@@ -69,15 +69,20 @@ Componentes principales:
 
 - `fusion_reader_v2/dictation.py`: interpreta órdenes españolas y devuelve
   operaciones acotadas, sin mutar documentos;
+- `fusion_reader_v2/dictation_assistant.py`: clasifica órdenes no cubiertas por
+  la gramática mediante un modelo opcional y valida una única operación segura;
 - `fusion_reader_v2/web/routes/dictation.py`: transcripción efímera y órdenes
   escritas;
 - `fusion_reader_v2/web/static/js/dictation.mjs`: captura, editor, historial,
   lectura selectiva y autosalvado local.
 
 ```text
-Micrófono -> MediaRecorder -> STTProvider -> instrucción acotada -> textarea
-                                                |
-                                                -> TTSProvider para leer tramos
+Micrófono -> MediaRecorder -> STTProvider -> gramática rápida -> textarea
+                                               | noop invocado con Lucy
+                                               v
+                          asistente opcional -> instrucción acotada -> textarea
+
+Texto seleccionado --------------------------------> TTSProvider -> audio
 ```
 
 Propiedades:
@@ -91,10 +96,17 @@ Propiedades:
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
   conversacional 14B ni por OpenAI;
-- soporta insertar, reemplazar, borrar, limpiar, deshacer, rehacer y leer por
+- el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local
+  y OpenAI GPT-5 nano mediante el agente aislado `fusion-dialogue`; los modelos
+  sólo se invocan cuando una orden con “Lucy” escapa a la gramática;
+- STT, asistente y TTS son procesos separados: cambiar o fallar el asistente no
+  reinicia Whisper, AllTalk ni el modelo conversacional 14B;
+- soporta insertar, reemplazar, reescribir selección, borrar coincidencias o
+  desde un ancla hasta el final, limpiar, deshacer, rehacer y leer por
   selección, párrafo, hoja virtual o ancla textual;
-- el backend nunca recibe ni reescribe el borrador completo: sólo audio efímero
-  u órdenes individuales;
+- para una escalada opcional el navegador envía como máximo una ventana de
+  12.000 caracteres alrededor del cursor; el modelo nunca devuelve un borrador
+  completo y toda operación sigue bajo el historial local de deshacer;
 - `localStorage` conserva el borrador por origen; pasar al lector o descargar TXT
   siempre requiere una acción explícita;
 - una hoja virtual equivale a aproximadamente 1800 caracteres y no pretende

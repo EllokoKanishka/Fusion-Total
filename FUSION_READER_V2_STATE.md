@@ -58,6 +58,10 @@ y laboratorio, no como dependencia del producto v2.
   editoriales acotadas cuando la frase invoca a “Lucy” y conserva el borrador en
   `localStorage`; comparte la voz del lector y elimina el audio temporal después
   de cada turno.
+- las órdenes conocidas de Dictado son instantáneas; las desconocidas pueden
+  escalar, por elección explícita, a Qwen3 4B local o GPT-5 nano mediante
+  `fusion-dialogue`. Sólo reciben una ventana acotada del borrador y devuelven
+  una operación validada y reversible; STT y TTS permanecen aislados.
 - la unidad de usuario instalada arranca TTS GPU/CPU antes del servidor web; si
   el motor aún no responde, ambos selectores conservan el catálogo conocido de
   veinte voces con estado degradado hasta recuperar el catálogo dinámico real.
