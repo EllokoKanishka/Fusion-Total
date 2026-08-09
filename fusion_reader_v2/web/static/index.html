@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fusion Reader v2</title>
+  <title>Panda Fusión</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="app">
+  <div id="appRoot" class="app">
     <aside class="left-sidebar">
       <h1>Lecturas</h1>
       <p class="sub">Pegá un fragmento para leerlo ya o cargá un documento.</p>
@@ -91,6 +91,7 @@
           <span id="docMeta">Bloque 0 de 0</span>
         </div>
         <div class="header-selectors">
+          <button id="dictationToggleBtn" class="compact-btn dictation-toggle-btn" type="button" aria-expanded="false" aria-controls="dictationWorkspace">Dictado</button>
           <select id="profileSelect" class="compact-select" aria-label="Perfil">
             <option value="academica">Académica</option>
             <option value="bohemia">Bohemia</option>
@@ -217,6 +218,46 @@
         </div>
       </section>
     </aside>
+    <section id="dictationWorkspace" class="dictation-workspace" aria-labelledby="dictationTitle" hidden>
+      <header class="dictation-header">
+        <div>
+          <h1 id="dictationTitle">Panda Fusión · Dictado</h1>
+          <p class="sub">Un borrador aparte: hablá, corregí por voz y pedime que lea un tramo.</p>
+        </div>
+        <button id="dictationCloseBtn" class="compact-btn" type="button" aria-label="Cerrar dictado">Cerrar</button>
+      </header>
+      <div class="dictation-toolbar">
+        <button id="dictationMicBtn" class="primary compact-btn" type="button">Iniciar dictado</button>
+        <button id="dictationStopSpeechBtn" class="compact-btn" type="button">Detener lectura</button>
+        <label class="toggle compact-toggle"><input id="dictationCommandsToggle" type="checkbox" checked> Interpretar órdenes</label>
+      </div>
+      <div id="dictationStatus" class="dictation-status" aria-live="polite">Dictado en pausa.</div>
+      <label class="dictation-title-label" for="dictationTitleInput">Título del borrador</label>
+      <input id="dictationTitleInput" class="dictation-title-input" type="text" value="Dictado sin título" maxlength="160">
+      <textarea id="dictationEditor" class="dictation-editor" aria-label="Borrador de dictado" spellcheck="true" placeholder="El texto dictado aparecerá acá. También podés escribir y seleccionar fragmentos a mano."></textarea>
+      <div class="dictation-editor-tools">
+        <button id="dictationUndoBtn" class="compact-btn" type="button">Deshacer</button>
+        <button id="dictationRedoBtn" class="compact-btn" type="button">Rehacer</button>
+        <button id="dictationReadBtn" class="compact-btn" type="button">Leer selección</button>
+        <button id="dictationUseReaderBtn" class="compact-btn" type="button">Pasar al lector</button>
+        <button id="dictationDownloadBtn" class="compact-btn" type="button">Descargar TXT</button>
+        <button id="dictationClearBtn" class="compact-btn danger-btn" type="button">Limpiar</button>
+      </div>
+      <p id="dictationStats" class="dictation-stats">0 caracteres · 0 palabras · 0 hojas virtuales</p>
+      <div class="dictation-command-row">
+        <input id="dictationCommandInput" type="text" placeholder="También podés escribir una orden: reemplazá… / léeme…" aria-label="Orden de dictado escrita">
+        <button id="dictationCommandBtn" class="compact-btn" type="button">Aplicar orden</button>
+      </div>
+      <details class="dictation-help">
+        <summary>Órdenes que entiende</summary>
+        <p>“Borrá X y escribí Y”, “reemplazá X por Y”, “deshacer”, “rehacer”, “léeme el último párrafo”, “léeme la última hoja” o “léeme desde X”. Si desactivás <em>Interpretar órdenes</em>, todo lo oído entra como texto.</p>
+      </details>
+      <div>
+        <strong class="dictation-activity-title">Consola</strong>
+        <div id="dictationActivity" class="dictation-activity" aria-live="polite"></div>
+      </div>
+      <audio id="dictationPlayer" class="dictation-player" controls></audio>
+    </section>
   </div>
 
   <script type="module" src="/static/app.js"></script>

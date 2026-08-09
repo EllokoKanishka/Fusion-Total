@@ -1,4 +1,4 @@
-"""Fusion Reader v2: voice-first conversational reader core."""
+"""Panda Fusión: voice-first conversational reader core."""
 
 from .documents import ImportedDocument, import_document_bytes, import_document_path
 from .conversation import (
@@ -18,6 +18,7 @@ from .dialogue import (
     WhisperCliSTTProvider,
     default_stt_provider,
 )
+from .dictation import DictationInstruction, interpret_dictation_transcript
 from .local_web_bridge import AutoExternalResearchBridge, SearxngResearchBridge, default_external_research_bridge
 from .notes import ReaderNote, ReaderNotesStore
 from .openclaw_bridge import (
@@ -47,6 +48,7 @@ __all__ = [
     "ConversationCore",
     "ConfigurationError",
     "Document",
+    "DictationInstruction",
     "ExternalResearchBridge",
     "ExternalResearchResult",
     "FusionReaderV2",
@@ -75,6 +77,7 @@ __all__ = [
     "create_settings",
     "import_document_bytes",
     "import_document_path",
+    "interpret_dictation_transcript",
     "split_text",
     "__version__",
 ]

@@ -1,8 +1,9 @@
-# Fusion Reader v2 — Root Agent Rules
+# Panda Fusión — Root Agent Rules
 
 ## Identity
 
-This repo is a **voice-first conversational reader**.
+This repo is a **voice-first conversational reader**. The public product name is
+**Panda Fusión**; compatibility identifiers remain `fusion_reader_v2`.
 
 The active product is not a general assistant, browser agent, desktop
 automation tool, YouTube integrator, or workflow orchestrator. It is a
@@ -56,6 +57,7 @@ Read these first before architectural changes:
 - Prefetch upcoming chunks.
 - List and test voices.
 - Accept voice/STT commands for reader control.
+- Accept bounded voice/STT editing commands inside the dedicated dictation workspace.
 - Chat only about the active document, current chunk, recent reading context,
   notes, or explicit laboratory context.
 - Route local/cloud models only for reader conversations.

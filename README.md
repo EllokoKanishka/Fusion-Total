@@ -1,8 +1,11 @@
-# Fusion Reader v2
+# Panda Fusión
 
-Fusion Reader v2 es un lector conversacional local, centrado en lectura continua
+Panda Fusión es un lector conversacional local, centrado en lectura continua
 con voz neural. La lectura de documentos funciona sin LLM, STT ni investigación
 externa; esos servicios sólo enriquecen la experiencia cuando están disponibles.
+
+El paquete interno conserva el nombre `fusion_reader_v2` por compatibilidad con
+instalaciones, imports, scripts y sesiones existentes.
 
 ## Inicio rápido
 
@@ -28,6 +31,8 @@ loopback por defecto.
 - preparación y exportación WAV cancelables;
 - referencias, promoción, notas y recuperación de sesión;
 - diálogo sobre la lectura mediante STT/LLM opcionales;
+- escritorio lateral de dictado con edición por voz, deshacer/rehacer, lectura
+  selectiva, autosalvado local y exportación TXT;
 - selector de inteligencia para diálogo: `Local 14B` por defecto u OpenAI
   mediante el agente OpenClaw aislado `fusion-dialogue`;
 - investigación externa sólo ante pedido explícito;

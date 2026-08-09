@@ -1,4 +1,9 @@
 const ELEMENT_IDS = [
+  'appRoot', 'dictationToggleBtn', 'dictationWorkspace', 'dictationCloseBtn', 'dictationTitleInput',
+  'dictationEditor', 'dictationMicBtn', 'dictationStopSpeechBtn', 'dictationCommandsToggle',
+  'dictationUndoBtn', 'dictationRedoBtn', 'dictationReadBtn', 'dictationUseReaderBtn',
+  'dictationDownloadBtn', 'dictationClearBtn', 'dictationCommandInput', 'dictationCommandBtn',
+  'dictationStatus', 'dictationActivity', 'dictationPlayer', 'dictationStats',
   'quickTextInput', 'quickReadStartBtn', 'quickReadCursorBtn', 'quickClearBtn', 'quickTextInfo',
   'dropzone', 'chooseFileBtn', 'fileInput', 'uploadInfo', 'importProgress', 'autoReadToggle',
   'pdfToWordTool', 'pdfToWordInput', 'pdfToWordInfo', 'pdfToWordDownload', 'referenceModeToggle',

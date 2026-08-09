@@ -23,6 +23,7 @@ from .audio_export import (
 )
 from .conversation import ConversationCore
 from .dialogue import STTProvider, default_stt_provider
+from .dictation import interpret_dictation_transcript
 from .metrics import VoiceMetric, VoiceMetricsStore
 from .notes import ReaderNotesStore
 from .local_web_bridge import default_external_research_bridge
@@ -2299,6 +2300,51 @@ class FusionReaderV2:
 
     def dialogue_reset(self) -> dict:
         return self._dialogue_service.reset()
+
+    def dictation_turn_text(self, text: str, commands_enabled: bool = True) -> dict:
+        clean = str(text or "").strip()
+        if not clean:
+            return {"ok": False, "error": "empty_dictation_text", "detail": "empty_dictation_text"}
+        instruction = interpret_dictation_transcript(clean, commands_enabled=commands_enabled)
+        return {
+            "ok": True,
+            "transcript": clean,
+            "instruction": instruction.to_dict(),
+            "stt_provider": "text",
+            "stt_ms": 0,
+        }
+
+    def dictation_turn_audio(
+        self,
+        path: str | Path,
+        mime: str = "",
+        commands_enabled: bool = True,
+    ) -> dict:
+        self._prioritize_dialogue()
+        started = time.perf_counter()
+        transcript = self.stt.transcribe_file(path, mime=mime, language=self.voice.language)
+        if not transcript.ok:
+            return {
+                "ok": False,
+                "error": "dictation_transcription_failed",
+                "detail": transcript.detail or "dictation_transcription_failed",
+                "transcript": transcript.text,
+                "stt_provider": transcript.provider,
+                "stt_ms": transcript.duration_ms,
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            }
+        instruction = interpret_dictation_transcript(
+            transcript.text,
+            commands_enabled=commands_enabled,
+        )
+        return {
+            "ok": True,
+            "transcript": transcript.text,
+            "instruction": instruction.to_dict(),
+            "stt_provider": transcript.provider,
+            "stt_ms": transcript.duration_ms,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+        }
 
     def dialogue_turn_text(self, text: str, model: str = "", chunk_index: int | None = None) -> dict:
         text = str(text or "").strip()
