@@ -20,10 +20,13 @@ class DictationInstruction:
 
 
 _LEADING_FILLER = re.compile(
-    r"^(?:(?:no|bueno|a ver|lucy|che)\s*[,.:;-]?\s*)+",
+    r"^(?:(?:no|bueno|a ver|l[uú]c(?:y|[ií])|che)\s*[,.:;-]?\s*)+",
     flags=re.IGNORECASE,
 )
-_WAKE_WORD = re.compile(r"^lucy(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$", flags=re.IGNORECASE)
+_WAKE_WORD = re.compile(
+    r"^l[uú]c(?:y|[ií])(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$",
+    flags=re.IGNORECASE,
+)
 _JOINED_COMMAND_SEPARATOR = re.compile(r"(?<=\w)[.:;]+(?=\w)")
 _SPANISH_CARDINALS = {
     "una": 1,
@@ -172,6 +175,31 @@ def interpret_dictation_transcript(
         flags=re.IGNORECASE,
     ):
         return DictationInstruction("clear")
+
+    anchor_first_delete = re.fullmatch(
+        r"(?:despu[eé]s|luego|a\s+partir)\s+de\s+(.+?)\s*[,;:]?\s+"
+        r"(?:borr[aá]|borra|borrar|elimin[aá]|elimina|eliminar|quit[aá]|quita|quitar)"
+        r"(?:\s+(?:todo|el\s+resto|hasta\s+el\s+final))?\s*[.,;:!?]*",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if anchor_first_delete:
+        target = str(anchor_first_delete.group(1) or "").strip(" .,:;!?\"'")
+        if target:
+            return DictationInstruction("delete_from", target=target)
+
+    object_first_replace = re.fullmatch(
+        r"(.+?)\s*[,;:]?\s+"
+        r"(?:c[aá]mbialo|cambiarlo|reempl[aá]zalo|reemplazarlo|sustit[uú]yelo|sustituirlo)\s+"
+        r"(?:por|con)\s+(.+)",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if object_first_replace:
+        target = str(object_first_replace.group(1) or "").strip(" .,:;!?\"'")
+        replacement = str(object_first_replace.group(2) or "").strip()
+        if target and replacement:
+            return DictationInstruction("replace", target=target, text=replacement)
 
     replace_last_words = re.fullmatch(
         r"(?:reemplaz[aá]|reemplaza|reemplazar|cambi[aá]|cambia|cambiar|sustitu[ií]|sustituye|sustituir)\s+"

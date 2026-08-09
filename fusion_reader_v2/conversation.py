@@ -366,10 +366,23 @@ class OpenClawChatProvider(ChatProvider):
 
     @staticmethod
     def _extract_answer(raw: str) -> tuple[str, str, str]:
+        clean = str(raw or "").strip()
         try:
-            payload = json.loads(str(raw or "").strip())
+            payload = json.loads(clean)
         except (TypeError, ValueError):
-            return "", "", "openclaw_invalid_json"
+            payload = None
+            decoder = json.JSONDecoder()
+            for index, character in enumerate(clean):
+                if character != "{":
+                    continue
+                try:
+                    candidate, _ = decoder.raw_decode(clean[index:])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(candidate, dict):
+                    nested_result = candidate.get("result")
+                    if "payloads" in candidate or (isinstance(nested_result, dict) and "payloads" in nested_result):
+                        payload = candidate
         if not isinstance(payload, dict):
             return "", "", "openclaw_invalid_json"
         result_value = payload.get("result")
@@ -466,8 +479,9 @@ class OpenClawChatProvider(ChatProvider):
                     Path(temp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
-        raw = (proc.stdout or proc.stderr or "").strip()
-        answer, reported_model, detail = self._extract_answer(raw)
+        answer, reported_model, detail = self._extract_answer(proc.stdout or "")
+        if detail == "openclaw_invalid_json" and proc.stderr:
+            answer, reported_model, detail = self._extract_answer(proc.stderr)
         duration_ms = int((time.perf_counter() - started) * 1000)
         if proc.returncode != 0 and not answer:
             return ChatResult(

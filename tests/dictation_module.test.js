@@ -58,6 +58,14 @@ test('delete from removes an anchored tail and tolerates punctuation differences
   assert.equal(target.value, 'Una tarde en ');
 });
 
+test('single-letter anchors match a whole word instead of a character inside another word', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const target = editor('Podía soñar. O podría contener el universo.');
+  const result = applyEditorInstruction(target, { kind: 'delete_from', target: 'O' });
+  assert.equal(result.changed, true);
+  assert.equal(target.value, 'Podía soñar. ');
+});
+
 test('selection rewrites never spill outside the selected range', async () => {
   const { applyEditorInstruction } = await import(moduleUrl);
   const target = editor('Antes. Párrafo torpe. Después.', 7, 21);
@@ -80,6 +88,7 @@ test('bare Lucy arms one following utterance instead of becoming an empty comman
   const gate = createWakeCommandGate({ now: () => now, ttlMs: 20000 });
 
   assert.equal(isBareLucyInvocation(' Lucy… '), true);
+  assert.equal(isBareLucyInvocation(' Lúci. '), true);
   assert.equal(isBareLucyInvocation('Lucy, borrá el final'), false);
   gate.arm();
   gate.hold();
@@ -92,6 +101,19 @@ test('bare Lucy arms one following utterance instead of becoming an empty comman
   gate.arm();
   now += 20001;
   assert.equal(gate.isArmed(), false);
+});
+
+test('wake reservation survives transcription latency and is consumed by valid text', async () => {
+  const { createWakeCommandGate } = await import(moduleUrl);
+  let now = 1000;
+  const gate = createWakeCommandGate({ now: () => now, ttlMs: 20000 });
+
+  gate.arm();
+  assert.equal(gate.reserve(), true);
+  now += 60000;
+  assert.equal(gate.isArmed(), true);
+  assert.equal(gate.claim(), true);
+  assert.equal(gate.claim(), false);
 });
 
 test('an armed utterance uses the wake-only interpretation contract', async () => {

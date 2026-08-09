@@ -94,7 +94,9 @@ Propiedades:
   control puede desactivarse para que absolutamente todo entre como texto;
 - “Lucy” sola arma una ventana acotada para la siguiente frase y el navegador
   no anuncia ese estado hasta que el modelo local, si fue elegido, confirmó su
-  precarga y el nuevo grabador ya está activo;
+  precarga y el nuevo grabador ya está activo; una vez detectada voz, reserva la
+  invocación hasta obtener una transcripción válida para que el transporte no la
+  consuma antes de interpretar la orden;
 - comparte el catálogo y la voz TTS seleccionada con el lector principal;
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
