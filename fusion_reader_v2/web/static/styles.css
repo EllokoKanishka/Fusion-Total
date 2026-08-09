@@ -951,6 +951,15 @@ textarea {
   gap: 7px;
   align-items: center;
 }
+.dictation-voice-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.dictation-voice-select {
+  min-width: min(240px, 42vw);
+  max-width: 320px;
+}
 #dictationMicBtn.recording {
   border-color: var(--danger);
   background: var(--danger);

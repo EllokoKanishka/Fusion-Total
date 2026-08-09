@@ -340,13 +340,20 @@ async function refreshVoices() {
 
 function renderVoices(data) {
   if (!data || !Array.isArray(data.voices)) return;
-  const hadMany = els.voiceSelect.options.length > 1;
+  for (const select of [els.voiceSelect, els.dictationVoiceSelect]) {
+    renderVoiceSelect(select, data);
+  }
+}
+
+function renderVoiceSelect(select, data) {
+  if (!select) return;
+  const hadMany = select.options.length > 1;
   const gotMany = data.voices.length > 1;
   if (!gotMany && hadMany) {
-    if (data.current) els.voiceSelect.value = data.current;
+    if (data.current) select.value = data.current;
     return;
   }
-  els.voiceSelect.replaceChildren();
+  select.replaceChildren();
 
   const sorted = [...data.voices].sort((a, b) => voiceSortKey(a) - voiceSortKey(b));
 
@@ -378,16 +385,17 @@ function renderVoices(data) {
       if (v === data.current) opt.selected = true;
       g.appendChild(opt);
     });
-    els.voiceSelect.appendChild(g);
+    select.appendChild(g);
   });
 }
 
 async function changeVoice() {
-  const voice = els.voiceSelect.value;
+  const voice = String(els.voiceSelect.value || '');
   if (!voice) return;
   const releaseBusy = beginBusyLease();
   try {
     resetAudioLifecycle('Cambiando voz; audio anterior detenido.');
+    dictationController.stopSpeech();
     const data = await api('/api/voice', { voice });
     renderStatus(data);
     log(`Voz cambiada a ${voice}.`);
@@ -399,8 +407,16 @@ async function changeVoice() {
   }
 }
 
+async function changeDictationVoice() {
+  els.voiceSelect.value = els.dictationVoiceSelect.value;
+  await changeVoice();
+}
+
 async function ensureVoiceCatalog() {
-  if (!els.voiceSelect || els.voiceSelect.options.length > 1 || voiceCatalogRefreshInFlight) return;
+  const selectorsReady = [els.voiceSelect, els.dictationVoiceSelect]
+    .filter(Boolean)
+    .every(select => select.options.length > 1);
+  if (selectorsReady || voiceCatalogRefreshInFlight) return;
   voiceCatalogRefreshInFlight = true;
   try {
     await refreshVoices();
@@ -410,10 +426,10 @@ async function ensureVoiceCatalog() {
 }
 
 function renderVoiceStatus(voice) {
-  if (voice && els.voiceSelect.value !== voice) {
-    els.voiceSelect.value = voice;
+  for (const select of [els.voiceSelect, els.dictationVoiceSelect]) {
+    if (select && voice && select.value !== voice) select.value = voice;
   }
-  if (els.voiceSelect.options.length <= 1) {
+  if (els.voiceSelect.options.length <= 1 || els.dictationVoiceSelect.options.length <= 1) {
     ensureVoiceCatalog();
   }
 }
@@ -1792,6 +1808,7 @@ els.profileSelect.addEventListener('change', event => setProfileMode(event.targe
 els.veilSelect.addEventListener('change', event => setVeilMode(event.target.value));
 els.chatProviderSelect.addEventListener('change', event => setChatProvider(event.target.value));
 els.voiceSelect.addEventListener('change', changeVoice);
+els.dictationVoiceSelect.addEventListener('change', changeDictationVoice);
 els.freeModeBtn.addEventListener('click', () => setLaboratoryMode(currentLaboratoryMode() === 'free' ? 'document' : 'free'));
 els.dialogueBtn.addEventListener('click', toggleDialogue);
 els.chatInput.addEventListener('keydown', event => {

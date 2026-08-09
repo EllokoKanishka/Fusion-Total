@@ -2314,6 +2314,45 @@ class FusionReaderV2:
             "stt_ms": 0,
         }
 
+    def dictation_speak(self, text: str) -> dict:
+        clean = str(text or "").strip()
+        if not clean:
+            return {
+                "ok": False,
+                "error": "empty_dictation_speech",
+                "detail": "No encontré texto para leer.",
+            }
+        self._prioritize_dialogue()
+        started = time.perf_counter()
+        artifact = self._synthesize_cached_with_settings(
+            clean,
+            self.voice.voice,
+            self.voice.language,
+            interactive=True,
+        )
+        ready_ms = int((time.perf_counter() - started) * 1000)
+        out = {
+            "ok": artifact.ok,
+            "audio": str(artifact.path or ""),
+            "cached": artifact.cached,
+            "detail": artifact.detail,
+            "provider": artifact.provider,
+            "voice": self.voice.voice,
+            "language": self.voice.language,
+            "synthesis_ms": artifact.duration_ms,
+            "ready_ms": ready_ms,
+        }
+        if not artifact.ok:
+            out.update(
+                {
+                    "error": "dictation_speech_failed",
+                    "technical_detail": artifact.detail,
+                    "detail": self._human_tts_error(artifact.detail),
+                }
+            )
+        self._record_voice_metric("dictation_read", out, clean)
+        return out
+
     def dictation_turn_audio(
         self,
         path: str | Path,
@@ -2336,6 +2375,7 @@ class FusionReaderV2:
         instruction = interpret_dictation_transcript(
             transcript.text,
             commands_enabled=commands_enabled,
+            require_wake_word=True,
         )
         return {
             "ok": True,

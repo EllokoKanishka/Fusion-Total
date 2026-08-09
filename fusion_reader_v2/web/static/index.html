@@ -229,7 +229,9 @@
       <div class="dictation-toolbar">
         <button id="dictationMicBtn" class="primary compact-btn" type="button">Iniciar dictado</button>
         <button id="dictationStopSpeechBtn" class="compact-btn" type="button">Detener lectura</button>
-        <label class="toggle compact-toggle"><input id="dictationCommandsToggle" type="checkbox" checked> Interpretar órdenes</label>
+        <label class="dictation-voice-label" for="dictationVoiceSelect">Voz</label>
+        <select id="dictationVoiceSelect" class="compact-select dictation-voice-select" aria-label="Voz de lectura en dictado"></select>
+        <label class="toggle compact-toggle"><input id="dictationCommandsToggle" type="checkbox" checked> Órdenes con «Lucy»</label>
       </div>
       <div id="dictationStatus" class="dictation-status" aria-live="polite">Dictado en pausa.</div>
       <label class="dictation-title-label" for="dictationTitleInput">Título del borrador</label>
@@ -250,7 +252,7 @@
       </div>
       <details class="dictation-help">
         <summary>Órdenes que entiende</summary>
-        <p>“Borrá X y escribí Y”, “reemplazá X por Y”, “deshacer”, “rehacer”, “léeme el último párrafo”, “léeme la última hoja” o “léeme desde X”. Si desactivás <em>Interpretar órdenes</em>, todo lo oído entra como texto.</p>
+        <p>El dictado normal se escribe literalmente. Para ejecutar una acción, invocá primero a Lucy: “Lucy, borrá X y escribí Y”, “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
       </details>
       <div>
         <strong class="dictation-activity-title">Consola</strong>

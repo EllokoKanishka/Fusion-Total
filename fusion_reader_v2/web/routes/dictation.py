@@ -16,6 +16,8 @@ class DictationResponder(Protocol):
 
     def _json(self, status: int, payload: dict) -> None: ...
 
+    def _result(self, status: int, payload: dict) -> None: ...
+
     def _read_body_to_temp(self, filename: str) -> Path: ...
 
 
@@ -47,6 +49,9 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/speak":
+        responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
+        return True
     if path != "/api/dictation/interpret":
         return False
     responder._json(

@@ -23,6 +23,7 @@ _LEADING_FILLER = re.compile(
     r"^(?:(?:no|bueno|a ver|lucy|che)\s*[,.:;-]?\s*)+",
     flags=re.IGNORECASE,
 )
+_WAKE_WORD = re.compile(r"^lucy\b\s*[,.:;-]?\s*(.*)$", flags=re.IGNORECASE)
 
 
 def _clean_utterance(value: str) -> str:
@@ -77,7 +78,12 @@ def _read_instruction(command: str) -> DictationInstruction | None:
     return DictationInstruction("read", target=request, scope="paragraph_matching")
 
 
-def interpret_dictation_transcript(value: str, *, commands_enabled: bool = True) -> DictationInstruction:
+def interpret_dictation_transcript(
+    value: str,
+    *,
+    commands_enabled: bool = True,
+    require_wake_word: bool = False,
+) -> DictationInstruction:
     """Interpret Spanish editor commands and otherwise preserve the utterance as dictation.
 
     Commands are deliberately bounded. The caller remains responsible for applying
@@ -89,10 +95,30 @@ def interpret_dictation_transcript(value: str, *, commands_enabled: bool = True)
         return DictationInstruction("noop")
     if not commands_enabled:
         return DictationInstruction("dictate", text=original)
-    command = _command_text(original)
+    if require_wake_word:
+        wake_match = _WAKE_WORD.match(original)
+        if not wake_match:
+            return DictationInstruction("dictate", text=original)
+        command = _command_text(str(wake_match.group(1) or ""))
+        if not command:
+            return DictationInstruction("noop")
+    else:
+        command = _command_text(original)
+
+    pause_match = re.match(
+        r"^(?:par[aá]|para|paramos)\s+(?:ac[aá]|aqu[ií])\b\s*[.,:;-]?\s*(.*)$",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if pause_match:
+        resumed_command = str(pause_match.group(1) or "").strip()
+        if not resumed_command:
+            return DictationInstruction("stop_listening")
+        command = resumed_command
 
     if re.fullmatch(
-        r"(?:det[eé]n|detener|par[aá]|termin[aá]|terminar|cerr[aá]|cerrar)\s+(?:el\s+)?dictado",
+        r"(?:det[eé]n|detener|par[aá]|para|paramos|termin[aá]|terminar|cerr[aá]|cerrar)"
+        r"(?:\s+(?:el\s+)?dictado|\s+(?:ac[aá]|aqu[ií]))?",
         command,
         flags=re.IGNORECASE,
     ):
@@ -166,6 +192,8 @@ def interpret_dictation_transcript(value: str, *, commands_enabled: bool = True)
     if insert_match:
         return DictationInstruction("insert", text=str(insert_match.group(1)).strip())
 
+    if require_wake_word:
+        return DictationInstruction("noop")
     return DictationInstruction("dictate", text=original)
 
 
