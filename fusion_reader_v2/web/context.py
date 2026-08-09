@@ -241,8 +241,11 @@ class WebContext:
             }
         with self._dictation_model_lock:
             if str(self._dictation_model_job.get("state") or "") in {"queued", "running"}:
-                if self._dictation_model_job.get("model") == model:
-                    return dict(self._dictation_model_job)
+                # Installation state and cancellation are intentionally shared,
+                # so only one owned Ollama pull may run at a time. Returning the
+                # active job also keeps another tab or a provider switch from
+                # replacing the event that shutdown must signal.
+                return dict(self._dictation_model_job)
             self._dictation_model_cancel = threading.Event()
             self._dictation_model_job = {
                 "ok": True,
@@ -262,7 +265,6 @@ class WebContext:
                 self._dictation_model_job.update(
                     {"ok": False, "state": "error", "terminal": True, "detail": str(exc), "model": model}
                 )
-        return self.dictation_model_install_status()
         return self.dictation_model_install_status()
 
     def shutdown_jobs(self, timeout: float = 10.0) -> dict:
