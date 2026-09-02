@@ -75,6 +75,8 @@ coverage run --branch -m unittest discover -s tests -p 'test_*.py'
 ruff check .
 ruff format --check .
 mypy fusion_reader_v2
+python scripts/check_dependency_constraints.py
+python scripts/check_repository_hygiene.py
 npm test
 npm run test:e2e
 ```

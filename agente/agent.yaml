@@ -12,7 +12,10 @@ mission: >
 
 root_files:
   instructions: AGENTS.md
-  blueprint: FUSION_READER_V2_BLUEPRINT.md
+  state: FUSION_READER_V2_STATE.md
+  architecture: docs/ARCHITECTURE.md
+  operations: docs/OPERATIONS.md
+  contracts: docs/CONTRACTS.md
   system_prompt: agente/system_prompt.md
   v2_package: fusion_reader_v2/
 
@@ -31,13 +34,15 @@ runtime:
     - txt
     - md
     - pdf
+    - docx
+    - odt
 
 current_technical_state:
   voice_user_feedback: "La voz neural AllTalk/XTTS probada tiene tono agradable y es candidata principal."
   alltalk_status: "Fusion usa AllTalk GPU propio en 127.0.0.1:7853 si existe owner=fusion_reader_v2; 7851 queda solo como fallback CPU."
   gpu_blocker: "Resuelto mediante entorno aislado RTX 5090 para Fusion; no volver a 7852 como proveedor automatico."
   gpu_rule: "Fusion reserva 7853; Doctora Lucy reserva 7854; 7852 queda historico/no asignado."
-  v2_status: "Base inicial creada bajo fusion_reader_v2 con ReaderCore, TTSProvider, AllTalkProvider, AudioCache, prefetch y API minima."
+  v2_status: "Producto activo bajo fusion_reader_v2 con fachada, servicios, rutas, persistencia, dictado y multimedia separados."
 
 allowed_operations:
   - design_voice_first_reader
@@ -57,10 +62,12 @@ allowed_operations:
   - summarize_current_chunk
   - route_models_for_reader_conversation
   - use_stt_for_reader_commands
+  - run_explicit_external_research_through_fusion_providers
 
 prohibited_operations:
   - browser_automation
-  - youtube_or_web_integration
+  - unsolicited_external_research
+  - youtube_integration
   - n8n_workflows
   - desktop_file_operations_as_product_feature
   - general_assistant_tasks
@@ -86,7 +93,7 @@ engineering_policy:
 
 quality_gates:
   required_tests:
-    - python3 -m unittest tests.test_fusion_reader_v2 -v
+    - python3 -m unittest discover -s tests -p 'test_*.py' -v
     - python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
   health_checks:
     - ./scripts/verify_voice_port_isolation.sh

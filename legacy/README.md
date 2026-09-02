@@ -11,6 +11,7 @@ Fusion Reader v2 product.
 | `scripts/molbot_direct_chat/` | COMPATIBILITY/LAB | old STT/util/UI tests import it |
 | `app/` | LEGACY | previous surface, excluded from active quality gates |
 | `tests/manual/` | MANUAL TOOL | human browser/microphone procedures |
+| `legacy/config/autonomy_stack/` | ARCHIVE | unrelated browser, n8n and general-agent configuration retained only for traceability |
 | `legacy/scripts/verify_reader_mode_v01.sh` | ARCHIVE | superseded verifier |
 | `legacy/scripts/chat_voice_es.sh` | LEGACY | general OpenClaw `main` assistant, outside reader boundaries |
 | `legacy/scripts/lucy_sensor_client.py` | LEGACY | old sensor/voice prototype with external dependencies |

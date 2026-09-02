@@ -19,6 +19,7 @@ REQUIRED = (
     "docs/PORTABILITY.md",
     "docs/CONTRACTS.md",
     "docs/QUALITY_GATES.md",
+    "docs/archive/README.md",
     "docs/LICENSING_DECISION_REQUIRED.md",
     "docs/HANDOFF_CODEX_2026-07-12.md",
     "docs/CONSOLIDATION_FINAL_2026-07-12.md",
@@ -27,6 +28,7 @@ REQUIRED = (
     "requirements/constraints-py311.txt",
     "requirements/constraints-py312.txt",
     "scripts/generate_handoff.py",
+    "scripts/check_repository_hygiene.py",
 )
 
 
@@ -45,6 +47,13 @@ def main() -> None:
     positions = [agents.find(item) for item in ordered]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         raise SystemExit("AGENTS.md does not contain the canonical reading order")
+    agent_readme = (ROOT / "agente/README.md").read_text(encoding="utf-8")
+    agent_positions = [agent_readme.find(item) for item in ordered]
+    if any(position < 0 for position in agent_positions) or agent_positions != sorted(agent_positions):
+        raise SystemExit("agente/README.md does not follow the canonical reading order")
+    for active_path in (ROOT / "agente/README.md", ROOT / "agente/system_prompt.md", ROOT / "agente/agent.yaml"):
+        if "FUSION_READER_V2_BLUEPRINT.md" in active_path.read_text(encoding="utf-8"):
+            raise SystemExit(f"active agent metadata points to historical blueprint: {active_path.relative_to(ROOT)}")
     configuration = (ROOT / "docs/CONFIGURATION.md").read_text(encoding="utf-8")
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
     if "local-only" not in configuration.lower() or "Non-loopback binds are rejected" not in configuration:
@@ -59,7 +68,20 @@ def main() -> None:
     if "2.0.0" not in state or 'version = "2.0.0"' not in (ROOT / "pyproject.toml").read_text(encoding="utf-8"):
         raise SystemExit("canonical version mismatch")
     missing_links: list[str] = []
-    markdown_files = [ROOT / relative for relative in REQUIRED if relative.endswith(".md")]
+    markdown_files = [
+        ROOT / "README.md",
+        ROOT / "AGENTS.md",
+        ROOT / "FUSION_READER_V2_STATE.md",
+        ROOT / "agente/README.md",
+        ROOT / "agente/system_prompt.md",
+    ]
+    markdown_files.extend(
+        path
+        for path in (ROOT / "docs").rglob("*.md")
+        if "archive" not in path.relative_to(ROOT / "docs").parts
+        and "audits" not in path.relative_to(ROOT / "docs").parts
+    )
+    markdown_files = sorted(set(markdown_files))
     for source in markdown_files:
         text = source.read_text(encoding="utf-8")
         for raw_target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):

@@ -73,4 +73,5 @@ Permite ajustes rápidos como:
 
 ## Documento fuente de diseño
 
-El material de exploración profunda histórico sigue en `FUSION_READER_V2_PERSONALITY_WORKBOOK.md`.
+El material de exploración profunda histórico sigue en
+`docs/archive/FUSION_READER_V2_PERSONALITY_WORKBOOK.md`.

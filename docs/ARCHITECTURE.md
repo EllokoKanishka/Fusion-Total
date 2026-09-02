@@ -20,13 +20,19 @@ Investigación externa:
 pedido explícito -> provider aislado de Fusion -> respuesta integrada
 ```
 
+`fusion_reader_v2/facade.py` es la fachada pública que coordina estas capas.
+`fusion_reader_v2/service.py` no contiene lógica de producto: conserva
+únicamente el import histórico de `FusionReaderV2`.
+
 ## Lectura
 
 Componentes principales:
 
 - `fusion_reader_v2/reader.py`
 - `fusion_reader_v2/tts.py`
-- `fusion_reader_v2/service.py`
+- `fusion_reader_v2/services/reader.py`
+- `fusion_reader_v2/services/audio.py`
+- `fusion_reader_v2/facade.py`
 
 Propiedades:
 
@@ -52,7 +58,8 @@ Componentes principales:
 
 - `fusion_reader_v2/dialogue.py`
 - `fusion_reader_v2/conversation.py`
-- `fusion_reader_v2/service.py`
+- `fusion_reader_v2/services/dialogue.py`
+- `fusion_reader_v2/facade.py`
 
 Propiedades:
 
@@ -127,7 +134,8 @@ Propiedades:
 Componentes principales:
 
 - `fusion_reader_v2/conversation.py`
-- `fusion_reader_v2/service.py`
+- `fusion_reader_v2/services/dialogue.py`
+- `fusion_reader_v2/facade.py`
 
 Modos disponibles:
 
@@ -207,7 +215,8 @@ Fusion Reader v2 introduce un quinto eje de personalización: la **Voz**.
 Componentes:
 
 - `fusion_reader_v2/notes.py`
-- endpoints de notas en `fusion_reader_v2/web/server.py`
+- `fusion_reader_v2/services/notes.py`
+- `fusion_reader_v2/web/routes/notes.py`
 
 Propiedades:
 
@@ -220,7 +229,7 @@ Propiedades:
 Componentes:
 
 - `fusion_reader_v2/pdf_to_docx.py`
-- endpoints auxiliares en `fusion_reader_v2/web/server.py`
+- `fusion_reader_v2/web/routes/tools.py`
 
 Propiedades:
 
@@ -249,8 +258,9 @@ Propiedades:
 Componentes:
 
 - `fusion_reader_v2/audio_export.py`
-- `fusion_reader_v2/service.py`
-- endpoints auxiliares en `fusion_reader_v2/web/server.py`
+- `fusion_reader_v2/services/audio_export.py`
+- `fusion_reader_v2/facade.py`
+- `fusion_reader_v2/web/routes/audio.py`
 
 Propiedades:
 

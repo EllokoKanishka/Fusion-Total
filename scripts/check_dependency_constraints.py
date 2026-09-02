@@ -23,11 +23,43 @@ def constraint_names(path: Path) -> set[str]:
     return names
 
 
+def requirement_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and not line.startswith("-"):
+            names.add(package_name(line))
+    return names
+
+
 def check(root: Path = ROOT) -> list[str]:
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    required = {package_name(item) for item in project["dependencies"]}
-    required.update(package_name(item) for item in project["optional-dependencies"]["dev"])
+    core = {package_name(item) for item in project["dependencies"]}
+    optional = project["optional-dependencies"]
+    dev = {package_name(item) for item in optional["dev"]}
+    stt = {package_name(item) for item in optional["stt"]}
+    required = core | dev
     failures: list[str] = []
+    manifests = {
+        "fusion-reader-v2.txt": core,
+        "fusion-reader-v2-optional.txt": stt,
+    }
+    for filename, expected in manifests.items():
+        path = root / "requirements" / filename
+        try:
+            actual = requirement_names(path)
+        except OSError as exc:
+            failures.append(str(exc))
+            continue
+        if actual != expected:
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            detail = []
+            if missing:
+                detail.append(f"missing: {', '.join(missing)}")
+            if extra:
+                detail.append(f"extra: {', '.join(extra)}")
+            failures.append(f"{filename} differs from pyproject.toml ({'; '.join(detail)})")
     for version in ("311", "312"):
         path = root / "requirements" / f"constraints-py{version}.txt"
         try:

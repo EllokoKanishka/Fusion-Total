@@ -50,6 +50,7 @@ jobs:
       - run: mypy fusion_reader_v2
       - run: python scripts/check_docs_consistency.py
       - run: python scripts/check_dependency_constraints.py
+      - run: python scripts/check_repository_hygiene.py
       - run: coverage run --branch -m unittest discover -s tests -p 'test_*.py'
       - run: coverage run --branch --append -m unittest discover -s tests/stress -p 'stress_*.py'
       - run: coverage json -o coverage.json
@@ -84,23 +85,7 @@ jobs:
 
           assert FusionReaderV2 is LegacyFusionReaderV2
           static = files("fusion_reader_v2").joinpath("web/static")
-          expected = (
-              "index.html",
-              "styles.css",
-              "app.js",
-              "busy_controls.js",
-              "js/api.mjs",
-              "js/audio.mjs",
-              "js/audio_export.mjs",
-              "js/bootstrap.mjs",
-              "js/busy.mjs",
-              "js/dialogue.mjs",
-              "js/notes.mjs",
-              "js/preparation.mjs",
-              "js/ui.mjs",
-          )
-          missing = [name for name in expected if not static.joinpath(name).is_file()]
-          assert not missing, missing
+          assert static.joinpath("index.html").is_file()
           PY
           /tmp/fusion-wheel/bin/fusionctl version
 

@@ -1,6 +1,6 @@
 # Panda Fusión: estado de continuidad
 
-Fecha: 2026-08-09
+Fecha: 2026-09-02
 Versión del paquete: `2.0.0`
 
 ## Norte
@@ -90,8 +90,15 @@ La consolidación se valida con Python 3.11 y 3.12 mediante unittest, branch
 coverage, Ruff, mypy, py_compile, Node, Playwright, stress, auditoría de
 dependencias, scripts de aislamiento y smoke read-only. CI también construye e
 inspecciona una wheel no editable para comprobar que la interfaz y sus módulos
-ES estén empaquetados. Los resultados exactos viven en el PR y en los documentos
-de auditoría fechados.
+ES estén empaquetados. El inventario de assets se descubre desde el árbol fuente,
+los manifiestos operativos se contrastan con `pyproject.toml` y una guardia de
+higiene impide versionar runtime, caches, builds o configuración de autonomía
+ajena al producto activo. Los resultados exactos viven en el PR y en los
+documentos de auditoría fechados.
+
+Los blueprints, mediciones y tableros previos viven en `docs/archive/`. Las
+configuraciones antiguas de navegador/n8n se conservan sólo bajo
+`legacy/config/autonomy_stack/`; no forman parte de Panda Fusión.
 
 Los defaults locales heredados y sus overrides permanecen auditados en
 `docs/LOCAL_DEFAULTS_V2.md`; el cierre/backlog anterior se conserva en

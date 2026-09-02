@@ -88,6 +88,8 @@ python3 -m unittest tests.test_fusion_reader_v2 -v
 ./scripts/verify_voice_port_isolation.sh
 ./scripts/smoke_fusion_reader_v2.sh
 python3 -m unittest tests.test_reader_mode tests.test_reader_library tests.test_reader_command_stress -v
+python3 scripts/check_dependency_constraints.py
+python3 scripts/check_repository_hygiene.py
 ```
 
 Los tests de exportación de audio deben construirse con un root temporal
