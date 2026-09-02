@@ -31,7 +31,7 @@ jobs:
           exit "$status"
       - name: Upload pip audit evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pip-audit-${{ github.sha }}
           path: pip-audit.json
