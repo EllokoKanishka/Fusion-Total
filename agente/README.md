@@ -1,6 +1,8 @@
 # Agente Raiz — Fusion Reader v2
 
-Este directorio contiene la definicion operativa del agente especialista del proyecto.
+Este directorio contiene una definición operativa complementaria del agente
+especialista. Las reglas de `AGENTS.md` y la documentación canónica prevalecen
+si aparece cualquier diferencia.
 
 El agente no es un asistente general. Es un constructor y operador de un lector conversacional **voice-first**: todo gira alrededor de lectura por voz neural, navegacion clara y conversacion limitada al contenido leido.
 
@@ -14,13 +16,15 @@ El agente no es un asistente general. Es un constructor y operador de un lector 
 Al retomar trabajo, leer:
 
 1. `AGENTS.md`
-2. `FUSION_READER_V2_BLUEPRINT.md`
-3. `agente/system_prompt.md`
+2. `FUSION_READER_V2_STATE.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/OPERATIONS.md`
+5. `docs/CONTRACTS.md`
 
 ## Direccion Actual
 
 - Construir v2 en `fusion_reader_v2/`.
-- Mantener el prototipo viejo como laboratorio hasta que v2 lo supere.
+- Mantener el prototipo viejo sólo como laboratorio y compatibilidad.
 - Priorizar voz neural humana y fluida sobre cualquier mejora secundaria.
 - Usar AllTalk/XTTS como primer proveedor.
 - Resolver RTX 5090 en entorno aislado, no rompiendo entornos existentes.

@@ -5,10 +5,33 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from scripts.check_wheel_assets import REQUIRED_ASSETS, missing_assets
+from scripts.check_wheel_assets import REQUIRED_ASSETS, discover_static_assets, missing_assets
 
 
 class WheelAssetTests(unittest.TestCase):
+    def test_asset_manifest_discovers_every_source_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            static = root / "fusion_reader_v2/web/static"
+            (static / "js").mkdir(parents=True)
+            (static / "index.html").write_text("reader", encoding="utf-8")
+            (static / "js/new_module.mjs").write_text("export {};", encoding="utf-8")
+            self.assertEqual(
+                discover_static_assets(root),
+                {
+                    "fusion_reader_v2/web/static/index.html",
+                    "fusion_reader_v2/web/static/js/new_module.mjs",
+                },
+            )
+
+    def test_current_manifest_covers_media_dictation_and_brand_asset(self) -> None:
+        for relative in (
+            "panda-fusion-emblem.webp",
+            "js/dictation.mjs",
+            "js/media.mjs",
+        ):
+            self.assertIn(f"fusion_reader_v2/web/static/{relative}", REQUIRED_ASSETS)
+
     def test_complete_wheel_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             wheel = Path(tmp) / "fusion_reader_v2-test.whl"

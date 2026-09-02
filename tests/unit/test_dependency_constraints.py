@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.check_dependency_constraints import check, constraint_names
+from scripts.check_dependency_constraints import check, constraint_names, requirement_names
 
 
 class DependencyConstraintTests(unittest.TestCase):
@@ -17,6 +17,12 @@ class DependencyConstraintTests(unittest.TestCase):
             path.write_text("Pillow>=12\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "constraint_not_pinned"):
                 constraint_names(path)
+
+    def test_requirement_names_ignore_comments_and_normalize_extras(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            path.write_text("# comment\nPillow>=12\ncoverage[toml]\n-e .\n", encoding="utf-8")
+            self.assertEqual(requirement_names(path), {"pillow", "coverage"})
 
 
 if __name__ == "__main__":

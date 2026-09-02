@@ -15,7 +15,7 @@ The PR is ready only when these gates are green:
 | Security | pip-audit, secret scan, path tests, CodeQL |
 | Stress | repetition, registry and leak suite |
 | Boundaries | voice-port verify and read-only smoke |
-| Repository | docs consistency and `git diff --check` |
+| Repository | docs/dependency consistency, tracked-tree hygiene and `git diff --check` |
 
 External Doctora warnings are informational and cannot fail Fusion's strict
 checks. Real microphone validation and the licensing decision are human-only.

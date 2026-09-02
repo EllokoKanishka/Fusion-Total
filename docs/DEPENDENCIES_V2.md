@@ -70,7 +70,7 @@ Estas quedan agrupadas en `requirements/fusion-reader-v2-optional.txt`.
   - `scripts/start_reader_neural_tts_gpu_5090.sh`
   - entorno separado vía `FUSION_READER_GPU_ENV`
   - default absoluto local auditado en `docs/LOCAL_DEFAULTS_V2.md`
-  - el blueprint referencia `alltalk_gpu_5090_py311`
+  - el blueprint histórico archivado registra `alltalk_gpu_5090_py311`
 - Docling GPU
   - `fusion_reader_v2/pdf_to_docx.py`
   - entorno separado vía `FUSION_READER_DOCLING_GPU_ENV`
@@ -90,7 +90,8 @@ usa principalmente biblioteca estándar:
 - `fusion_reader_v2/tts.py`
 - `fusion_reader_v2/dialogue.py`
 - `fusion_reader_v2/conversation.py`
-- `fusion_reader_v2/service.py`
+- `fusion_reader_v2/facade.py`
+- `fusion_reader_v2/services/`
 - `scripts/fusion_reader_v2_server.py`
 
 ## Required system binaries
@@ -471,15 +472,18 @@ curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
 
 ## Known gaps
 
-- ahora existe un manifiesto mínimo instalable en `requirements/`, pero sigue
-  faltando un lockfile o empaquetado más fuerte tipo `pyproject.toml` para toda
-  la ruta v2;
+- `pyproject.toml` es la autoridad de dependencias Python; los dos manifiestos
+  de `requirements/` se conservan como entradas operativas y CI comprueba que
+  no diverjan. Los constraints fijan Python 3.11 y 3.12, pero no existe todavía
+  un lockfile transitorio completo;
 - varios scripts todavía traen defaults absolutos locales para entornos externos
   (`FUSION_READER_GPU_ENV`, `DIRECT_CHAT_ALLTALK_DIR`,
   `DIRECT_CHAT_ALLTALK_PYTHON`);
 - el camino STT aceptado sigue siendo híbrido:
   `8021` principal, `whisper_cli` como fallback;
-- `fusion_reader_v2/service.py` sigue concentrando muchas responsabilidades;
+- `fusion_reader_v2/facade.py` todavía concentra la orquestación de varios
+  flujos conversacionales, aunque los servicios y rutas ya tienen ownership
+  separado; `service.py` es sólo compatibilidad;
 - la ruta PDF/OCR mezcla camino textual rápido, OCR fallback y Docling GPU; el
   manifiesto nuevo cubre solo el tramo Python del repo y no automatiza todavía
   los binarios ni el entorno dedicado de Docling;
@@ -487,10 +491,3 @@ curl -s "http://127.0.0.1:8080/search?q=test&format=json" | head -c 300
   diseño informativo;
 - el runtime GPU de AllTalk y el runtime GPU de Docling siguen siendo entornos
   dedicados y no vendorizados por el repo.
-- el discovery actual de este branch cuenta `345` tests;
-- el conteo histórico previo del tramo de consolidación había quedado en
-  `339`, pero ya no es la referencia operativa actual;
-- `tests/test_local_defaults_v2.py` agrega una guardia estructural para
-  defaults locales, overrides y fronteras documentales;
-- la diferencia de conteo responde al estado del branch y a nuevas guardias de
-  documentación, no a un bug nuevo del loader.

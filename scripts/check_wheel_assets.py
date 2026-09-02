@@ -5,22 +5,20 @@ import argparse
 import zipfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
 STATIC_ROOT = "fusion_reader_v2/web/static/"
-REQUIRED_ASSETS = {
-    f"{STATIC_ROOT}index.html",
-    f"{STATIC_ROOT}styles.css",
-    f"{STATIC_ROOT}app.js",
-    f"{STATIC_ROOT}busy_controls.js",
-    f"{STATIC_ROOT}js/api.mjs",
-    f"{STATIC_ROOT}js/audio.mjs",
-    f"{STATIC_ROOT}js/audio_export.mjs",
-    f"{STATIC_ROOT}js/bootstrap.mjs",
-    f"{STATIC_ROOT}js/busy.mjs",
-    f"{STATIC_ROOT}js/dialogue.mjs",
-    f"{STATIC_ROOT}js/notes.mjs",
-    f"{STATIC_ROOT}js/preparation.mjs",
-    f"{STATIC_ROOT}js/ui.mjs",
-}
+
+
+def discover_static_assets(root: Path = ROOT) -> set[str]:
+    """Return every browser asset that must survive wheel packaging."""
+
+    static = root / STATIC_ROOT
+    if not static.is_dir():
+        return set()
+    return {f"{STATIC_ROOT}{path.relative_to(static).as_posix()}" for path in static.rglob("*") if path.is_file()}
+
+
+REQUIRED_ASSETS = discover_static_assets()
 
 
 def missing_assets(wheel: Path | str) -> list[str]:
@@ -43,6 +41,9 @@ def main() -> int:
     if missing:
         for item in missing:
             print(f"ERROR: {item}")
+        return 1
+    if not REQUIRED_ASSETS:
+        print(f"ERROR: static_source_missing:{ROOT / STATIC_ROOT}")
         return 1
     print(f"wheel assets verified: {len(REQUIRED_ASSETS)} files in {args.wheel.name}")
     return 0

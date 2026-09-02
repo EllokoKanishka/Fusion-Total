@@ -23,7 +23,6 @@ config/*.secret*
 config/*secrets*
 logs/
 *.log
-.env.n8n.local
 
 # Python
 __pycache__/
@@ -38,7 +37,6 @@ ENV/
 .coverage
 coverage.xml
 coverage.json
-.codex
 .codex/
 
 # Node / JS
@@ -70,7 +68,6 @@ community/mcp/top10/
 config/mcporter.json
 
 # local artifacts
-output_playwright_*.png
 cmd_pipe
 
 .playwright-cli/

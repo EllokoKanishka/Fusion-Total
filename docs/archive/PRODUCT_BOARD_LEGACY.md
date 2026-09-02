@@ -1,4 +1,4 @@
-# Seguimiento Fusion Reader
+# Seguimiento Fusion Reader (histórico)
 
 Este archivo queda como tablero corto de producto. La historia larga vive en
 `docs/HISTORY.md`.
