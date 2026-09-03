@@ -21,10 +21,10 @@ jobs:
           - python-version: '3.12'
             constraint: requirements/constraints-py312.txt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install media test dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -37,10 +37,10 @@ jobs:
     name: Python quality and coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install media test dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -63,8 +63,8 @@ jobs:
     name: Non-editable wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -93,7 +93,7 @@ jobs:
     name: Shell
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: find scripts -name '*.sh' -type f -print0 | sort -z | xargs -0 -n1 bash -n
       - run: find scripts -name '*.sh' -type f -print0 | sort -z | xargs -0 shellcheck
@@ -102,8 +102,8 @@ jobs:
     name: JavaScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
