@@ -94,6 +94,38 @@ class STTProviderMatrixTests(unittest.TestCase):
             self.assertEqual(provider._read_transcript(out, source), "otro")
             self.assertEqual(provider._clean_text(" a\r\n b "), "a b")
 
+    def test_whisper_cli_json_preserves_language_and_segments(self) -> None:
+        provider = dialogue.WhisperCliSTTProvider(command="whisper", timeout_seconds=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "audio.wav"
+            source.write_bytes(b"RIFF")
+
+            def completed(cmd, **_kwargs):
+                out_dir = Path(cmd[cmd.index("--output_dir") + 1])
+                (out_dir / "audio.json").write_text(
+                    json.dumps(
+                        {
+                            "text": "First. Second.",
+                            "language": "en",
+                            "segments": [
+                                {"start": 0, "end": 1.5, "text": "First."},
+                                {"start": 1.5, "end": 3, "text": "Second."},
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            with (
+                mock.patch.object(dialogue.shutil, "which", return_value="/bin/whisper"),
+                mock.patch.object(dialogue, "run_owned", side_effect=completed),
+            ):
+                result = provider.transcribe_file(source, language="auto")
+            self.assertTrue(result.ok)
+            self.assertEqual(result.detected_language, "en")
+            self.assertEqual([segment.start for segment in result.segments], [0.0, 1.5])
+
     def test_faster_whisper_health_and_transcription_matrix(self) -> None:
         provider = dialogue.FasterWhisperServerSTTProvider(base_url="http://local", timeout_seconds=1)
         with mock.patch.object(dialogue.urllib.request, "urlopen", return_value=Response({"ok": True})):

@@ -65,6 +65,7 @@ class WebContext:
             stt=self.app.stt,
             chat=media_chat,
             synthesize=self.app.synthesize_for_export,
+            tts_health=self.app.tts.health,
             runtime_root=self.media_root,
             converted_root=self.converted_root,
             output_root=self.media_artifacts_root,
@@ -72,6 +73,8 @@ class WebContext:
             timeout_seconds=limits.media_timeout_seconds,
             max_items=limits.job_max_items,
             ttl_seconds=limits.job_ttl_seconds,
+            max_duration_seconds=limits.media_max_duration_seconds,
+            max_input_bytes=limits.media_max_bytes,
         )
 
     @property

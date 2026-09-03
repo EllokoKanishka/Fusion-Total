@@ -195,6 +195,7 @@ class LimitSettings:
     pdf_max_bytes: int = 500 * 1024 * 1024
     media_max_bytes: int = 2 * 1024 * 1024 * 1024
     media_timeout_seconds: float = 2 * 60 * 60
+    media_max_duration_seconds: float = 6 * 60 * 60
     job_ttl_seconds: int = 6 * 60 * 60
     job_max_items: int = 256
     cache_max_bytes: int = 8 * 1024 * 1024 * 1024
@@ -328,6 +329,12 @@ def create_settings(
                 env,
                 "FUSION_READER_MEDIA_TIMEOUT_SECONDS",
                 2 * 60 * 60,
+                minimum=1.0,
+            ),
+            media_max_duration_seconds=_floating(
+                env,
+                "FUSION_READER_MEDIA_MAX_DURATION_SECONDS",
+                6 * 60 * 60,
                 minimum=1.0,
             ),
             job_ttl_seconds=_integer(env, "FUSION_READER_JOB_TTL_SECONDS", 6 * 60 * 60, minimum=1),

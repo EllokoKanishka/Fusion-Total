@@ -30,6 +30,26 @@ class MediaResponder(Protocol):
 
 
 def handle_media_get(responder: MediaResponder, path: str) -> bool:
+    if path == "/api/media/capabilities":
+        params = parse_qs(urlparse(responder.path).query)
+
+        def selected(name: str, default: bool) -> bool:
+            raw = str((params.get(name) or ["1" if default else "0"])[-1]).strip().lower()
+            return raw not in {"", "0", "false", "no", "off"}
+
+        operation = str((params.get("operation") or ["transcribe"])[-1]).strip().lower()
+        try:
+            input_bytes = max(0, int(str((params.get("file_bytes") or ["0"])[-1])))
+        except ValueError:
+            input_bytes = 0
+        payload = responder.context.media.capabilities(
+            operation=operation,
+            include_translated_pdf=selected("translated_pdf", operation == "translate"),
+            include_spanish_audio=selected("spanish_audio", operation == "translate"),
+            input_bytes=input_bytes,
+        )
+        responder._json(200 if payload.get("ok") else 503, payload)
+        return True
     if path == "/api/media/status":
         responder._json(200, responder.context.media.overview())
         return True

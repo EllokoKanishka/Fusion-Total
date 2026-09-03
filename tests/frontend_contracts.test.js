@@ -60,6 +60,7 @@ test('frontend exposes reader, prepare, export, notes, dialogue and PDF actions'
     '/api/tools/pdf-to-docx',
     '/api/media/transcribe',
     '/api/media/translate',
+    '/api/media/capabilities',
   ]) {
     assert.ok(frontend.includes(endpoint), `missing endpoint ${endpoint}`);
   }
@@ -73,6 +74,7 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="quickTextInput"[^>]+aria-label="Texto rápido para leer"/);
   assert.match(html, /id="quickTextInfo"[^>]+aria-live="polite"/);
   assert.match(html, /id="mediaInfo"[^>]+aria-live="polite"/);
+  assert.match(html, /id="mediaTranscribeBtn"/);
   assert.match(html, /id="dictationToggleBtn"[^>]+aria-expanded="false"[^>]+aria-controls="dictationWorkspace"/);
   assert.match(html, /id="dictationEditor"[^>]+aria-label="Borrador de dictado"/);
   assert.match(html, /id="dictationVoiceSelect"[^>]+aria-label="Voz de lectura en dictado"/);

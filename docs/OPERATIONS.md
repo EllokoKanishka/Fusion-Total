@@ -202,24 +202,41 @@ primero el archivo a FLAC mono de 16 kHz y muestra etapas separadas.
 
 Operación de medios largos:
 
-- la interfaz usa un único flujo para audio o video;
+- la interfaz separa la transcripción directa de la traducción para no ejecutar
+  Ollama o TTS por accidente;
 - se puede pedir de forma independiente el PDF en idioma original, el PDF
   traducido al castellano y el audio en castellano;
 - sólo se generan las salidas marcadas; se puede elegir una, dos o las tres;
-- `Cancelar` detiene cooperativamente un trabajo activo y `Cerrar resultado`
+- el preflight comprueba FFmpeg, FFprobe, STT, servicios opcionales y espacio
+  libre antes de subir; el backend lo revalida sobre el archivo recibido;
+- `Cancelar` aborta la subida, FFmpeg o la petición STT activa y elimina
+  artefactos parciales; `Cerrar resultado`
   limpia el panel cuando terminó, sin borrar los PDF/WAV publicados;
 - los originales subidos y FLAC temporales se eliminan al terminar o fallar;
-- PDF/WAV publicados quedan en Descargas;
+- PDF/WAV publicados quedan en `runtime/fusion_reader_v2/media_artifacts` y se
+  descargan sólo mediante la ruta validada;
 - montar copia el texto a `runtime/fusion_reader_v2/imported_texts` para que la
   sesión pueda recuperarlo;
 - el cierre normal solicita cancelación y espera el worker multimedia.
 
+El estado expone formato/códec, proveedor STT, cantidad de párrafos/chunks,
+tiempo total y tiempos de probe, normalización y STT. `partial` significa que
+una etapa opcional falló después de obtener texto o artefactos válidos; esos
+resultados siguen descargables y montables. `error` significa que no quedó una
+salida utilizable.
+
 Contrato: `auto` (default) usa el server sano y cae a Whisper CLI ante una
-indisponibilidad o fallo normal; no repite por CLI un resultado
-`hallucinated_transcript`. `server` (incluidos `faster_whisper` y
+indisponibilidad o fallo normal; no repite por CLI un resultado cancelado,
+vencido o `hallucinated_transcript`. El CLI produce JSON para conservar idioma
+y segmentos con tiempos. `server` (incluidos `faster_whisper` y
 `faster-whisper`) usa exclusivamente `8021`. `cli` usa exclusivamente
 `FUSION_READER_STT_COMMAND`; el launcher no inicia `8021` y su ausencia es
 informativa.
+
+El servidor `8021` recibe cuerpos por bloques con límite, evita reconvertir un
+FLAC ya normalizado, serializa el acceso al modelo GPU y acepta cancelación por
+ID. En medios largos activa VAD desde el primer intento y descarta artefactos
+comunes de Whisper por segmento.
 
 `FUSION_READER_STT_URL` controla el cliente HTTP y `FUSION_READER_STT_PORT` el
 launcher/server (default `8021`); al personalizarlos deben señalar el mismo

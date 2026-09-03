@@ -1,10 +1,12 @@
-export function createMediaController({ elements, log, refreshMainStatus }) {
+export function createMediaController({ elements, log, refreshMainStatus, pollDelayMs = 900 }) {
   const endpoints = {
     transcribe: '/api/media/transcribe',
     translate: '/api/media/translate'
   };
   let pollingJobId = '';
   let timer = null;
+  let uploadController = null;
+  let pollFailures = 0;
   const downloadHandlers = new Map();
 
   function setLink(element, item, fallbackLabel) {
@@ -66,6 +68,7 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
   ].forEach(bindDownload);
 
   function setBusy(busy, dismissible = false, state = 'idle') {
+    if (elements.mediaTranscribeBtn) elements.mediaTranscribeBtn.disabled = Boolean(busy);
     if (elements.mediaTranslateBtn) elements.mediaTranslateBtn.disabled = Boolean(busy);
     [
       elements.mediaOriginalPdfToggle,
@@ -86,17 +89,18 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     if (!data || !elements.mediaInfo) return;
     const state = String(data.state || 'idle');
     const operation = data.operation === 'translate' ? 'Traducción' : 'Transcripción';
-    const diagnostic = state === 'error' && data.error ? ` Detalle técnico: ${data.error}` : '';
+    const diagnostic = ['error', 'partial'].includes(state) && data.error ? ` Código: ${data.error}` : '';
     elements.mediaInfo.textContent = state === 'idle'
       ? (data.detail || 'Sin procesamiento multimedia activo.')
       : `${operation}: ${data.detail || data.stage || state}${diagnostic}`;
     if (elements.mediaProgress) elements.mediaProgress.value = Number(data.progress || 0);
     const running = ['queued', 'running', 'canceling'].includes(state);
-    const dismissible = ['done', 'error', 'cancelled'].includes(state);
+    const dismissible = ['done', 'partial', 'error', 'cancelled'].includes(state);
     setBusy(running, dismissible, state);
     if (elements.mediaMountBtn) {
-      elements.mediaMountBtn.disabled = state !== 'done';
-      elements.mediaMountBtn.classList.toggle('is-hidden', state !== 'done');
+      const mountable = ['done', 'partial'].includes(state) && Number(data.transcript_characters || 0) > 0;
+      elements.mediaMountBtn.disabled = !mountable;
+      elements.mediaMountBtn.classList.toggle('is-hidden', !mountable);
     }
     const output = data.output && typeof data.output === 'object' ? data.output : {};
     setLink(elements.mediaPdfDownload, output.pdf, 'PDF');
@@ -115,9 +119,12 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
 
   function schedulePoll() {
     clearPoll();
+    const delay = Math.min(8000, pollDelayMs * (2 ** Math.min(pollFailures, 3)));
     timer = window.setTimeout(() => poll().catch(error => {
-      if (elements.mediaInfo) elements.mediaInfo.textContent = `No pude actualizar el proceso: ${error.message}`;
-    }), 900);
+      pollFailures += 1;
+      if (elements.mediaInfo) elements.mediaInfo.textContent = `Reconectando con el proceso: ${error.message}`;
+      schedulePoll();
+    }), delay);
   }
 
   async function poll() {
@@ -125,6 +132,7 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
     const response = await fetch(endpoint);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'media_status_failed');
+    pollFailures = 0;
     render(data);
     return data;
   }
@@ -145,6 +153,7 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
       return;
     }
     clearPoll();
+    pollFailures = 0;
     setBusy(true, false, 'queued');
     setLink(elements.mediaPdfDownload, null, 'PDF');
     setLink(elements.mediaTranslatedPdfDownload, null, 'PDF en castellano');
@@ -158,21 +167,37 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
       if (operation === 'translate') {
         Object.entries(outputs).forEach(([name, enabled]) => params.set(name, enabled ? '1' : '0'));
       }
+      params.set('file_bytes', String(Number(file.size || 0)));
+      const preflight = await fetch(`/api/media/capabilities?operation=${encodeURIComponent(operation)}&${params.toString()}`);
+      const capability = await preflight.json();
+      if (!preflight.ok || capability.ok === false) {
+        throw new Error(capability.detail || capability.error || 'media_preflight_failed');
+      }
       const endpoint = params.size ? `${endpoints[operation]}?${params.toString()}` : endpoints[operation];
-      const response = await fetch(endpoint, { method: 'POST', body });
+      uploadController = new AbortController();
+      const response = await fetch(endpoint, { method: 'POST', body, signal: uploadController.signal });
+      uploadController = null;
       const data = await response.json();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'media_upload_failed');
       pollingJobId = String(data.job_id || '');
       render(data);
       log(`${file.name}: procesamiento multimedia iniciado.`);
     } catch (error) {
+      uploadController = null;
       setBusy(false, false, 'idle');
-      if (elements.mediaInfo) elements.mediaInfo.textContent = `Falló la carga: ${error.message}`;
+      const cancelled = error && error.name === 'AbortError';
+      if (elements.mediaInfo) elements.mediaInfo.textContent = cancelled ? 'Carga cancelada.' : `Falló la carga: ${error.message}`;
+      if (cancelled) return;
       throw error;
     }
   }
 
   async function cancel() {
+    if (uploadController) {
+      uploadController.abort();
+      uploadController = null;
+      return;
+    }
     if (!pollingJobId) return;
     const response = await fetch(`/api/media/cancel/${encodeURIComponent(pollingJobId)}`, { method: 'POST' });
     const data = await response.json();
@@ -192,6 +217,8 @@ export function createMediaController({ elements, log, refreshMainStatus }) {
 
   function dispose() {
     clearPoll();
+    if (uploadController) uploadController.abort();
+    uploadController = null;
     downloadHandlers.forEach((handler, element) => element.removeEventListener('click', handler));
     downloadHandlers.clear();
   }

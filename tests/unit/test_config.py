@@ -51,10 +51,12 @@ class ConfigurationTests(unittest.TestCase):
             environ={
                 "FUSION_READER_MEDIA_MAX_BYTES": "987654321",
                 "FUSION_READER_MEDIA_TIMEOUT_SECONDS": "4321",
+                "FUSION_READER_MEDIA_MAX_DURATION_SECONDS": "8765",
             }
         )
         self.assertEqual(settings.limits.media_max_bytes, 987654321)
         self.assertEqual(settings.limits.media_timeout_seconds, 4321)
+        self.assertEqual(settings.limits.media_max_duration_seconds, 8765)
 
     def test_reserved_tts_ports_are_rejected(self) -> None:
         for port in (7852, 7854):

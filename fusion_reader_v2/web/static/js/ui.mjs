@@ -18,7 +18,8 @@ const ELEMENT_IDS = [
   'reasoningThinkingBtn', 'reasoningSupremeBtn', 'reasoningPensamientoCriticoBtn', 'profileSelect',
   'veilSelect', 'chatProviderSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',
   'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect'
-  , 'mediaTranslateBtn', 'mediaTranslateInput', 'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle',
+  , 'mediaTranscribeBtn', 'mediaTranscribeInput', 'mediaTranslateBtn', 'mediaTranslateInput',
+  'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle',
   'mediaSpanishAudioToggle', 'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',
   'mediaPdfDownload', 'mediaTranslatedPdfDownload', 'mediaAudioDownload'
 ];

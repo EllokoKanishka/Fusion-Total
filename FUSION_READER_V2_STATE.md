@@ -52,7 +52,9 @@ y laboratorio, no como dependencia del producto v2.
 - `Audio y video` vive en el panel derecho y comparte un pipeline local: FFmpeg
   normaliza a FLAC, Whisper transcribe con idioma y tiempos, ReportLab genera
   PDF y, opcionalmente, Ollama traduce al castellano antes de reutilizar el TTS
-  y la voz seleccionada para exportar WAV.
+  y la voz seleccionada para exportar WAV. Transcribir y traducir son acciones
+  visibles separadas; hay preflight, envío STT por streaming, cancelación real,
+  timeout global y resultados parciales recuperables.
 - `Dictado` abre un escritorio exclusivo de pantalla completa: captura audio en
   el navegador, reutiliza el STT local en castellano, aplica sólo operaciones
   editoriales acotadas cuando la frase invoca a “Lucy” y conserva el borrador en

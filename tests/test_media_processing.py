@@ -5,10 +5,17 @@ import time
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
 from fusion_reader_v2.config import create_settings
 from fusion_reader_v2.web.context import WebContext
-from tests.helpers import NullSTTProvider, SyntheticWavTTSProvider, managed_test_app
+from tests.helpers import (
+    BlockingSyntheticWavTTSProvider,
+    FailingTTSProvider,
+    NullSTTProvider,
+    SyntheticWavTTSProvider,
+    managed_test_app,
+)
 
 
 def write_wav(path: Path, seconds: float = 0.1) -> None:
@@ -93,6 +100,48 @@ class MediaProcessingTests(unittest.TestCase):
             with managed_test_app(root=root / "app") as restored:
                 self.assertEqual(restored.status()["document"]["source_type"], "media_transcript")
                 self.assertIn("técnica y sociedad", restored.session.document.text)
+
+    def test_preflight_rejects_oversized_input_before_processing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(root=root / "app") as app:
+                context = self.context(root, app)
+                status = context.media.capabilities(
+                    operation="transcribe", input_bytes=context.media.max_input_bytes + 1
+                )
+                self.assertFalse(status["ok"])
+                self.assertIn("media_too_large", status["errors"])
+                self.assertEqual(status["max_input_bytes"], context.settings.limits.media_max_bytes)
+
+    def test_preflight_reports_every_required_local_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(root=root / "app") as app:
+                context = self.context(root, app)
+                self.assertEqual(context.media.capabilities(operation="unknown")["error"], "media_operation_invalid")
+                context.media.tts_health = lambda: {"ok": False, "detail": "down"}
+                disk = type("DiskUsage", (), {"free": 1})()
+                with (
+                    mock.patch("fusion_reader_v2.services.media.shutil.which", return_value=None),
+                    mock.patch("fusion_reader_v2.services.media.shutil.disk_usage", return_value=disk),
+                    mock.patch.object(context.media.stt, "health", return_value={"ok": False}),
+                    mock.patch.object(context.media.chat, "health", return_value={"ok": False}),
+                ):
+                    status = context.media.capabilities(
+                        operation="translate", include_translated_pdf=True, include_spanish_audio=True
+                    )
+                self.assertFalse(status["ok"])
+                self.assertEqual(
+                    set(status["errors"]),
+                    {
+                        "ffprobe_not_available",
+                        "ffmpeg_not_available",
+                        "stt_not_available",
+                        "translation_not_available",
+                        "tts_not_available",
+                        "media_disk_space_low",
+                    },
+                )
 
     def test_translation_creates_spanish_pdf_and_audio_with_selected_voice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,6 +272,112 @@ class MediaProcessingTests(unittest.TestCase):
                 self.assertNotIn(job_id, context.media.jobs)
                 self.assertTrue(restarted_context.shutdown_jobs()["ok"])
                 self.assertTrue(context.shutdown_jobs()["ok"])
+
+    def test_cancel_during_synthesis_removes_every_published_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tts = BlockingSyntheticWavTTSProvider()
+            with managed_test_app(root=root / "app", tts=tts, stt=NullSTTProvider("An English lecture.")) as app:
+                context = self.context(root, app)
+                source = root / "cancel.wav"
+                write_wav(source)
+                started = context.media.start(
+                    operation="translate",
+                    filename=source.name,
+                    mime="audio/wav",
+                    input_path=source,
+                    voice=app.voice.voice,
+                    include_original_pdf=True,
+                    include_translated_pdf=True,
+                    include_spanish_audio=True,
+                )
+                job_id = str(started["job_id"])
+                self.assertTrue(tts.started.wait(5), context.media.status(job_id))
+                self.assertIn(
+                    "media_processing_busy",
+                    context.media.capabilities(operation="transcribe")["errors"],
+                )
+                canceling = context.media.cancel(job_id)
+                self.assertEqual(canceling["state"], "canceling")
+                tts.release.set()
+                status = wait_for_media(context, job_id)
+                self.assertEqual(status["state"], "cancelled", status)
+                self.assertEqual(status["output"], {})
+                self.assertFalse(context.media.artifact(job_id, "pdf")["ok"])
+                self.assertFalse(context.media.artifact(job_id, "translated-pdf")["ok"])
+
+    def test_late_tts_failure_keeps_mountable_partial_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(
+                root=root / "app", tts=FailingTTSProvider(), stt=NullSTTProvider("An English lecture.")
+            ) as app:
+                context = self.context(root, app)
+                source = root / "partial.wav"
+                write_wav(source)
+                started = context.media.start(
+                    operation="translate",
+                    filename=source.name,
+                    mime="audio/wav",
+                    input_path=source,
+                    voice=app.voice.voice,
+                    include_original_pdf=True,
+                    include_translated_pdf=True,
+                    include_spanish_audio=True,
+                )
+                job_id = str(started["job_id"])
+                status = wait_for_media(context, job_id)
+                self.assertEqual(status["state"], "partial", status)
+                self.assertEqual(status["error"], "tts_down")
+                self.assertEqual(set(status["output"]), {"pdf", "translated_pdf"})
+                self.assertTrue(context.media.mount(job_id)["mounted"])
+
+    def test_expired_manifest_is_deleted_and_cannot_resurrect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with managed_test_app(root=root / "app", stt=NullSTTProvider("Clase.")) as app:
+                context = self.context(root, app)
+                source = root / "old.wav"
+                write_wav(source)
+                started = context.media.start(
+                    operation="transcribe",
+                    filename=source.name,
+                    mime="audio/wav",
+                    input_path=source,
+                    voice=app.voice.voice,
+                )
+                job_id = str(started["job_id"])
+                self.assertEqual(wait_for_media(context, job_id)["state"], "done")
+                manifest = context.media.manifest_root / f"{job_id}.json"
+                self.assertTrue(manifest.exists())
+                context.media.jobs[job_id].updated_at = time.time() - 10
+                context.media.ttl_seconds = 1
+                context.media.registry.ttl_seconds = 1
+                context.media._persist_job(context.media.jobs[job_id])
+                self.assertEqual(context.media.overview()["state"], "idle")
+                self.assertNotIn(job_id, context.media.jobs)
+                self.assertFalse(manifest.exists())
+
+    def test_duration_limit_fails_before_transcription(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stt = NullSTTProvider("No debería ejecutarse.")
+            with managed_test_app(root=root / "app", stt=stt) as app:
+                context = self.context(root, app)
+                context.media.max_duration_seconds = 0.01
+                source = root / "long.wav"
+                write_wav(source, seconds=0.1)
+                started = context.media.start(
+                    operation="transcribe",
+                    filename=source.name,
+                    mime="audio/wav",
+                    input_path=source,
+                    voice=app.voice.voice,
+                )
+                status = wait_for_media(context, str(started["job_id"]))
+                self.assertEqual(status["state"], "error")
+                self.assertEqual(status["error"], "media_duration_exceeded")
+                self.assertFalse(stt.calls)
 
 
 if __name__ == "__main__":

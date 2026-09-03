@@ -292,9 +292,13 @@ Propiedades:
 
 - acepta formatos comunes decodificables por FFmpeg y diagnostica archivos ilegibles;
 - captura la voz seleccionada al iniciar para evitar mezclas si la UI cambia;
-- ejecuta un solo job multimedia por vez y permite cancelación cooperativa;
-- publica PDF/WAV en Descargas mediante reserva y reemplazo seguro;
-- conserva el texto interno en runtime hasta que el usuario decide montarlo;
+- ejecuta un solo job multimedia por vez y propaga cancelación/timeout a los
+  subprocesos y al servidor STT;
+- transmite el FLAC al STT por bloques y serializa la inferencia GPU del server;
+- publica PDF/WAV en el directorio de artefactos mediante reserva y reemplazo seguro;
+- conserva el texto en el manifiesto hasta su TTL; los temporales del job se
+  eliminan siempre;
+- diferencia éxito total, parcial recuperable, cancelación y error sin salida;
 - montar publica un TXT durable en `imported_texts` y lo carga en el
   `ReaderSession` como `media_transcript` o `media_translation`;
 - no clona la voz del conferencista: usa una voz elegida de Fusion;

@@ -1860,6 +1860,12 @@ els.pdfToWordInput.addEventListener('change', () => {
   convertPdfToWord(els.pdfToWordInput.files && els.pdfToWordInput.files[0]);
   els.pdfToWordInput.value = '';
 });
+els.mediaTranscribeBtn.addEventListener('click', () => els.mediaTranscribeInput.click());
+els.mediaTranscribeInput.addEventListener('change', () => {
+  mediaController.start('transcribe', els.mediaTranscribeInput.files && els.mediaTranscribeInput.files[0])
+    .catch(error => log(error.message));
+  els.mediaTranscribeInput.value = '';
+});
 els.mediaTranslateBtn.addEventListener('click', () => els.mediaTranslateInput.click());
 els.mediaTranslateInput.addEventListener('change', () => {
   mediaController.start('translate', els.mediaTranslateInput.files && els.mediaTranslateInput.files[0])
