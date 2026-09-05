@@ -18,11 +18,11 @@ spec.loader.exec_module(systemd_unit_path)
 class SystemdUnitPathTests(unittest.TestCase):
     def test_escape_systemd_path_preserves_absolute_path_and_encodes_unsafe_bytes(self):
         escaped = systemd_unit_path.escape_systemd_path(
-            "/home/lucy-ubuntu/Escritorio/Fusión Total"
+            "/home/example/Escritorio/Fusión Total"
         )
         self.assertEqual(
             escaped,
-            "/home/lucy-ubuntu/Escritorio/Fusi\\xc3\\xb3n\\x20Total",
+            "/home/example/Escritorio/Fusi\\xc3\\xb3n\\x20Total",
         )
 
     def test_escape_systemd_path_rejects_relative_paths(self):
@@ -37,7 +37,7 @@ class SystemdUnitPathTests(unittest.TestCase):
         self.assertIn('SYSTEMD_ROOT="$("$PYTHON_BIN" "$ROOT/scripts/systemd_unit_path.py" "$ROOT")"', installer)
         self.assertIn("EnvironmentFile=$SYSTEMD_ROOT/.env", installer)
         self.assertIn("WorkingDirectory=$SYSTEMD_ROOT", installer)
-        self.assertIn("ExecStart=$SYSTEMD_ROOT/scripts/start_pandafusion_systemd.sh", installer)
+        self.assertIn('ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
         self.assertNotIn('EnvironmentFile="$ROOT/.env"', installer)
         self.assertNotIn('WorkingDirectory="$ROOT"', installer)
 
@@ -62,7 +62,7 @@ class SystemdUnitPathTests(unittest.TestCase):
                         "Type=simple",
                         f"EnvironmentFile={escaped_root}/.env",
                         f"WorkingDirectory={escaped_root}",
-                        f"ExecStart={escaped_root}/start.sh",
+                        f'ExecStart="{root}/start.sh"',
                         "",
                     ]
                 ),
