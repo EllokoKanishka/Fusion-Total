@@ -26,6 +26,14 @@ if ! PYTHON_BIN="$(find_python)"; then
 fi
 echo "Intérprete detectado: $PYTHON_BIN"
 
+# Las directivas de ruta de systemd no aceptan comillas shell alrededor de
+# rutas con espacios (por ejemplo, "Fusion Total"). Escapamos los bytes no
+# seguros con secuencias C-style para conservar una ruta absoluta válida.
+if ! SYSTEMD_ROOT="$("$PYTHON_BIN" "$ROOT/scripts/systemd_unit_path.py" "$ROOT")"; then
+  echo "ERROR: No se pudo convertir la ruta del repositorio a sintaxis systemd." >&2
+  exit 1
+fi
+
 # 2. Resolver puerto
 PORT="${FUSION_READER_V2_PORT:-$DEFAULT_PORT}"
 echo "Usando puerto: $PORT"
@@ -67,9 +75,9 @@ After=network.target
 
 [Service]
 Type=simple
-EnvironmentFile="$ROOT/.env"
-WorkingDirectory="$ROOT"
-ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"
+EnvironmentFile=$SYSTEMD_ROOT/.env
+WorkingDirectory=$SYSTEMD_ROOT
+ExecStart=$SYSTEMD_ROOT/scripts/start_pandafusion_systemd.sh
 Restart=on-failure
 RestartSec=3
 KillMode=control-group
