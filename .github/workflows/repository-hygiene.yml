@@ -1,5 +1,7 @@
 name: Repository hygiene
 
+# Keep main as the only long-lived branch while preserving any genuinely
+# unintegrated work. Squash-merged PR heads are safe to prune.
 on:
   push:
     branches:
@@ -22,6 +24,7 @@ jobs:
   prune-stale-branches:
     if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Delete only safely disposable branches
         env:
