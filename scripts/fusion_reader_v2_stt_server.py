@@ -8,6 +8,7 @@ import time
 import sys
 import re
 import threading
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -97,7 +98,9 @@ def convert_to_wav(source: Path, target: Path, cancel_event=None) -> tuple[bool,
 
 
 def _is_hallucinated_segment(text: str) -> bool:
-    clean = " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+    normalized = unicodedata.normalize("NFD", str(text or "").lower())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    clean = " ".join(re.sub(r"[^a-z0-9]+", " ", normalized).split())
     phrases = (
         "subtitulos realizados por la comunidad de amara org",
         "subtitulos por la comunidad de amara org",

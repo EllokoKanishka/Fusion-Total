@@ -212,6 +212,11 @@ Operación de medios largos:
 - `Cancelar` aborta la subida, FFmpeg o la petición STT activa y elimina
   artefactos parciales; `Cerrar resultado`
   limpia el panel cuando terminó, sin borrar los PDF/WAV publicados;
+- la cancelación cubre también el preflight: una carga cancelada durante esa
+  comprobación no comienza después;
+- el STT usa el presupuesto restante del pipeline y corta la espera de cabeceras
+  o del cuerpo de respuesta al vencer; solicita además cancelar la inferencia
+  remota y espera el cierre de su monitor local;
 - los originales subidos y FLAC temporales se eliminan al terminar o fallar;
 - PDF/WAV publicados quedan en `runtime/fusion_reader_v2/media_artifacts` y se
   descargan sólo mediante la ruta validada;
@@ -237,6 +242,8 @@ El servidor `8021` recibe cuerpos por bloques con límite, evita reconvertir un
 FLAC ya normalizado, serializa el acceso al modelo GPU y acepta cancelación por
 ID. En medios largos activa VAD desde el primer intento y descarta artefactos
 comunes de Whisper por segmento.
+El filtro normaliza tildes sólo para comparar esos artefactos; conserva el texto
+y los tiempos de los segmentos válidos.
 
 `FUSION_READER_STT_URL` controla el cliente HTTP y `FUSION_READER_STT_PORT` el
 launcher/server (default `8021`); al personalizarlos deben señalar el mismo

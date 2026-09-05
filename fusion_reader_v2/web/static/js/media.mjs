@@ -146,13 +146,16 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
   }
 
   async function start(operation, file) {
-    if (!file) return;
+    if (!file || uploadController) return;
     const outputs = selectedOutputs();
     if (operation === 'translate' && !Object.values(outputs).some(Boolean)) {
       if (elements.mediaInfo) elements.mediaInfo.textContent = 'Elegí al menos uno de los tres resultados.';
       return;
     }
     clearPoll();
+    pollingJobId = '';
+    const controller = new AbortController();
+    uploadController = controller;
     pollFailures = 0;
     setBusy(true, false, 'queued');
     setLink(elements.mediaPdfDownload, null, 'PDF');
@@ -168,34 +171,34 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
         Object.entries(outputs).forEach(([name, enabled]) => params.set(name, enabled ? '1' : '0'));
       }
       params.set('file_bytes', String(Number(file.size || 0)));
-      const preflight = await fetch(`/api/media/capabilities?operation=${encodeURIComponent(operation)}&${params.toString()}`);
+      const preflight = await fetch(`/api/media/capabilities?operation=${encodeURIComponent(operation)}&${params.toString()}`, { signal: controller.signal });
       const capability = await preflight.json();
+      controller.signal.throwIfAborted();
       if (!preflight.ok || capability.ok === false) {
         throw new Error(capability.detail || capability.error || 'media_preflight_failed');
       }
       const endpoint = params.size ? `${endpoints[operation]}?${params.toString()}` : endpoints[operation];
-      uploadController = new AbortController();
-      const response = await fetch(endpoint, { method: 'POST', body, signal: uploadController.signal });
-      uploadController = null;
+      const response = await fetch(endpoint, { method: 'POST', body, signal: controller.signal });
       const data = await response.json();
+      controller.signal.throwIfAborted();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'media_upload_failed');
       pollingJobId = String(data.job_id || '');
       render(data);
       log(`${file.name}: procesamiento multimedia iniciado.`);
     } catch (error) {
-      uploadController = null;
       setBusy(false, false, 'idle');
       const cancelled = error && error.name === 'AbortError';
       if (elements.mediaInfo) elements.mediaInfo.textContent = cancelled ? 'Carga cancelada.' : `Falló la carga: ${error.message}`;
       if (cancelled) return;
       throw error;
+    } finally {
+      if (uploadController === controller) uploadController = null;
     }
   }
 
   async function cancel() {
     if (uploadController) {
       uploadController.abort();
-      uploadController = null;
       return;
     }
     if (!pollingJobId) return;

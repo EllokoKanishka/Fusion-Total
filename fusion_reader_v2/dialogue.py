@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import http.client
@@ -342,7 +343,33 @@ class FasterWhisperServerSTTProvider(STTProvider):
         )
         parsed = urllib.parse.urlsplit(self.base_url)
         connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        connection = connection_cls(parsed.hostname or "127.0.0.1", parsed.port, timeout=self.timeout_seconds)
+        deadline = min(
+            time.monotonic() + self.timeout_seconds,
+            getattr(cancel_event, "deadline", float("inf")),
+        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return TranscriptResult(False, provider=self.name, detail="timeout")
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+        connection = connection_cls(parsed.hostname or "127.0.0.1", parsed.port, timeout=remaining)
+        finished = threading.Event()
+        watcher = None
+
+        def interrupted() -> bool:
+            return time.monotonic() >= deadline or (cancel_event is not None and cancel_event.is_set())
+
+        def watch_connection(active_socket: socket.socket) -> None:
+            # Keep the socket reference: HTTP/1.0 hands it off to HTTPResponse.
+            # shutdown, unlike close alone, wakes a blocked getresponse/read.
+            while not finished.wait(min(0.05, max(0.0, deadline - time.monotonic()))):
+                if interrupted():
+                    try:
+                        active_socket.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    return
+
         try:
             if request_id:
                 with self._connections_lock:
@@ -352,22 +379,35 @@ class FasterWhisperServerSTTProvider(STTProvider):
             connection.putheader("Content-Type", mime or "application/octet-stream")
             connection.putheader("Content-Length", str(source.stat().st_size))
             connection.endheaders()
+            if connection.sock is not None:
+                watcher = threading.Thread(
+                    target=watch_connection,
+                    args=(connection.sock,),
+                    name="fusion-stt-deadline",
+                    daemon=False,
+                )
+                watcher.start()
             with source.open("rb") as handle:
                 while chunk := handle.read(1024 * 1024):
-                    if cancel_event is not None and cancel_event.is_set():
+                    if interrupted():
                         raise _STTCancelled
                     connection.send(chunk)
-            if cancel_event is not None and cancel_event.is_set():
+            if interrupted():
                 raise _STTCancelled
             response = connection.getresponse()
             raw = response.read()
+            if interrupted():
+                raise _STTCancelled
             data = _json_response(raw)
             if response.status >= 400:
                 return TranscriptResult(
                     False, provider=self.name, detail=str(data.get("error") or f"http_{response.status}")
                 )
         except _STTCancelled:
-            return TranscriptResult(False, provider=self.name, detail="cancelled")
+            if request_id:
+                self.cancel(request_id)
+            detail = "timeout" if time.monotonic() >= deadline else "cancelled"
+            return TranscriptResult(False, provider=self.name, detail=detail)
         except urllib.error.HTTPError as exc:
             return TranscriptResult(
                 False,
@@ -376,10 +416,18 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
         except Exception as exc:
+            detail = str(exc)
+            if interrupted():
+                if request_id:
+                    self.cancel(request_id)
+                detail = "timeout" if time.monotonic() >= deadline else "cancelled"
             return TranscriptResult(
-                False, provider=self.name, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
+                False, provider=self.name, detail=detail, duration_ms=int((time.perf_counter() - started) * 1000)
             )
         finally:
+            finished.set()
+            if watcher is not None:
+                watcher.join()
             connection.close()
             if request_id:
                 with self._connections_lock:

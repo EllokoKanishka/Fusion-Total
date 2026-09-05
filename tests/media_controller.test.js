@@ -68,3 +68,66 @@ test('media polling recovers after a transient status failure', async () => {
   assert.match(ui.mediaInfo.textContent, /terminado/);
   controller.dispose();
 });
+
+test('cancel during preflight prevents upload and never cancels the previous job', async () => {
+  global.window = { setTimeout, clearTimeout };
+  const { createMediaController } = await import('../fusion_reader_v2/web/static/js/media.mjs');
+  for (const phase of ['request', 'body']) {
+    let finishPreflight;
+    let signal;
+    const requests = [];
+    const pending = new Promise(resolve => { finishPreflight = resolve; });
+    global.fetch = async (url, options) => {
+      requests.push(url);
+      signal = options.signal;
+      if (phase === 'request') await pending;
+      return { ok: true, async json() { if (phase === 'body') await pending; return { ok: true }; } };
+    };
+    const ui = elements();
+    const controller = createMediaController({ elements: ui, log() {}, async refreshMainStatus() {} });
+    controller.render({ job_id: 'previous-job', state: 'done', output: {} });
+    const file = new Blob(['audio']);
+    file.name = 'conference.wav';
+    const started = controller.start('transcribe', file);
+    await Promise.resolve();
+    await controller.cancel();
+    await controller.cancel();
+    assert.equal(signal.aborted, true);
+    finishPreflight();
+    await started;
+    assert.equal(requests.length, 1);
+    assert.match(requests[0], /capabilities/);
+    assert.equal(ui.mediaInfo.textContent, 'Carga cancelada.');
+    assert.equal(ui.mediaTranscribeBtn.disabled, false);
+    controller.dispose();
+  }
+});
+
+test('preflight and upload share cancellation ownership until the response body completes', async () => {
+  global.window = { setTimeout, clearTimeout };
+  const { createMediaController } = await import('../fusion_reader_v2/web/static/js/media.mjs');
+  let uploaded;
+  const reachedUpload = new Promise(resolve => { uploaded = resolve; });
+  let finishBody;
+  const pendingBody = new Promise(resolve => { finishBody = resolve; });
+  const signals = [];
+  global.fetch = async (url, options) => {
+    signals.push(options.signal);
+    if (url.includes('/capabilities')) return { ok: true, async json() { return { ok: true }; } };
+    uploaded();
+    return { ok: true, async json() { await pendingBody; return { ok: true, job_id: 'new', state: 'running' }; } };
+  };
+  const ui = elements();
+  const controller = createMediaController({ elements: ui, log() {}, async refreshMainStatus() {} });
+  const file = new Blob(['audio']);
+  file.name = 'conference.wav';
+  const started = controller.start('transcribe', file);
+  await reachedUpload;
+  assert.equal(signals[0], signals[1]);
+  await controller.cancel();
+  finishBody();
+  await started;
+  assert.equal(ui.mediaInfo.textContent, 'Carga cancelada.');
+  assert.equal(signals.length, 2);
+  controller.dispose();
+});

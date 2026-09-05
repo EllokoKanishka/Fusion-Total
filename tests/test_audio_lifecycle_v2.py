@@ -115,14 +115,19 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         app.prepare_document()
         first_event = app._prepare_cancel
         self.assertTrue(tts.started.wait(1))
+        prepare_thread = app._prepare_thread
+        self.assertIsNotNone(prepare_thread)
         app.cancel_prepare()
         tts.release.set()
-        app._prepare_thread.join(2)
+        prepare_thread.join(2)
+        self.assertFalse(prepare_thread.is_alive())
         restarted = app.prepare_document()
         self.assertIsNot(app._prepare_cancel, first_event)
         self.assertFalse(app._prepare_cancel.is_set())
         self.assertEqual(restarted["status"], "running")
-        app._prepare_thread.join(2)
+        for worker in app._preparation_service.active_threads():
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
         self.assertEqual(app.prepare_status()["status"], "done")
 
     def test_voice_change_makes_inflight_read_stale(self):
@@ -261,6 +266,8 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         app.session.document.chunks = ["One.", "Two.", "Three.", "Four.", "Five."]
         app.prepare_document(start="beginning")
         self.assertTrue(tts.started.wait(1))
+        prepare_thread = app._prepare_thread
+        self.assertIsNotNone(prepare_thread)
         app.jump(5)
         result = {}
         reader = threading.Thread(target=lambda: result.update(app.read_current(play=False)))
@@ -271,7 +278,8 @@ class AudioLifecycleV2Tests(unittest.TestCase):
         self.assertFalse(reader.is_alive())
         self.assertTrue(result["ok"])
         self.assertEqual(tts.calls[1][0], "Five.")
-        app._prepare_thread.join(2)
+        prepare_thread.join(2)
+        self.assertFalse(prepare_thread.is_alive())
         self.assertEqual(app.prepare_status()["status"], "done")
 
     def test_exact_prefetch_promotion_keeps_interactive_priority_until_audio_is_ready(self):
@@ -311,15 +319,16 @@ class AudioLifecycleV2Tests(unittest.TestCase):
             tts.release_text("Two.")
             tts.release_text("Three.")
             tts.release_text("Four.")
-            if app._prepare_thread:
-                app._prepare_thread.join(2)
+            for worker in app._preparation_service.active_threads():
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
             self.assertEqual(app.prepare_status()["status"], "done")
         finally:
             for text in ("One.", "Two.", "Three.", "Four.", "Five."):
                 tts.release_text(text)
             reader.join(2)
-            if app._prepare_thread:
-                app._prepare_thread.join(2)
+            for worker in app._preparation_service.active_threads():
+                worker.join(2)
 
     def test_tts_runtime_state_distinguishes_starting_and_down(self):
         tts = ControlledTTS()
