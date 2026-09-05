@@ -1,0 +1,122 @@
+name: Repository hygiene
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/repository-hygiene.yml
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: repository-hygiene
+  cancel-in-progress: false
+
+jobs:
+  prune-stale-branches:
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete only safely disposable branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+          import urllib.error
+
+          token = os.environ["GH_TOKEN"]
+          repo = os.environ["GH_REPOSITORY"]
+          default = os.environ.get("DEFAULT_BRANCH") or "main"
+          owner = repo.split("/", 1)[0]
+          base = f"https://api.github.com/repos/{repo}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "fusion-total-repository-hygiene",
+          }
+
+          def request(path, method="GET"):
+              req = urllib.request.Request(path, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  payload = response.read()
+                  if not payload:
+                      return None
+                  return json.loads(payload.decode("utf-8"))
+
+          def paged(path):
+              page = 1
+              items = []
+              separator = "&" if "?" in path else "?"
+              while True:
+                  batch = request(f"{path}{separator}per_page=100&page={page}")
+                  if not batch:
+                      break
+                  items.extend(batch)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              return items
+
+          open_heads = {
+              pr["head"]["ref"]
+              for pr in paged(f"{base}/pulls?state=open")
+              if (pr.get("head", {}).get("repo") or {}).get("full_name") == repo
+          }
+
+          branches = [b["name"] for b in paged(f"{base}/branches?")]
+          kept = []
+          deleted = []
+
+          for branch in branches:
+              if branch == default or branch in open_heads:
+                  kept.append((branch, "default-or-open-pr"))
+                  continue
+
+              head_query = urllib.parse.quote(f"{owner}:{branch}", safe="")
+              prs = paged(f"{base}/pulls?state=closed&head={head_query}")
+              merged = any(pr.get("merged_at") for pr in prs)
+
+              contained = False
+              if not merged:
+                  base_ref = urllib.parse.quote(default, safe="")
+                  head_ref = urllib.parse.quote(branch, safe="")
+                  try:
+                      comparison = request(f"{base}/compare/{base_ref}...{head_ref}")
+                      contained = int(comparison.get("ahead_by", 1)) == 0
+                  except urllib.error.HTTPError as exc:
+                      print(f"WARN compare failed for {branch}: HTTP {exc.code}")
+
+              if not (merged or contained):
+                  kept.append((branch, "contains-unintegrated-work"))
+                  continue
+
+              ref = urllib.parse.quote(f"heads/{branch}", safe="")
+              request(f"{base}/git/refs/{ref}", method="DELETE")
+              deleted.append(branch)
+              print(f"deleted: {branch}")
+
+          print(f"deleted_count={len(deleted)}")
+          if kept:
+              print("kept:")
+              for branch, reason in kept:
+                  print(f"  {branch}: {reason}")
+
+          unsafe = [(b, r) for b, r in kept if r == "contains-unintegrated-work"]
+          if unsafe:
+              print("ERROR: branches with unintegrated work remain; refusing destructive cleanup.")
+              sys.exit(1)
+          PY
