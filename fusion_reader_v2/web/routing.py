@@ -89,6 +89,7 @@ def create_router() -> Router:
         "/api/dictation/assistant",
         "/api/import-status",
         "/api/media/status",
+        "/api/media/capabilities",
     )
     get_prefixes = (
         "/static/",

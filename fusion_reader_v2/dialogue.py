@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
+import http.client
 import time
+import threading
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -13,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import environment_value
-from .owned_subprocess import run_owned
+from .owned_subprocess import OwnedProcessError, run_owned
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,26 @@ class STTProvider:
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         return TranscriptResult(False, provider=self.name, detail="not_implemented")
+
+    def transcribe_file_cancellable(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        cancel_event=None,
+        request_id: str = "",
+        long_form: bool = False,
+    ) -> TranscriptResult:
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+        result = self.transcribe_file(path, mime=mime, language=language)
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+        return result
+
+    def cancel(self, request_id: str) -> bool:
+        return False
 
 
 _SHORT_HALLUCINATED_TRANSCRIPT_PATTERNS = [
@@ -131,6 +154,18 @@ class WhisperCliSTTProvider(STTProvider):
         return {"ok": True, "provider": self.name, "command": resolved, "model": self.model}
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
+        return self.transcribe_file_cancellable(path, mime=mime, language=language)
+
+    def transcribe_file_cancellable(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        cancel_event=None,
+        request_id: str = "",
+        long_form: bool = False,
+    ) -> TranscriptResult:
         started = time.perf_counter()
         source = Path(path)
         if not source.exists() or source.stat().st_size <= 0:
@@ -147,7 +182,7 @@ class WhisperCliSTTProvider(STTProvider):
                 "--task",
                 "transcribe",
                 "--output_format",
-                "txt",
+                "json",
                 "--output_dir",
                 str(out_dir),
                 "--verbose",
@@ -161,20 +196,30 @@ class WhisperCliSTTProvider(STTProvider):
             if requested_language not in {"", "auto", "detect"}:
                 cmd[4:4] = ["--language", requested_language]
             try:
-                proc = run_owned(cmd, check=False, text=True, capture_output=True, timeout=self.timeout_seconds)
+                proc = run_owned(
+                    cmd,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    timeout=self.timeout_seconds,
+                    cancel_event=cancel_event,
+                )
             except subprocess.TimeoutExpired:
                 return TranscriptResult(
                     False, provider=self.name, detail="timeout", duration_ms=int((time.perf_counter() - started) * 1000)
                 )
+            except OwnedProcessError as exc:
+                detail = "cancelled" if str(exc) == "owned_process_cancelled" else str(exc)
+                return TranscriptResult(False, provider=self.name, detail=detail)
             if proc.returncode != 0:
-                detail = (proc.stderr or proc.stdout or "whisper_failed").strip().splitlines()
+                detail_lines = (proc.stderr or proc.stdout or "whisper_failed").strip().splitlines()
                 return TranscriptResult(
                     False,
                     provider=self.name,
-                    detail=(detail[-1] if detail else "whisper_failed"),
+                    detail=(detail_lines[-1] if detail_lines else "whisper_failed"),
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
-            transcript = self._read_transcript(out_dir, source)
+            transcript, detected_language, segments = self._read_transcript_metadata(out_dir, source)
         transcript = self._clean_text(transcript)
         if not transcript:
             return TranscriptResult(
@@ -192,17 +237,44 @@ class WhisperCliSTTProvider(STTProvider):
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
         return TranscriptResult(
-            True, text=transcript, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+            True,
+            text=transcript,
+            provider=self.name,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            detected_language=detected_language,
+            segments=segments,
         )
 
-    def _read_transcript(self, out_dir: Path, source: Path) -> str:
-        expected = out_dir / f"{source.stem}.txt"
+    def _read_transcript_metadata(self, out_dir: Path, source: Path) -> tuple[str, str, tuple[TranscriptSegment, ...]]:
+        expected = out_dir / f"{source.stem}.json"
         if expected.exists():
-            return expected.read_text(encoding="utf-8", errors="replace")
-        files = sorted(out_dir.glob("*.txt"))
+            files = [expected]
+        else:
+            files = sorted(out_dir.glob("*.json"))
         if files:
-            return files[0].read_text(encoding="utf-8", errors="replace")
-        return ""
+            try:
+                payload = __import__("json").loads(files[0].read_text(encoding="utf-8", errors="replace"))
+                raw_segments = payload.get("segments") if isinstance(payload, dict) else []
+                segments = tuple(
+                    TranscriptSegment(
+                        start=float(item.get("start") or 0.0),
+                        end=float(item.get("end") or 0.0),
+                        text=str(item.get("text") or "").strip(),
+                    )
+                    for item in (raw_segments or [])
+                    if isinstance(item, dict) and str(item.get("text") or "").strip()
+                )
+                return str(payload.get("text") or ""), str(payload.get("language") or ""), segments
+            except (OSError, TypeError, ValueError):
+                return "", "", ()
+        legacy = out_dir / f"{source.stem}.txt"
+        legacy_files = [legacy] if legacy.exists() else sorted(out_dir.glob("*.txt"))
+        if legacy_files:
+            return legacy_files[0].read_text(encoding="utf-8", errors="replace"), "", ()
+        return "", "", ()
+
+    def _read_transcript(self, out_dir: Path, source: Path) -> str:
+        return self._read_transcript_metadata(out_dir, source)[0]
 
     def _clean_text(self, text: str) -> str:
         return " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split()).strip()
@@ -216,6 +288,8 @@ class FasterWhisperServerSTTProvider(STTProvider):
         self.timeout_seconds = timeout_seconds or float(
             environment_value("FUSION_READER_STT_SERVER_TIMEOUT", "60") or "60"
         )
+        self._connections: dict[str, http.client.HTTPConnection] = {}
+        self._connections_lock = threading.Lock()
 
     def health(self) -> dict:
         try:
@@ -240,6 +314,101 @@ class FasterWhisperServerSTTProvider(STTProvider):
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 data = _json_response(resp.read())
         except urllib.error.HTTPError as exc:
+            return TranscriptResult(False, provider=self.name, detail=f"http_{exc.code}")
+        except Exception as exc:
+            return TranscriptResult(False, provider=self.name, detail=str(exc))
+        return self._result_from_data(data, started)
+
+    def transcribe_file_cancellable(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        cancel_event=None,
+        request_id: str = "",
+        long_form: bool = False,
+    ) -> TranscriptResult:
+        started = time.perf_counter()
+        source = Path(path)
+        if not source.exists() or source.stat().st_size <= 0:
+            return TranscriptResult(False, provider=self.name, detail="empty_audio")
+        query = urllib.parse.urlencode(
+            {
+                "language": language or "es",
+                "mime": mime or "application/octet-stream",
+                "request_id": request_id,
+                "long_form": "1" if long_form else "0",
+            }
+        )
+        parsed = urllib.parse.urlsplit(self.base_url)
+        connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        deadline = min(
+            time.monotonic() + self.timeout_seconds,
+            getattr(cancel_event, "deadline", float("inf")),
+        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return TranscriptResult(False, provider=self.name, detail="timeout")
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+        connection = connection_cls(parsed.hostname or "127.0.0.1", parsed.port, timeout=remaining)
+        finished = threading.Event()
+        watcher = None
+
+        def interrupted() -> bool:
+            return time.monotonic() >= deadline or (cancel_event is not None and cancel_event.is_set())
+
+        def watch_connection(active_socket: socket.socket) -> None:
+            # Keep the socket reference: HTTP/1.0 hands it off to HTTPResponse.
+            # shutdown, unlike close alone, wakes a blocked getresponse/read.
+            while not finished.wait(min(0.05, max(0.0, deadline - time.monotonic()))):
+                if interrupted():
+                    try:
+                        active_socket.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                    return
+
+        try:
+            if request_id:
+                with self._connections_lock:
+                    self._connections[request_id] = connection
+            path_and_query = f"{parsed.path.rstrip('/')}/transcribe?{query}"
+            connection.putrequest("POST", path_and_query)
+            connection.putheader("Content-Type", mime or "application/octet-stream")
+            connection.putheader("Content-Length", str(source.stat().st_size))
+            connection.endheaders()
+            if connection.sock is not None:
+                watcher = threading.Thread(
+                    target=watch_connection,
+                    args=(connection.sock,),
+                    name="fusion-stt-deadline",
+                    daemon=False,
+                )
+                watcher.start()
+            with source.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    if interrupted():
+                        raise _STTCancelled
+                    connection.send(chunk)
+            if interrupted():
+                raise _STTCancelled
+            response = connection.getresponse()
+            raw = response.read()
+            if interrupted():
+                raise _STTCancelled
+            data = _json_response(raw)
+            if response.status >= 400:
+                return TranscriptResult(
+                    False, provider=self.name, detail=str(data.get("error") or f"http_{response.status}")
+                )
+        except _STTCancelled:
+            if request_id:
+                self.cancel(request_id)
+            detail = "timeout" if time.monotonic() >= deadline else "cancelled"
+            return TranscriptResult(False, provider=self.name, detail=detail)
+        except urllib.error.HTTPError as exc:
             return TranscriptResult(
                 False,
                 provider=self.name,
@@ -247,9 +416,25 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
         except Exception as exc:
+            detail = str(exc)
+            if interrupted():
+                if request_id:
+                    self.cancel(request_id)
+                detail = "timeout" if time.monotonic() >= deadline else "cancelled"
             return TranscriptResult(
-                False, provider=self.name, detail=str(exc), duration_ms=int((time.perf_counter() - started) * 1000)
+                False, provider=self.name, detail=detail, duration_ms=int((time.perf_counter() - started) * 1000)
             )
+        finally:
+            finished.set()
+            if watcher is not None:
+                watcher.join()
+            connection.close()
+            if request_id:
+                with self._connections_lock:
+                    self._connections.pop(request_id, None)
+        return self._result_from_data(data, started)
+
+    def _result_from_data(self, data: dict, started: float) -> TranscriptResult:
         if not bool(data.get("ok")):
             return TranscriptResult(
                 False,
@@ -300,6 +485,21 @@ class FasterWhisperServerSTTProvider(STTProvider):
             ),
         )
 
+    def cancel(self, request_id: str) -> bool:
+        normalized = re.sub(r"[^A-Za-z0-9_-]", "", str(request_id or ""))[:80]
+        if not normalized:
+            return False
+        with self._connections_lock:
+            connection = self._connections.get(normalized)
+            if connection is not None:
+                connection.close()
+        try:
+            req = urllib.request.Request(f"{self.base_url}/cancel/{normalized}", data=b"", method="POST")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                return bool(_json_response(resp.read()).get("ok"))
+        except Exception:
+            return connection is not None
+
 
 class AutoSTTProvider(STTProvider):
     name = "auto_stt"
@@ -318,11 +518,50 @@ class AutoSTTProvider(STTProvider):
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
         if self.primary.health().get("ok"):
             result = self.primary.transcribe_file(path, mime=mime, language=language)
-            if result.ok:
-                return result
-            if result.detail == "hallucinated_transcript":
+            if result.ok or result.detail == "hallucinated_transcript":
                 return result
         return self.fallback.transcribe_file(path, mime=mime, language=language)
+
+    def transcribe_file_cancellable(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        cancel_event=None,
+        request_id: str = "",
+        long_form: bool = False,
+    ) -> TranscriptResult:
+        if self.primary.health().get("ok"):
+            result = self.primary.transcribe_file_cancellable(
+                path,
+                mime=mime,
+                language=language,
+                cancel_event=cancel_event,
+                request_id=request_id,
+                long_form=long_form,
+            )
+            if result.ok:
+                return result
+            if result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
+                return result
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+        return self.fallback.transcribe_file_cancellable(
+            path,
+            mime=mime,
+            language=language,
+            cancel_event=cancel_event,
+            request_id=request_id,
+            long_form=long_form,
+        )
+
+    def cancel(self, request_id: str) -> bool:
+        return self.primary.cancel(request_id) or self.fallback.cancel(request_id)
+
+
+class _STTCancelled(Exception):
+    pass
 
 
 def default_stt_provider() -> STTProvider:

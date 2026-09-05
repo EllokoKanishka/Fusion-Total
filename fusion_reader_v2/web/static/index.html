@@ -182,15 +182,21 @@
       <section class="media-tools" aria-labelledby="mediaToolsTitle">
         <div>
           <h1 id="mediaToolsTitle">Audio y video</h1>
-          <p class="sub">Convertí conferencias en documentos o en audio castellano.</p>
+          <p class="sub">Transcribí localmente. Si lo necesitás, traducí después al castellano.</p>
         </div>
+        <details class="media-tool-card" open>
+          <summary>Transcribir audio o video</summary>
+          <p class="upload-info">Genera una transcripción con marcas de tiempo y un PDF, sin traducción ni voz sintética.</p>
+          <button id="mediaTranscribeBtn" class="primary compact-btn wide" type="button">Elegir audio o video para transcribir</button>
+          <input id="mediaTranscribeInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
+        </details>
         <details class="media-tool-card" open>
           <summary>Traducir audio o video al castellano</summary>
           <p class="upload-info">Elegí qué resultados querés generar. Podés marcar uno, dos o los tres.</p>
           <fieldset class="media-output-options">
             <legend>Resultados</legend>
             <label>
-              <input id="mediaOriginalPdfToggle" type="checkbox" checked>
+              <input id="mediaOriginalPdfToggle" type="checkbox">
               <span>PDF con la transcripción en el idioma original</span>
             </label>
             <label>
@@ -198,11 +204,11 @@
               <span>PDF traducido al castellano</span>
             </label>
             <label>
-              <input id="mediaSpanishAudioToggle" type="checkbox" checked>
+              <input id="mediaSpanishAudioToggle" type="checkbox">
               <span>Audio traducido al castellano</span>
             </label>
           </fieldset>
-          <button id="mediaTranslateBtn" class="primary compact-btn wide" type="button">Elegir audio o video</button>
+          <button id="mediaTranslateBtn" class="primary compact-btn wide" type="button">Elegir audio o video para traducir</button>
           <input id="mediaTranslateInput" class="file-input" type="file" accept="audio/*,video/*,.mkv,.m4a,.flac,.opus,.wma,.wmv">
         </details>
         <div class="media-job-card">

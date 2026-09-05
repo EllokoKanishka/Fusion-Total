@@ -596,6 +596,11 @@ class WebServerIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp), synthetic_tts=True)
             base = f"http://127.0.0.1:{server.server_address[1]}"
+            preflight_status, preflight = self._request(
+                base, "/api/media/capabilities?operation=transcribe&file_bytes=1024"
+            )
+            self.assertEqual(preflight_status, 200)
+            self.assertTrue(preflight["ok"])
             audio = io.BytesIO()
             with wave.open(audio, "wb") as output:
                 output.setnchannels(1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -35,6 +36,8 @@ from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.reader import Document
 from fusion_reader_v2.tts import AudioArtifact
 
+LOG = logging.getLogger(__name__)
+
 
 class ReaderFacade(Protocol):
     def load_text(
@@ -58,6 +61,7 @@ class MediaProcessingService:
         stt: STTProvider,
         chat: ChatProvider,
         synthesize: Callable[[str, str, str], AudioArtifact],
+        tts_health: Callable[[], dict] | None = None,
         runtime_root: Path,
         converted_root: Path,
         output_root: Path,
@@ -65,11 +69,14 @@ class MediaProcessingService:
         timeout_seconds: float = 2 * 60 * 60,
         max_items: int = 256,
         ttl_seconds: float = 6 * 60 * 60,
+        max_duration_seconds: float = 6 * 60 * 60,
+        max_input_bytes: int = 2 * 1024 * 1024 * 1024,
     ) -> None:
         self.reader = reader
         self.stt = long_form_stt_provider(stt, timeout_seconds)
         self.chat = chat
         self.synthesize = synthesize
+        self.tts_health = tts_health
         self.runtime_root = runtime_root
         self.converted_root = converted_root
         self.output_root = output_root
@@ -77,10 +84,15 @@ class MediaProcessingService:
         self.manifest_root.mkdir(parents=True, exist_ok=True)
         self.spawn = spawn
         self.timeout_seconds = timeout_seconds
+        self.ttl_seconds = ttl_seconds
+        self.max_duration_seconds = max_duration_seconds
+        self.max_input_bytes = max_input_bytes
         self.lock = threading.RLock()
         self.jobs: dict[str, MediaJob] = {}
         self.active_job_id = ""
         self.latest_job_id = ""
+        self.cancel_events: dict[str, threading.Event] = {}
+        self.deadlines: dict[str, float] = {}
         self.registry = JobRegistry(
             max_items=max_items,
             ttl_seconds=ttl_seconds,
@@ -89,6 +101,86 @@ class MediaProcessingService:
             cleanup=self._cleanup_job,
             backing=self.jobs,
         )
+        self._sweep_expired_storage()
+
+    def capabilities(
+        self,
+        *,
+        operation: str,
+        include_translated_pdf: bool = False,
+        include_spanish_audio: bool = False,
+        input_bytes: int = 0,
+    ) -> dict:
+        normalized = str(operation or "").strip().lower()
+        if normalized not in {"transcribe", "translate"}:
+            return {"ok": False, "error": "media_operation_invalid"}
+        dependencies = {
+            "ffprobe": bool(shutil.which("ffprobe")),
+            "ffmpeg": bool(shutil.which("ffmpeg")),
+        }
+        stt = dict(self.stt.health() or {})
+        chat = (
+            dict(self.chat.health() or {})
+            if normalized == "translate" and (include_translated_pdf or include_spanish_audio)
+            else {"ok": True}
+        )
+        tts = (
+            dict(self.tts_health() or {})
+            if normalized == "translate" and include_spanish_audio and self.tts_health is not None
+            else {"ok": True}
+        )
+        try:
+            free_bytes = shutil.disk_usage(self.runtime_root.parent).free
+        except OSError:
+            free_bytes = 0
+        errors: list[str] = []
+        with self.lock:
+            active = self.jobs.get(self.active_job_id)
+            busy = bool(active and not active.terminal)
+        if busy:
+            errors.append("media_processing_busy")
+        if input_bytes > self.max_input_bytes:
+            errors.append("media_too_large")
+        if not dependencies["ffprobe"]:
+            errors.append("ffprobe_not_available")
+        if not dependencies["ffmpeg"]:
+            errors.append("ffmpeg_not_available")
+        if not stt.get("ok"):
+            errors.append("stt_not_available")
+        if not chat.get("ok"):
+            errors.append("translation_not_available")
+        if not tts.get("ok"):
+            errors.append("tts_not_available")
+        required_free_bytes = max(512 * 1024 * 1024, max(0, int(input_bytes)) * 3 + 256 * 1024 * 1024)
+        if free_bytes and free_bytes < required_free_bytes:
+            errors.append("media_disk_space_low")
+        detail = {
+            "media_processing_busy": "Ya hay un audio o video procesándose.",
+            "media_too_large": "El archivo supera el límite multimedia configurado.",
+            "ffprobe_not_available": "Falta FFprobe para inspeccionar el archivo.",
+            "ffmpeg_not_available": "Falta FFmpeg para extraer el audio.",
+            "stt_not_available": "Whisper no está disponible. Iniciá el servidor STT o instalá el fallback local.",
+            "translation_not_available": "El modelo local de traducción no está disponible.",
+            "tts_not_available": "El servicio de voz no está disponible para generar el audio.",
+            "media_disk_space_low": "No hay al menos 512 MiB libres para procesar el archivo.",
+        }
+        return {
+            "ok": not errors,
+            "operation": normalized,
+            "errors": errors,
+            "error": errors[0] if errors else "",
+            "detail": detail.get(errors[0], "Listo para procesar localmente.")
+            if errors
+            else "Listo para procesar localmente.",
+            "dependencies": dependencies,
+            "stt": stt,
+            "translation": chat,
+            "tts": tts,
+            "free_bytes": free_bytes,
+            "required_free_bytes": required_free_bytes,
+            "max_duration_seconds": self.max_duration_seconds,
+            "max_input_bytes": self.max_input_bytes,
+        }
 
     def start(
         self,
@@ -120,6 +212,15 @@ class MediaProcessingService:
                 "error": "media_output_required",
                 "detail": "Elegí al menos una salida para procesar.",
             }
+        readiness = self.capabilities(
+            operation=normalized,
+            include_translated_pdf=translated_requested,
+            include_spanish_audio=audio_requested,
+            input_bytes=input_path.stat().st_size if input_path.exists() else 0,
+        )
+        if not readiness.get("ok"):
+            input_path.unlink(missing_ok=True)
+            return readiness
         with self.lock:
             active = self.jobs.get(self.active_job_id)
             if active and not active.terminal:
@@ -140,6 +241,8 @@ class MediaProcessingService:
                 spanish_audio_requested=audio_requested,
             )
             self.registry.add(job.job_id, job)
+            self.cancel_events[job.job_id] = threading.Event()
+            self.deadlines[job.job_id] = time.monotonic() + self.timeout_seconds
             self.active_job_id = job.job_id
             self.latest_job_id = job.job_id
             self._persist_job(job)
@@ -188,11 +291,15 @@ class MediaProcessingService:
                     self.latest_job_id = ""
                 return self._idle_status()
             job.cancel_requested = True
+            event = self.cancel_events.setdefault(job.job_id, threading.Event())
+            event.set()
             job.state = "canceling"
             job.detail = "Cancelando procesamiento..."
             job.updated_at = time.time()
             self._persist_job(job)
-            return job.to_dict()
+            result = job.to_dict()
+        self.stt.cancel(normalized)
+        return result
 
     def mount(self, job_id: str) -> dict:
         with self.lock:
@@ -200,7 +307,7 @@ class MediaProcessingService:
             job = self.registry.get(normalized) or self._load_persisted_job(normalized)
             if not job:
                 return {"ok": False, "error": "media_job_not_found"}
-            if job.state != "done":
+            if job.state not in {"done", "partial"} or not (job.translated_text or job.transcript):
                 return {"ok": False, "error": "media_job_not_ready"}
             mount_translation = bool(job.translated_text)
             text = job.translated_text if mount_translation else job.transcript
@@ -267,18 +374,31 @@ class MediaProcessingService:
             for job in self.jobs.values():
                 if not job.terminal:
                     job.cancel_requested = True
+                    self.cancel_events.setdefault(job.job_id, threading.Event()).set()
                     job.state = "canceling"
                     job.detail = "Cancelando por cierre de Fusion Reader..."
                     job.updated_at = time.time()
+                    self.stt.cancel(job.job_id)
 
     def _worker(self, job_id: str, input_path: Path) -> None:
         work_root = self.runtime_root / job_id
         normalized = work_root / "normalized.flac"
         work_root.mkdir(parents=True, exist_ok=True)
         try:
+            signal = _MediaSignal(self.cancel_events[job_id], self.deadlines[job_id])
+            pipeline_started = time.perf_counter()
             self._update(job_id, state="running", stage="inspecting", progress=2, detail="Inspeccionando el archivo...")
-            probe = probe_media(input_path)
-            self._update(job_id, duration_seconds=probe.duration_seconds)
+            stage_started = time.perf_counter()
+            probe = probe_media(input_path, cancel_event=signal)
+            self._record_timing(job_id, "probe_ms", stage_started)
+            if probe.duration_seconds > self.max_duration_seconds:
+                raise RuntimeError("media_duration_exceeded")
+            self._update(
+                job_id,
+                duration_seconds=probe.duration_seconds,
+                media_format=probe.format_name,
+                audio_codec=probe.audio_codec,
+            )
             self._check_cancelled(job_id)
             self._update(
                 job_id,
@@ -286,11 +406,25 @@ class MediaProcessingService:
                 progress=8,
                 detail="Extrayendo y normalizando el audio con FFmpeg...",
             )
-            normalize_media_audio(input_path, normalized, timeout_seconds=self.timeout_seconds)
+            stage_started = time.perf_counter()
+            normalize_media_audio(input_path, normalized, timeout_seconds=self._remaining(job_id), cancel_event=signal)
+            self._record_timing(job_id, "normalize_ms", stage_started)
             self._check_cancelled(job_id)
             self._update(job_id, stage="transcribing", progress=18, detail="Transcribiendo con Whisper...")
-            transcript = self.stt.transcribe_file(normalized, mime="audio/flac", language="auto")
+            stage_started = time.perf_counter()
+            transcript = self.stt.transcribe_file_cancellable(
+                normalized,
+                mime="audio/flac",
+                language="auto",
+                cancel_event=signal,
+                request_id=job_id,
+                long_form=True,
+            )
+            self._record_timing(job_id, "stt_ms", stage_started)
+            self._check_cancelled(job_id)
             if not transcript.ok or not clean_text(transcript.text):
+                if transcript.detail == "cancelled":
+                    raise _MediaCancelled
                 raise RuntimeError(transcript.detail or "media_transcription_failed")
             detected = str(transcript.detected_language or "").strip().lower() or "desconocido"
             paragraphs = transcript_paragraphs(transcript.segments, transcript.text)
@@ -301,7 +435,10 @@ class MediaProcessingService:
             self._update(
                 job_id,
                 detected_language=detected,
+                provider=transcript.provider,
+                timings={**self._job(job_id).timings, **dict(transcript.timings or {})},
                 transcript=transcript_text,
+                paragraph_count=len(paragraphs),
                 transcript_path=str(transcript_file),
                 stage="building_pdf",
                 progress=48,
@@ -334,28 +471,40 @@ class MediaProcessingService:
                 stage="done",
                 progress=100,
                 detail="Procesamiento terminado. Ya podés descargar o montar el resultado.",
+                timings={**self._job(job_id).timings, "total_ms": int((time.perf_counter() - pipeline_started) * 1000)},
             )
         except _MediaCancelled:
+            self._remove_artifacts(job_id)
             self._update(
                 job_id,
                 state="cancelled",
                 stage="cancelled",
                 detail="Procesamiento cancelado.",
             )
+        except _MediaTimeout:
+            self.stt.cancel(job_id)
+            self._finish_failure(job_id, "media_timeout", "El procesamiento superó el tiempo máximo configurado.")
         except Exception as exc:
-            self._update(
-                job_id,
-                state="error",
-                stage="error",
-                detail="No pude procesar este audio o video.",
-                error=str(exc) or type(exc).__name__,
-            )
+            if self._signal(job_id).timed_out:
+                self._finish_failure(job_id, "media_timeout", "El procesamiento superó el tiempo máximo configurado.")
+            elif self._signal(job_id).cancelled:
+                self._remove_artifacts(job_id)
+                self._update(job_id, state="cancelled", stage="cancelled", detail="Procesamiento cancelado.")
+            else:
+                code = self._error_code(exc)
+                if code == "media_processing_failed":
+                    LOG.exception("media job %s failed at %s", job_id, self._job(job_id).stage)
+                else:
+                    LOG.warning("media job %s failed at %s: %s", job_id, self._job(job_id).stage, code)
+                self._finish_failure(job_id, code, "No pude completar todo el procesamiento.")
         finally:
             input_path.unlink(missing_ok=True)
-            normalized.unlink(missing_ok=True)
+            shutil.rmtree(work_root, ignore_errors=True)
             with self.lock:
                 if self.active_job_id == job_id:
                     self.active_job_id = ""
+                self.cancel_events.pop(job_id, None)
+                self.deadlines.pop(job_id, None)
 
     def _translate_and_synthesize(
         self,
@@ -376,6 +525,7 @@ class MediaProcessingService:
                 detail=f"Traduciendo fragmento {index} de {total} al castellano...",
             )
             translated.append((start, text if spanish else self._translate_paragraph(text, detected_language)))
+            self._check_cancelled(job_id)
         title = f"{Path(self._job(job_id).filename).stem} — Traducción al castellano"
         translated_text = transcript_body_text(translated)
         translated_file = work_root / "translated_es.txt"
@@ -406,6 +556,7 @@ class MediaProcessingService:
             detail="Generando el audio en castellano...",
         )
         chunks = Document.from_text(f"media-{job_id}", title, "\n\n".join(text for _, text in translated)).chunks
+        self._update(job_id, audio_chunk_count=len(chunks))
         wavs: list[Path] = []
         total_chunks = max(1, len(chunks))
         voice = self._job(job_id).voice
@@ -417,6 +568,7 @@ class MediaProcessingService:
                 detail=f"Generando audio {index} de {total_chunks} con {voice or 'la voz seleccionada'}...",
             )
             artifact = self.synthesize(chunk, voice, "es")
+            self._check_cancelled(job_id)
             if not artifact.ok or not artifact.path or not artifact.path.exists():
                 raise RuntimeError(artifact.detail or "media_tts_failed")
             wavs.append(Path(artifact.path))
@@ -541,7 +693,7 @@ class MediaProcessingService:
             job = MediaJob(**{key: value for key, value in raw.items() if key in allowed})
             if job.job_id != job_id:
                 return None
-            if job.state != "done":
+            if job.state not in {"done", "partial"} or time.time() - job.updated_at > self.ttl_seconds:
                 (self.manifest_root / f"{job_id}.json").unlink(missing_ok=True)
                 return None
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -566,13 +718,84 @@ class MediaProcessingService:
         return None
 
     def _check_cancelled(self, job_id: str) -> None:
-        if self._job(job_id).cancel_requested:
+        signal = self._signal(job_id)
+        if signal.timed_out:
+            raise _MediaTimeout
+        if signal.cancelled or self._job(job_id).cancel_requested:
             raise _MediaCancelled
 
     def _cleanup_job(self, job: MediaJob) -> None:
         root = self.runtime_root / job.job_id
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)
+        (self.manifest_root / f"{job.job_id}.json").unlink(missing_ok=True)
+
+    def _signal(self, job_id: str) -> "_MediaSignal":
+        return _MediaSignal(
+            self.cancel_events.setdefault(job_id, threading.Event()),
+            self.deadlines.get(job_id, time.monotonic() + self.timeout_seconds),
+        )
+
+    def _remaining(self, job_id: str) -> float:
+        remaining = self.deadlines.get(job_id, time.monotonic()) - time.monotonic()
+        if remaining <= 0:
+            raise _MediaTimeout
+        return remaining
+
+    def _record_timing(self, job_id: str, name: str, started: float) -> None:
+        timings = dict(self._job(job_id).timings)
+        timings[name] = int((time.perf_counter() - started) * 1000)
+        self._update(job_id, timings=timings)
+
+    def _remove_artifacts(self, job_id: str) -> None:
+        job = self._job(job_id)
+        for raw in (job.pdf_path, job.translated_pdf_path, job.audio_path):
+            if raw:
+                Path(raw).unlink(missing_ok=True)
+        self._update(
+            job_id,
+            pdf_path="",
+            translated_pdf_path="",
+            audio_path="",
+            pdf_download_url="",
+            translated_pdf_download_url="",
+            audio_download_url="",
+        )
+
+    def _finish_failure(self, job_id: str, code: str, detail: str) -> None:
+        job = self._job(job_id)
+        usable = bool(
+            job.transcript or job.translated_text or job.pdf_path or job.translated_pdf_path or job.audio_path
+        )
+        self._update(
+            job_id,
+            state="partial" if usable else "error",
+            stage="partial" if usable else "error",
+            detail=(f"{detail} Conservé los resultados que sí terminaron." if usable else detail),
+            error=code,
+            warnings=[*job.warnings, code] if usable else job.warnings,
+        )
+
+    @staticmethod
+    def _error_code(exc: Exception) -> str:
+        candidate = str(exc or "").strip()
+        return candidate if re.fullmatch(r"[a-z0-9_]{3,80}", candidate) else "media_processing_failed"
+
+    def _sweep_expired_storage(self) -> None:
+        cutoff = time.time() - self.ttl_seconds
+        for manifest in self.manifest_root.glob("*.json"):
+            try:
+                if manifest.stat().st_mtime < cutoff:
+                    manifest.unlink(missing_ok=True)
+            except OSError:
+                continue
+        if self.runtime_root.exists():
+            for root in self.runtime_root.iterdir():
+                try:
+                    if root.is_dir() and root.stat().st_mtime < cutoff:
+                        shutil.rmtree(root, ignore_errors=True)
+                except OSError:
+                    continue
 
     @staticmethod
     def _idle_status() -> dict:
@@ -592,6 +815,27 @@ class MediaProcessingService:
 
 class _MediaCancelled(Exception):
     pass
+
+
+class _MediaTimeout(Exception):
+    pass
+
+
+class _MediaSignal:
+    def __init__(self, event: threading.Event, deadline: float) -> None:
+        self.event = event
+        self.deadline = deadline
+
+    @property
+    def cancelled(self) -> bool:
+        return self.event.is_set()
+
+    @property
+    def timed_out(self) -> bool:
+        return time.monotonic() >= self.deadline
+
+    def is_set(self) -> bool:
+        return self.cancelled or self.timed_out
 
 
 def long_form_stt_provider(provider: STTProvider, timeout_seconds: float) -> STTProvider:

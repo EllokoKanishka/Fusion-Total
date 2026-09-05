@@ -82,10 +82,17 @@ class MediaJob:
     translated_pdf_download_url: str = ""
     audio_download_url: str = ""
     mounted: bool = False
+    provider: str = ""
+    media_format: str = ""
+    audio_codec: str = ""
+    timings: dict[str, int] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    paragraph_count: int = 0
+    audio_chunk_count: int = 0
 
     @property
     def terminal(self) -> bool:
-        return self.state in {"done", "cancelled", "error"}
+        return self.state in {"done", "partial", "cancelled", "error"}
 
     def to_dict(self) -> dict:
         output = {}
@@ -98,6 +105,10 @@ class MediaJob:
             }
         if self.audio_path:
             output["audio"] = {"filename": Path(self.audio_path).name, "download_url": self.audio_download_url}
+        elapsed = max(0.0, time.time() - self.created_at)
+        eta = 0.0
+        if self.state in {"queued", "running", "canceling"} and 0 < self.progress < 100:
+            eta = elapsed * (100 - self.progress) / self.progress
         return {
             "ok": self.state != "error",
             "job_id": self.job_id,
@@ -122,6 +133,15 @@ class MediaJob:
             "updated_at": self.updated_at,
             "detected_language": self.detected_language,
             "duration_seconds": round(self.duration_seconds, 3),
+            "provider": self.provider,
+            "media_format": self.media_format,
+            "audio_codec": self.audio_codec,
+            "timings": dict(self.timings),
+            "warnings": list(self.warnings),
+            "paragraph_count": self.paragraph_count,
+            "audio_chunk_count": self.audio_chunk_count,
+            "elapsed_seconds": round(elapsed, 1),
+            "eta_seconds": round(eta, 1),
             "transcript_characters": len(self.transcript),
             "translated_characters": len(self.translated_text),
             "preview": (self.translated_text or self.transcript)[:500],
@@ -143,7 +163,7 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def probe_media(path: Path, *, timeout_seconds: float = 30.0) -> MediaProbe:
+def probe_media(path: Path, *, timeout_seconds: float = 30.0, cancel_event=None) -> MediaProbe:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         raise RuntimeError("ffprobe_not_available")
@@ -162,6 +182,7 @@ def probe_media(path: Path, *, timeout_seconds: float = 30.0) -> MediaProbe:
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
+        cancel_event=cancel_event,
     )
     if proc.returncode != 0:
         raise ValueError("media_unreadable")
@@ -185,7 +206,7 @@ def probe_media(path: Path, *, timeout_seconds: float = 30.0) -> MediaProbe:
     )
 
 
-def normalize_media_audio(source: Path, target: Path, *, timeout_seconds: float) -> None:
+def normalize_media_audio(source: Path, target: Path, *, timeout_seconds: float, cancel_event=None) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg_not_available")
@@ -211,6 +232,7 @@ def normalize_media_audio(source: Path, target: Path, *, timeout_seconds: float)
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
+        cancel_event=cancel_event,
     )
     if proc.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
         raise RuntimeError("media_audio_conversion_failed")

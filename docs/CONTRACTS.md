@@ -135,20 +135,28 @@ excluded from the recoverable session snapshot.
 
 Media routes:
 
+- `GET /api/media/capabilities`: preflight local de FFmpeg/FFprobe, STT y, según
+  las salidas pedidas, traducción/TTS; acepta `operation`, flags de salida y
+  `file_bytes` para verificar espacio libre antes de subir.
 - `POST /api/media/transcribe`: multipart `file`; transcripción y PDF (compatibilidad).
 - `POST /api/media/translate`: multipart `file`; acepta los flags de query
-  `original_pdf`, `translated_pdf` y `spanish_audio`. Por compatibilidad,
-  si se omiten genera las tres salidas. Al menos una debe estar activa.
+  `original_pdf`, `translated_pdf` y `spanish_audio`. Por compatibilidad, si se
+  omiten genera las tres salidas; la UI nueva envía flags explícitos y deja sólo
+  el PDF traducido activo por defecto. Al menos una debe estar activa.
 - `GET /api/media/status[/<job_id>]`: último job o job específico.
 - `POST /api/media/cancel/<job_id>`: cancelación cooperativa.
 - `POST /api/media/mount/<job_id>`: monta el texto terminado como documento principal.
 - `GET /api/media/download/<job_id>/{pdf|translated-pdf|audio}`: artefacto validado.
 
-Los jobs usan estados `queued`, `running`, `canceling`, `done`, `cancelled` y
-`error`; devuelven sólo preview y conteos, no la transcripción completa. Hay un
+Los jobs usan estados `queued`, `running`, `canceling`, `done`, `partial`,
+`cancelled` y `error`; `partial` conserva y permite montar las salidas que sí
+terminaron. Devuelven sólo preview, conteos, proveedor y tiempos, no la
+transcripción completa. Hay un
 único job multimedia activo. La carga default máxima es 2 GiB
 (`FUSION_READER_MEDIA_MAX_BYTES`) y el timeout default es 2 horas
-(`FUSION_READER_MEDIA_TIMEOUT_SECONDS`).
+(`FUSION_READER_MEDIA_TIMEOUT_SECONDS`) para el pipeline completo. La duración
+del medio tiene un máximo independiente de 6 horas
+(`FUSION_READER_MEDIA_MAX_DURATION_SECONDS`).
 
 ## System Boundaries
 
