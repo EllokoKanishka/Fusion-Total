@@ -52,6 +52,11 @@ jobs:
               "User-Agent": "fusion-total-repository-hygiene",
           }
 
+          # PR #32 was explicitly closed as superseded by merged PR #34.
+          # Its head commit is not an ancestor after squash/rebuild, but its
+          # behavior is already present in main and the PR discussion records it.
+          superseded_branches = {"fix/openclaw-root-payload-response"}
+
           def request(path, method="GET"):
               req = urllib.request.Request(path, headers=headers, method=method)
               with urllib.request.urlopen(req, timeout=30) as response:
@@ -94,7 +99,7 @@ jobs:
               merged = any(pr.get("merged_at") for pr in prs)
 
               contained = False
-              if not merged:
+              if not merged and branch not in superseded_branches:
                   base_ref = urllib.parse.quote(default, safe="")
                   head_ref = urllib.parse.quote(branch, safe="")
                   try:
@@ -103,7 +108,7 @@ jobs:
                   except urllib.error.HTTPError as exc:
                       print(f"WARN compare failed for {branch}: HTTP {exc.code}")
 
-              if not (merged or contained):
+              if not (merged or contained or branch in superseded_branches):
                   kept.append((branch, "contains-unintegrated-work"))
                   continue
 
