@@ -598,13 +598,17 @@ class MediaProcessingService:
                     index,
                     outcome.detail,
                 )
-        completed = bool(paragraphs) and accepted == len(paragraphs)
+        processed = accepted + rejected
+        completed = bool(paragraphs) and processed == len(paragraphs)
         warnings = list(self._job(job_id).warnings)
         if rejected and "asr_correction_partial" not in warnings:
             warnings.append("asr_correction_partial")
         self._update(
             job_id,
             correction_completed=completed,
+            correction_processed_paragraphs=processed,
+            correction_accepted_paragraphs=accepted,
+            correction_unchanged_paragraphs=max(0, accepted - changed),
             correction_changed_paragraphs=changed,
             correction_rejected_paragraphs=rejected,
             warnings=warnings,

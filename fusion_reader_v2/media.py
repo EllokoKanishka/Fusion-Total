@@ -86,6 +86,9 @@ class MediaJob:
     correction_requested: bool = False
     correction_completed: bool = False
     correction_model: str = ""
+    correction_processed_paragraphs: int = 0
+    correction_accepted_paragraphs: int = 0
+    correction_unchanged_paragraphs: int = 0
     correction_changed_paragraphs: int = 0
     correction_rejected_paragraphs: int = 0
     media_format: str = ""
@@ -143,6 +146,9 @@ class MediaJob:
                 "requested": self.correction_requested,
                 "completed": self.correction_completed,
                 "model": self.correction_model,
+                "processed_paragraphs": self.correction_processed_paragraphs,
+                "accepted_paragraphs": self.correction_accepted_paragraphs,
+                "unchanged_paragraphs": self.correction_unchanged_paragraphs,
                 "changed_paragraphs": self.correction_changed_paragraphs,
                 "rejected_paragraphs": self.correction_rejected_paragraphs,
             },
