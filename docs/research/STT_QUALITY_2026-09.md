@@ -90,7 +90,7 @@ This experiment is not a formal WER benchmark because it does not use a human-al
 
 Global vocabulary is appropriate only for a stable domain. A vocabulary for an Asimov audiobook should not make `Trantor` or `Hari Seldon` more probable when the next upload is a university class, an interview or a medical recording. The application therefore treats user-supplied media context as ephemeral job input and keeps environment-level context as an advanced persistent override.
 
-The per-job values are bounded before background processing, percent-encoded across the local HTTP hop and merged with any administrator-configured global context only inside the STT request. The global server state itself is not mutated.
+The per-job values are bounded before background processing, percent-encoded across the local HTTP hop and merged with any administrator-configured global context only inside the STT request. The global server state itself is not mutated. Validation must include a second, context-free transcription without restarting STT to prove that the previous job's vocabulary does not leak into the next request.
 
 ## Next model migration gate
 
