@@ -68,12 +68,9 @@ class TranscriptCorrectionTests(unittest.TestCase):
 
     def test_rejects_character_length_and_low_similarity(self) -> None:
         source = "abcdefghij klmnopqrst uvwxyzabcd efghijklmn opqrstuvwx yzabcdefgh ijklmnopqr stuvwxyzab cdefghijkl"
-        accepted, detail = validate_conservative_correction(
-            source,
-            "abcdefghij klmnopqrst uvwxyzabcd efghijklmn opqrstuvwx yzabcdefgh ijklmnopqr stuvwxyzab c",
-        )
+        accepted, detail = validate_conservative_correction(source, "a b c d e f g h i")
         self.assertFalse(accepted)
-        self.assertIn(detail, {"character_length_delta", "rewrite_risk"})
+        self.assertEqual(detail, "character_length_delta")
 
         source = "Hari Seldon llegó a Trantor para hablar de la nueva ciencia matemática galáctica."
         candidate = "Gaal Dornick partió de Terminus para estudiar otra antigua disciplina filosófica imperial."
