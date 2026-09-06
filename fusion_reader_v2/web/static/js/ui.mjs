@@ -20,7 +20,7 @@ const ELEMENT_IDS = [
   'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect',
   'mediaTranscribeBtn', 'mediaTranscribeInput', 'mediaTranslateBtn', 'mediaTranslateInput',
   'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle', 'mediaSpanishAudioToggle',
-  'mediaSttPromptInput', 'mediaSttHotwordsInput',
+  'mediaSttPromptInput', 'mediaSttHotwordsInput', 'mediaPostCorrectionToggle',
   'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',
   'mediaPdfDownload', 'mediaTranslatedPdfDownload', 'mediaAudioDownload'
 ];

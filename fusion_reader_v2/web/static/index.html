@@ -192,6 +192,8 @@
           <label class="upload-info" for="mediaSttHotwordsInput">Nombres y términos difíciles</label>
           <textarea id="mediaSttHotwordsInput" class="note-input" rows="3" maxlength="2400" placeholder="Ej.: Hari Seldon, Gaal Dornick, Trantor, Terminus, psicohistoria"></textarea>
           <p class="upload-info">Separalos con comas. Sirve para nombres propios, lugares, siglas y vocabulario técnico que el audio pueda confundir.</p>
+          <label class="toggle upload-toggle"><input id="mediaPostCorrectionToggle" type="checkbox"> Corregir después con Qwen 14B</label>
+          <p class="upload-info">Segunda pasada opcional y conservadora, con thinking apagado. Si intenta reescribir demasiado, Panda conserva el fragmento de Whisper.</p>
         </details>
         <details class="media-tool-card" open>
           <summary>Transcribir audio o video</summary>

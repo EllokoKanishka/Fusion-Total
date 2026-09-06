@@ -27,6 +27,7 @@ function elements() {
     mediaSpanishAudioToggle: element(),
     mediaSttPromptInput: element(),
     mediaSttHotwordsInput: element(),
+    mediaPostCorrectionToggle: element(),
     mediaPdfDownload: element(),
     mediaTranslatedPdfDownload: element(),
     mediaAudioDownload: element(),
@@ -68,6 +69,31 @@ test('media polling recovers after a transient status failure', async () => {
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(requests, 2);
   assert.match(ui.mediaInfo.textContent, /terminado/);
+  controller.dispose();
+});
+
+
+test('optional ASR post-correction is scoped to the selected upload and participates in preflight', async () => {
+  global.window = { setTimeout, clearTimeout };
+  const { createMediaController } = await import('../fusion_reader_v2/web/static/js/media.mjs');
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url.includes('/capabilities')) return { ok: true, async json() { return { ok: true }; } };
+    return { ok: true, async json() { return { ok: true, job_id: 'corrected', state: 'running', output: {} }; } };
+  };
+  const ui = elements();
+  ui.mediaPostCorrectionToggle.checked = true;
+  const controller = createMediaController({ elements: ui, log() {}, async refreshMainStatus() {} });
+  const file = new Blob(['audio']);
+  file.name = 'foundation.wav';
+  await controller.start('transcribe', file);
+  assert.equal(requests.length, 2);
+  assert.equal(new URL(requests[0].url, 'http://local').searchParams.get('post_correct'), '1');
+  assert.equal(new URL(requests[1].url, 'http://local').searchParams.get('post_correct'), '1');
+  assert.equal(ui.mediaPostCorrectionToggle.disabled, true);
+  controller.render({ job_id: 'corrected', state: 'done', output: {} });
+  assert.equal(ui.mediaPostCorrectionToggle.disabled, false);
   controller.dispose();
 });
 

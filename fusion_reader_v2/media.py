@@ -83,6 +83,11 @@ class MediaJob:
     audio_download_url: str = ""
     mounted: bool = False
     provider: str = ""
+    correction_requested: bool = False
+    correction_completed: bool = False
+    correction_model: str = ""
+    correction_changed_paragraphs: int = 0
+    correction_rejected_paragraphs: int = 0
     media_format: str = ""
     audio_codec: str = ""
     timings: dict[str, int] = field(default_factory=dict)
@@ -134,6 +139,13 @@ class MediaJob:
             "detected_language": self.detected_language,
             "duration_seconds": round(self.duration_seconds, 3),
             "provider": self.provider,
+            "correction": {
+                "requested": self.correction_requested,
+                "completed": self.correction_completed,
+                "model": self.correction_model,
+                "changed_paragraphs": self.correction_changed_paragraphs,
+                "rejected_paragraphs": self.correction_rejected_paragraphs,
+            },
             "media_format": self.media_format,
             "audio_codec": self.audio_codec,
             "timings": dict(self.timings),

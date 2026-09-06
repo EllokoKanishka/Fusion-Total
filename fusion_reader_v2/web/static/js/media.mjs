@@ -75,7 +75,8 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
       elements.mediaTranslatedPdfToggle,
       elements.mediaSpanishAudioToggle,
       elements.mediaSttPromptInput,
-      elements.mediaSttHotwordsInput
+      elements.mediaSttHotwordsInput,
+      elements.mediaPostCorrectionToggle
     ].forEach(input => {
       if (input) input.disabled = Boolean(busy);
     });
@@ -184,6 +185,8 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
         Object.entries(outputs).forEach(([name, enabled]) => params.set(name, enabled ? '1' : '0'));
       }
       params.set('file_bytes', String(Number(file.size || 0)));
+      const postCorrect = Boolean(elements.mediaPostCorrectionToggle && elements.mediaPostCorrectionToggle.checked);
+      params.set('post_correct', postCorrect ? '1' : '0');
       const preflight = await fetch(`/api/media/capabilities?operation=${encodeURIComponent(operation)}&${params.toString()}`, { signal: controller.signal });
       const capability = await preflight.json();
       controller.signal.throwIfAborted();
