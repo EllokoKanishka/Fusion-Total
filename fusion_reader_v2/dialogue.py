@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import http.client
 import re
 import shutil
 import socket
 import subprocess
 import tempfile
-import http.client
-import time
 import threading
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -17,6 +17,9 @@ from pathlib import Path
 
 from .config import environment_value
 from .owned_subprocess import OwnedProcessError, run_owned
+
+
+_STT_CONTEXT_MAX_CHARS = 4096
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,21 @@ class TranscriptResult:
     segments: tuple[TranscriptSegment, ...] = ()
 
 
+def _bounded_stt_context(value: str | None, max_chars: int = _STT_CONTEXT_MAX_CHARS) -> str:
+    return " ".join(str(value or "").split()).strip()[:max_chars]
+
+
+def _stt_context_kwargs(initial_prompt: str = "", hotwords: str = "") -> dict[str, str]:
+    result: dict[str, str] = {}
+    prompt = _bounded_stt_context(initial_prompt)
+    vocabulary = _bounded_stt_context(hotwords)
+    if prompt:
+        result["initial_prompt"] = prompt
+    if vocabulary:
+        result["hotwords"] = vocabulary
+    return result
+
+
 class STTProvider:
     name = "base"
     requested_provider = "auto"
@@ -45,7 +63,15 @@ class STTProvider:
     def health(self) -> dict:
         return {"ok": False, "provider": self.name, "detail": "not_implemented"}
 
-    def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
+    def transcribe_file(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> TranscriptResult:
         return TranscriptResult(False, provider=self.name, detail="not_implemented")
 
     def transcribe_file_cancellable(
@@ -57,10 +83,17 @@ class STTProvider:
         cancel_event=None,
         request_id: str = "",
         long_form: bool = False,
+        initial_prompt: str = "",
+        hotwords: str = "",
     ) -> TranscriptResult:
         if cancel_event is not None and cancel_event.is_set():
             return TranscriptResult(False, provider=self.name, detail="cancelled")
-        result = self.transcribe_file(path, mime=mime, language=language)
+        result = self.transcribe_file(
+            path,
+            mime=mime,
+            language=language,
+            **_stt_context_kwargs(initial_prompt, hotwords),
+        )
         if cancel_event is not None and cancel_event.is_set():
             return TranscriptResult(False, provider=self.name, detail="cancelled")
         return result
@@ -122,11 +155,22 @@ class NullSTTProvider(STTProvider):
             "detail": "disabled" if not self.enabled else "",
         }
 
-    def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
+    def transcribe_file(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> TranscriptResult:
         started = time.perf_counter()
         self.calls.append((Path(path), mime, language))
         return TranscriptResult(
-            True, text=self.text, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+            True,
+            text=self.text,
+            provider=self.name,
+            duration_ms=int((time.perf_counter() - started) * 1000),
         )
 
 
@@ -153,8 +197,22 @@ class WhisperCliSTTProvider(STTProvider):
             return {"ok": False, "provider": self.name, "command": self.command, "detail": "command_not_found"}
         return {"ok": True, "provider": self.name, "command": resolved, "model": self.model}
 
-    def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
-        return self.transcribe_file_cancellable(path, mime=mime, language=language)
+    def transcribe_file(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> TranscriptResult:
+        return self.transcribe_file_cancellable(
+            path,
+            mime=mime,
+            language=language,
+            initial_prompt=_bounded_stt_context(initial_prompt),
+            hotwords=_bounded_stt_context(hotwords),
+        )
 
     def transcribe_file_cancellable(
         self,
@@ -165,6 +223,8 @@ class WhisperCliSTTProvider(STTProvider):
         cancel_event=None,
         request_id: str = "",
         long_form: bool = False,
+        initial_prompt: str = "",
+        hotwords: str = "",
     ) -> TranscriptResult:
         started = time.perf_counter()
         source = Path(path)
@@ -195,6 +255,15 @@ class WhisperCliSTTProvider(STTProvider):
             requested_language = str(language or "").strip().lower()
             if requested_language not in {"", "auto", "detect"}:
                 cmd[4:4] = ["--language", requested_language]
+            prompt_parts = []
+            clean_prompt = _bounded_stt_context(initial_prompt)
+            clean_hotwords = _bounded_stt_context(hotwords)
+            if clean_prompt:
+                prompt_parts.append(clean_prompt)
+            if clean_hotwords:
+                prompt_parts.append(f"Vocabulario relevante: {clean_hotwords}")
+            if prompt_parts:
+                cmd.extend(["--initial_prompt", _bounded_stt_context(" ".join(prompt_parts))])
             try:
                 proc = run_owned(
                     cmd,
@@ -206,7 +275,10 @@ class WhisperCliSTTProvider(STTProvider):
                 )
             except subprocess.TimeoutExpired:
                 return TranscriptResult(
-                    False, provider=self.name, detail="timeout", duration_ms=int((time.perf_counter() - started) * 1000)
+                    False,
+                    provider=self.name,
+                    detail="timeout",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
                 )
             except OwnedProcessError as exc:
                 detail = "cancelled" if str(exc) == "owned_process_cancelled" else str(exc)
@@ -245,7 +317,11 @@ class WhisperCliSTTProvider(STTProvider):
             segments=segments,
         )
 
-    def _read_transcript_metadata(self, out_dir: Path, source: Path) -> tuple[str, str, tuple[TranscriptSegment, ...]]:
+    def _read_transcript_metadata(
+        self,
+        out_dir: Path,
+        source: Path,
+    ) -> tuple[str, str, tuple[TranscriptSegment, ...]]:
         expected = out_dir / f"{source.stem}.json"
         if expected.exists():
             files = [expected]
@@ -298,12 +374,48 @@ class FasterWhisperServerSTTProvider(STTProvider):
         except Exception as exc:
             return {"ok": False, "provider": self.name, "url": self.base_url, "detail": str(exc)}
 
-    def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
+    @staticmethod
+    def _query_values(
+        *,
+        language: str,
+        mime: str,
+        request_id: str = "",
+        long_form: bool = False,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> dict[str, str]:
+        values = {
+            "language": language or "es",
+            "mime": mime or "application/octet-stream",
+        }
+        if request_id:
+            values["request_id"] = request_id
+        if long_form:
+            values["long_form"] = "1"
+        values.update(_stt_context_kwargs(initial_prompt, hotwords))
+        return values
+
+    def transcribe_file(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> TranscriptResult:
         started = time.perf_counter()
         source = Path(path)
         if not source.exists() or source.stat().st_size <= 0:
             return TranscriptResult(False, provider=self.name, detail="empty_audio")
-        query = urllib.parse.urlencode({"language": language or "es", "mime": mime or "application/octet-stream"})
+        query = urllib.parse.urlencode(
+            self._query_values(
+                language=language,
+                mime=mime,
+                initial_prompt=initial_prompt,
+                hotwords=hotwords,
+            )
+        )
         req = urllib.request.Request(
             f"{self.base_url}/transcribe?{query}",
             data=source.read_bytes(),
@@ -328,18 +440,22 @@ class FasterWhisperServerSTTProvider(STTProvider):
         cancel_event=None,
         request_id: str = "",
         long_form: bool = False,
+        initial_prompt: str = "",
+        hotwords: str = "",
     ) -> TranscriptResult:
         started = time.perf_counter()
         source = Path(path)
         if not source.exists() or source.stat().st_size <= 0:
             return TranscriptResult(False, provider=self.name, detail="empty_audio")
         query = urllib.parse.urlencode(
-            {
-                "language": language or "es",
-                "mime": mime or "application/octet-stream",
-                "request_id": request_id,
-                "long_form": "1" if long_form else "0",
-            }
+            self._query_values(
+                language=language,
+                mime=mime,
+                request_id=request_id,
+                long_form=long_form,
+                initial_prompt=initial_prompt,
+                hotwords=hotwords,
+            )
         )
         parsed = urllib.parse.urlsplit(self.base_url)
         connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
@@ -401,7 +517,9 @@ class FasterWhisperServerSTTProvider(STTProvider):
             data = _json_response(raw)
             if response.status >= 400:
                 return TranscriptResult(
-                    False, provider=self.name, detail=str(data.get("error") or f"http_{response.status}")
+                    False,
+                    provider=self.name,
+                    detail=str(data.get("error") or f"http_{response.status}"),
                 )
         except _STTCancelled:
             if request_id:
@@ -422,7 +540,10 @@ class FasterWhisperServerSTTProvider(STTProvider):
                     self.cancel(request_id)
                 detail = "timeout" if time.monotonic() >= deadline else "cancelled"
             return TranscriptResult(
-                False, provider=self.name, detail=detail, duration_ms=int((time.perf_counter() - started) * 1000)
+                False,
+                provider=self.name,
+                detail=detail,
+                duration_ms=int((time.perf_counter() - started) * 1000),
             )
         finally:
             finished.set()
@@ -515,17 +636,36 @@ class AutoSTTProvider(STTProvider):
         fallback_health = self.fallback.health()
         return {**fallback_health, "selected": self.fallback.name, "primary": primary_health}
 
-    def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
+    def transcribe_file(
+        self,
+        path: str | Path,
+        mime: str = "",
+        language: str = "es",
+        *,
+        initial_prompt: str = "",
+        hotwords: str = "",
+    ) -> TranscriptResult:
+        context_kwargs = _stt_context_kwargs(initial_prompt, hotwords)
         primary_ok = bool(self.primary.health().get("ok"))
         primary_result = None
         if primary_ok:
-            primary_result = self.primary.transcribe_file(path, mime=mime, language=language)
+            primary_result = self.primary.transcribe_file(
+                path,
+                mime=mime,
+                language=language,
+                **context_kwargs,
+            )
             if primary_result.ok or primary_result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
                 return primary_result
 
         fallback_ok = bool(self.fallback.health().get("ok"))
         if fallback_ok:
-            return self.fallback.transcribe_file(path, mime=mime, language=language)
+            return self.fallback.transcribe_file(
+                path,
+                mime=mime,
+                language=language,
+                **context_kwargs,
+            )
 
         if primary_result is not None:
             return primary_result
@@ -541,10 +681,13 @@ class AutoSTTProvider(STTProvider):
         cancel_event=None,
         request_id: str = "",
         long_form: bool = False,
+        initial_prompt: str = "",
+        hotwords: str = "",
     ) -> TranscriptResult:
         if cancel_event is not None and cancel_event.is_set():
             return TranscriptResult(False, provider=self.name, detail="cancelled")
 
+        context_kwargs = _stt_context_kwargs(initial_prompt, hotwords)
         primary_ok = bool(self.primary.health().get("ok"))
         primary_result = None
         if primary_ok:
@@ -555,6 +698,7 @@ class AutoSTTProvider(STTProvider):
                 cancel_event=cancel_event,
                 request_id=request_id,
                 long_form=long_form,
+                **context_kwargs,
             )
             if primary_result.ok or primary_result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
                 return primary_result
@@ -571,6 +715,7 @@ class AutoSTTProvider(STTProvider):
                 cancel_event=cancel_event,
                 request_id=request_id,
                 long_form=long_form,
+                **context_kwargs,
             )
 
         if primary_result is not None:

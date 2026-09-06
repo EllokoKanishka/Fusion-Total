@@ -25,6 +25,8 @@ function elements() {
     mediaOriginalPdfToggle: element(),
     mediaTranslatedPdfToggle: element(),
     mediaSpanishAudioToggle: element(),
+    mediaSttPromptInput: element(),
+    mediaSttHotwordsInput: element(),
     mediaPdfDownload: element(),
     mediaTranslatedPdfDownload: element(),
     mediaAudioDownload: element(),
@@ -129,5 +131,36 @@ test('preflight and upload share cancellation ownership until the response body 
   await started;
   assert.equal(ui.mediaInfo.textContent, 'Carga cancelada.');
   assert.equal(signals.length, 2);
+  controller.dispose();
+});
+
+test('STT context is attached only to the media upload request and bounded', async () => {
+  global.window = { setTimeout, clearTimeout };
+  const { createMediaController } = await import('../fusion_reader_v2/web/static/js/media.mjs');
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url.includes('/capabilities')) return { ok: true, async json() { return { ok: true }; } };
+    return { ok: true, async json() { return { ok: true, job_id: 'ctx', state: 'running', output: {} }; } };
+  };
+  const ui = elements();
+  ui.mediaSttPromptInput.value = '  Audiolibro de Fundación\n de Isaac Asimov.  ';
+  ui.mediaSttHotwordsInput.value = `Hari Seldon, Gaal Dornick, ${'x'.repeat(3000)}`;
+  const controller = createMediaController({ elements: ui, log() {}, async refreshMainStatus() {} });
+  const file = new Blob(['audio']);
+  file.name = 'foundation.wav';
+  await controller.start('transcribe', file);
+
+  assert.equal(requests.length, 2);
+  assert.doesNotMatch(requests[0].url, /stt_prompt|stt_hotwords/);
+  const upload = new URL(requests[1].url, 'http://local');
+  assert.equal(upload.searchParams.get('stt_prompt'), 'Audiolibro de Fundación de Isaac Asimov.');
+  assert.match(upload.searchParams.get('stt_hotwords'), /^Hari Seldon, Gaal Dornick, x+/);
+  assert.equal(upload.searchParams.get('stt_hotwords').length, 2400);
+  assert.equal(ui.mediaSttPromptInput.disabled, true);
+  assert.equal(ui.mediaSttHotwordsInput.disabled, true);
+  controller.render({ job_id: 'ctx', state: 'done', output: {} });
+  assert.equal(ui.mediaSttPromptInput.disabled, false);
+  assert.equal(ui.mediaSttHotwordsInput.disabled, false);
   controller.dispose();
 });

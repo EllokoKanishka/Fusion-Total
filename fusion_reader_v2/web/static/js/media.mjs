@@ -73,7 +73,9 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
     [
       elements.mediaOriginalPdfToggle,
       elements.mediaTranslatedPdfToggle,
-      elements.mediaSpanishAudioToggle
+      elements.mediaSpanishAudioToggle,
+      elements.mediaSttPromptInput,
+      elements.mediaSttHotwordsInput
     ].forEach(input => {
       if (input) input.disabled = Boolean(busy);
     });
@@ -145,6 +147,17 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
     };
   }
 
+  function boundedContext(value, maxChars) {
+    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
+  }
+
+  function selectedSttContext() {
+    return {
+      prompt: boundedContext(elements.mediaSttPromptInput && elements.mediaSttPromptInput.value, 1200),
+      hotwords: boundedContext(elements.mediaSttHotwordsInput && elements.mediaSttHotwordsInput.value, 2400)
+    };
+  }
+
   async function start(operation, file) {
     if (!file || uploadController) return;
     const outputs = selectedOutputs();
@@ -177,7 +190,11 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
       if (!preflight.ok || capability.ok === false) {
         throw new Error(capability.detail || capability.error || 'media_preflight_failed');
       }
-      const endpoint = params.size ? `${endpoints[operation]}?${params.toString()}` : endpoints[operation];
+      const requestParams = new URLSearchParams(params);
+      const sttContext = selectedSttContext();
+      if (sttContext.prompt) requestParams.set('stt_prompt', sttContext.prompt);
+      if (sttContext.hotwords) requestParams.set('stt_hotwords', sttContext.hotwords);
+      const endpoint = requestParams.size ? `${endpoints[operation]}?${requestParams.toString()}` : endpoints[operation];
       const response = await fetch(endpoint, { method: 'POST', body, signal: controller.signal });
       const data = await response.json();
       controller.signal.throwIfAborted();

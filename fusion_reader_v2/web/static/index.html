@@ -184,6 +184,15 @@
           <h1 id="mediaToolsTitle">Audio y video</h1>
           <p class="sub">Transcribí localmente. Si lo necesitás, traducí después al castellano.</p>
         </div>
+        <details class="media-tool-card">
+          <summary>Ayudar con nombres y términos (opcional)</summary>
+          <p class="upload-info">Este contexto se usa sólo para el próximo archivo. No se guarda ni afecta futuras transcripciones.</p>
+          <label class="upload-info" for="mediaSttPromptInput">Contexto breve</label>
+          <textarea id="mediaSttPromptInput" class="note-input" rows="2" maxlength="1200" placeholder="Ej.: Audiolibro de Fundación, de Isaac Asimov, en castellano."></textarea>
+          <label class="upload-info" for="mediaSttHotwordsInput">Nombres y términos difíciles</label>
+          <textarea id="mediaSttHotwordsInput" class="note-input" rows="3" maxlength="2400" placeholder="Ej.: Hari Seldon, Gaal Dornick, Trantor, Terminus, psicohistoria"></textarea>
+          <p class="upload-info">Separalos con comas. Sirve para nombres propios, lugares, siglas y vocabulario técnico que el audio pueda confundir.</p>
+        </details>
         <details class="media-tool-card" open>
           <summary>Transcribir audio o video</summary>
           <p class="upload-info">Genera una transcripción con marcas de tiempo y un PDF, sin traducción ni voz sintética.</p>

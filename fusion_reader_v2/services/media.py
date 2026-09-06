@@ -37,6 +37,12 @@ from fusion_reader_v2.reader import Document
 from fusion_reader_v2.tts import AudioArtifact
 
 LOG = logging.getLogger(__name__)
+MEDIA_STT_PROMPT_MAX_CHARS = 1200
+MEDIA_STT_HOTWORDS_MAX_CHARS = 2400
+
+
+def _bounded_job_context(value: str | None, max_chars: int) -> str:
+    return " ".join(str(value or "").split()).strip()[:max_chars]
 
 
 class ReaderFacade(Protocol):
@@ -193,6 +199,8 @@ class MediaProcessingService:
         include_original_pdf: bool = True,
         include_translated_pdf: bool | None = None,
         include_spanish_audio: bool | None = None,
+        stt_initial_prompt: str = "",
+        stt_hotwords: str = "",
     ) -> dict:
         normalized = str(operation or "").strip().lower()
         if normalized not in {"transcribe", "translate"}:
@@ -221,6 +229,8 @@ class MediaProcessingService:
         if not readiness.get("ok"):
             input_path.unlink(missing_ok=True)
             return readiness
+        job_prompt = _bounded_job_context(stt_initial_prompt, MEDIA_STT_PROMPT_MAX_CHARS)
+        job_hotwords = _bounded_job_context(stt_hotwords, MEDIA_STT_HOTWORDS_MAX_CHARS)
         with self.lock:
             active = self.jobs.get(self.active_job_id)
             if active and not active.terminal:
@@ -249,7 +259,7 @@ class MediaProcessingService:
         try:
             self.spawn(
                 target=self._worker,
-                args=(job.job_id, input_path),
+                args=(job.job_id, input_path, job_prompt, job_hotwords),
                 name=f"fusion-media-{normalized}-{job.job_id}",
             )
         except Exception:
@@ -380,7 +390,13 @@ class MediaProcessingService:
                     job.updated_at = time.time()
                     self.stt.cancel(job.job_id)
 
-    def _worker(self, job_id: str, input_path: Path) -> None:
+    def _worker(
+        self,
+        job_id: str,
+        input_path: Path,
+        stt_initial_prompt: str = "",
+        stt_hotwords: str = "",
+    ) -> None:
         work_root = self.runtime_root / job_id
         normalized = work_root / "normalized.flac"
         work_root.mkdir(parents=True, exist_ok=True)
@@ -412,6 +428,11 @@ class MediaProcessingService:
             self._check_cancelled(job_id)
             self._update(job_id, stage="transcribing", progress=18, detail="Transcribiendo con Whisper...")
             stage_started = time.perf_counter()
+            context_kwargs: dict[str, str] = {}
+            if stt_initial_prompt:
+                context_kwargs["initial_prompt"] = stt_initial_prompt
+            if stt_hotwords:
+                context_kwargs["hotwords"] = stt_hotwords
             transcript = self.stt.transcribe_file_cancellable(
                 normalized,
                 mime="audio/flac",
@@ -419,6 +440,7 @@ class MediaProcessingService:
                 cancel_event=signal,
                 request_id=job_id,
                 long_form=True,
+                **context_kwargs,
             )
             self._record_timing(job_id, "stt_ms", stage_started)
             self._check_cancelled(job_id)

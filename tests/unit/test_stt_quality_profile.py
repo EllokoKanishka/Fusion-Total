@@ -98,6 +98,33 @@ class STTQualityProfileTests(unittest.TestCase):
             "Isaac Asimov, psicohistoria, Hari Seldon, Trantor, Terminus",
         )
 
+    def test_per_request_context_is_merged_without_mutating_global_context(self) -> None:
+        server, model, _factory = self._load_server(
+            {
+                "FUSION_READER_STT_HOTWORDS": "Isaac Asimov, Trantor",
+                "FUSION_READER_STT_INITIAL_PROMPT": "Audiolibro en castellano.",
+            }
+        )
+        text, _duration_ms, _metadata = server["transcribe_wav"](
+            Path("/tmp/fusion-context-test.flac"),
+            "es",
+            long_form=True,
+            initial_prompt="Obra Fundación de Isaac Asimov.",
+            hotwords="Hari Seldon, trantor, Gaal Dornick, Terminus",
+        )
+        self.assertEqual(text, "Hari Seldon llegó a Trantor.")
+        call = model.calls[0]
+        self.assertEqual(
+            call["initial_prompt"],
+            "Audiolibro en castellano. Obra Fundación de Isaac Asimov.",
+        )
+        self.assertEqual(
+            call["hotwords"],
+            "Isaac Asimov, Trantor, Hari Seldon, Gaal Dornick, Terminus",
+        )
+        self.assertEqual(server["INITIAL_PROMPT"], "Audiolibro en castellano.")
+        self.assertEqual(server["HOTWORDS"], "Isaac Asimov, Trantor")
+
     def test_hotword_limits_are_bounded_and_case_insensitive(self) -> None:
         server, _model, _factory = self._load_server(
             {
@@ -108,6 +135,8 @@ class STTQualityProfileTests(unittest.TestCase):
         )
         self.assertEqual(server["HOTWORDS"], "Trantor, Terminus")
         self.assertLessEqual(len(server["HOTWORDS"]), 32)
+        merged = server["_context_options"]("context", "TERMINUS, Gaal Dornick, Anacreon")
+        self.assertEqual(merged["hotwords"], "Trantor, Terminus")
 
     def test_launcher_selects_heavy_model_only_for_cuda_by_default(self) -> None:
         launcher = LAUNCHER_PATH.read_text(encoding="utf-8")

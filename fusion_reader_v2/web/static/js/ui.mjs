@@ -17,10 +17,11 @@ const ELEMENT_IDS = [
   'continuousToggle', 'chatLog', 'chatInput', 'sendChatBtn', 'clearLabHistoryBtn', 'reasoningNormalBtn',
   'reasoningThinkingBtn', 'reasoningSupremeBtn', 'reasoningPensamientoCriticoBtn', 'profileSelect',
   'veilSelect', 'chatProviderSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',
-  'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect'
-  , 'mediaTranscribeBtn', 'mediaTranscribeInput', 'mediaTranslateBtn', 'mediaTranslateInput',
-  'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle',
-  'mediaSpanishAudioToggle', 'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',
+  'labFocus', 'mainDocTitle', 'mainDocMeta', 'referenceList', 'voiceSelect',
+  'mediaTranscribeBtn', 'mediaTranscribeInput', 'mediaTranslateBtn', 'mediaTranslateInput',
+  'mediaOriginalPdfToggle', 'mediaTranslatedPdfToggle', 'mediaSpanishAudioToggle',
+  'mediaSttPromptInput', 'mediaSttHotwordsInput',
+  'mediaInfo', 'mediaProgress', 'mediaCancelBtn', 'mediaMountBtn',
   'mediaPdfDownload', 'mediaTranslatedPdfDownload', 'mediaAudioDownload'
 ];
 

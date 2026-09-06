@@ -4,15 +4,14 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import tempfile
-import time
-import sys
 import re
+import sys
+import tempfile
 import threading
+import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,26 +44,10 @@ def _bounded_text(value: str | None, max_chars: int = CONTEXT_MAX_CHARS) -> str:
     return normalized[: max(0, max_chars)]
 
 
-def _load_hotwords() -> str:
-    raw_items: list[str] = []
-    direct = os.environ.get("FUSION_READER_STT_HOTWORDS", "")
-    if direct:
-        raw_items.extend(re.split(r"[,;\n]+", direct))
-
-    hotwords_file = str(os.environ.get("FUSION_READER_STT_HOTWORDS_FILE", "") or "").strip()
-    if hotwords_file:
-        path = Path(hotwords_file).expanduser()
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                clean = line.strip()
-                if clean and not clean.startswith("#"):
-                    raw_items.append(clean)
-        except OSError as exc:
-            print(f"STT hotwords file unavailable: {path} ({exc})", file=sys.stderr, flush=True)
-
+def _normalize_hotwords(value: str | None) -> str:
     unique: list[str] = []
     seen: set[str] = set()
-    for item in raw_items:
+    for item in re.split(r"[,;\n]+", str(value or "")):
         clean = _bounded_text(item, 160)
         key = clean.casefold()
         if not clean or key in seen:
@@ -73,9 +56,28 @@ def _load_hotwords() -> str:
         unique.append(clean)
         if len(unique) >= max(1, HOTWORD_MAX_ITEMS):
             break
+    return ", ".join(unique)[: max(0, CONTEXT_MAX_CHARS)]
 
-    result = ", ".join(unique)
-    return result[: max(0, CONTEXT_MAX_CHARS)]
+
+def _load_hotwords() -> str:
+    raw_items: list[str] = []
+    direct = os.environ.get("FUSION_READER_STT_HOTWORDS", "")
+    if direct:
+        raw_items.append(direct)
+
+    hotwords_file = str(os.environ.get("FUSION_READER_STT_HOTWORDS_FILE", "") or "").strip()
+    if hotwords_file:
+        path = Path(hotwords_file).expanduser()
+        try:
+            raw_items.extend(
+                line.strip()
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            )
+        except OSError as exc:
+            print(f"STT hotwords file unavailable: {path} ({exc})", file=sys.stderr, flush=True)
+
+    return _normalize_hotwords("\n".join(raw_items))
 
 
 INITIAL_PROMPT = _bounded_text(os.environ.get("FUSION_READER_STT_INITIAL_PROMPT", ""))
@@ -98,18 +100,22 @@ except (AttributeError, TypeError, ValueError):
     TRANSCRIBE_PARAMETERS = None
 
 
-def _context_options() -> dict:
+def _context_options(initial_prompt: str = "", hotwords: str = "") -> dict:
     options: dict[str, str] = {}
     prompt_parts: list[str] = []
+    request_prompt = _bounded_text(initial_prompt)
+    combined_hotwords = _normalize_hotwords("\n".join(item for item in (HOTWORDS, hotwords) if item))
     if INITIAL_PROMPT:
         prompt_parts.append(INITIAL_PROMPT)
-    if HOTWORDS:
+    if request_prompt and request_prompt != INITIAL_PROMPT:
+        prompt_parts.append(request_prompt)
+    if combined_hotwords:
         if TRANSCRIBE_PARAMETERS is not None and "hotwords" in TRANSCRIBE_PARAMETERS:
-            options["hotwords"] = HOTWORDS
+            options["hotwords"] = combined_hotwords
         else:
             # Older faster-whisper versions can still receive the terms through
             # Whisper's initial prompt even when native hotword biasing is absent.
-            prompt_parts.append(f"Vocabulario relevante: {HOTWORDS}")
+            prompt_parts.append(f"Vocabulario relevante: {combined_hotwords}")
     if prompt_parts and (TRANSCRIBE_PARAMETERS is None or "initial_prompt" in TRANSCRIBE_PARAMETERS):
         options["initial_prompt"] = _bounded_text(" ".join(prompt_parts))
     return options
@@ -197,7 +203,15 @@ def _segment_payload(segments, cancel_event=None) -> tuple[str, list[dict]]:
     return " ".join(parts).strip(), payload
 
 
-def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: bool = False) -> tuple[str, int, dict]:
+def transcribe_wav(
+    path: Path,
+    language: str,
+    *,
+    cancel_event=None,
+    long_form: bool = False,
+    initial_prompt: str = "",
+    hotwords: str = "",
+) -> tuple[str, int, dict]:
     started = time.perf_counter()
     attempts: list[dict] = []
     plan: list[tuple[str, int, bool]] = [
@@ -226,7 +240,7 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
                 beam_size=beam_size,
                 vad_filter=vad_filter,
                 condition_on_previous_text=bool(long_form),
-                **_context_options(),
+                **_context_options(initial_prompt, hotwords),
             )
             text, segment_items = _segment_payload(segments, cancel_event)
         finally:
@@ -257,7 +271,7 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "FusionReaderV2STT/0.2"
+    server_version = "FusionReaderV2STT/0.3"
 
     def do_GET(self) -> None:
         if urlparse(self.path).path == "/health":
@@ -277,6 +291,7 @@ class Handler(BaseHTTPRequestHandler):
                         "initial_prompt": bool(INITIAL_PROMPT),
                         "hotwords": bool(HOTWORDS),
                         "native_hotwords": bool(TRANSCRIBE_PARAMETERS and "hotwords" in TRANSCRIBE_PARAMETERS),
+                        "per_request": True,
                     },
                 },
             )
@@ -309,6 +324,8 @@ class Handler(BaseHTTPRequestHandler):
         mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
         request_id = re.sub(r"[^A-Za-z0-9_-]", "", str((params.get("request_id") or [""])[0]))[:80]
         long_form = str((params.get("long_form") or ["0"])[0]).lower() in {"1", "true", "yes", "on"}
+        initial_prompt = _bounded_text(str((params.get("initial_prompt") or [""])[0]))
+        request_hotwords = _normalize_hotwords(str((params.get("hotwords") or [""])[0]))
         cancel_event = threading.Event()
         if request_id:
             with REQUESTS_LOCK:
@@ -354,16 +371,27 @@ class Handler(BaseHTTPRequestHandler):
                     flush=True,
                 )
                 send_json(
-                    self, 400, {"ok": False, "error": "convert_failed", "detail": detail, "convert_ms": convert_ms}
+                    self,
+                    400,
+                    {"ok": False, "error": "convert_failed", "detail": detail, "convert_ms": convert_ms},
                 )
                 return
             try:
                 text, decode_ms, decode_meta = transcribe_wav(
-                    transcription_source, language, cancel_event=cancel_event, long_form=long_form
+                    transcription_source,
+                    language,
+                    cancel_event=cancel_event,
+                    long_form=long_form,
+                    initial_prompt=initial_prompt,
+                    hotwords=request_hotwords,
                 )
             except Exception as exc:
                 error = "cancelled" if cancel_event.is_set() or str(exc) == "cancelled" else "transcribe_failed"
-                send_json(self, 499 if error == "cancelled" else 500, {"ok": False, "error": error, "detail": str(exc)})
+                send_json(
+                    self,
+                    499 if error == "cancelled" else 500,
+                    {"ok": False, "error": error, "detail": str(exc)},
+                )
                 return
             finally:
                 if request_id:
@@ -376,7 +404,8 @@ class Handler(BaseHTTPRequestHandler):
             print(
                 "STT empty_transcript "
                 f"mime={mime or 'application/octet-stream'} "
-                f"bytes={length} convert_ms={convert_ms} decode_ms={decode_ms} attempts={json.dumps(attempts, ensure_ascii=False)}",
+                f"bytes={length} convert_ms={convert_ms} decode_ms={decode_ms} "
+                f"attempts={json.dumps(attempts, ensure_ascii=False)}",
                 flush=True,
             )
         send_json(
@@ -397,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
                 "detected_language": str(decode_meta.get("detected_language") or language or ""),
                 "segments": list(decode_meta.get("segments") or []),
                 "duration_ms": duration_ms,
+                "context_biasing": bool(initial_prompt or request_hotwords),
                 "detail": "" if text else "empty_transcript",
             },
         )
