@@ -78,6 +78,14 @@ Safety rules for integration:
 8. if Qwen is unavailable, the user is told before a requested corrected job begins;
 9. no automatic replacement of the production Whisper engine.
 
+## Implementation status
+
+The feature branch implements this decision without changing the production ASR engine. The existing media context card gains an opt-in `Corregir después con Qwen 14B` checkbox. The request preflight verifies that the configured local model is actually present before starting a corrected job.
+
+The correction pass runs after Whisper and before transcript/PDF publication. Each timestamped paragraph is corrected independently, `thinking` is forced off, temperature is fixed at zero, and a deterministic similarity/length gate rejects outputs that look like rewrites. Rejected paragraphs fall back to the untouched Whisper text and are surfaced in job warnings/telemetry instead of silently replacing the source transcript.
+
+The implementation also records whether correction was requested/completed, the correction model, changed/rejected paragraph counts, and correction timing. The first focused repository tests cover request scoping, deterministic Ollama parameters, preservation guards, model availability, and the UI/API contract.
+
 ## Why not 27B
 
 For this narrow task, 27B produced the same correction and preservation score while being slower and consuming roughly nine additional GiB of VRAM. The additional reasoning capacity has no demonstrated benefit here, while the reduced GPU margin would make concurrent local services less comfortable.
