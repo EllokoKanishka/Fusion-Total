@@ -563,17 +563,11 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 detail=str(data.get("error") or data.get("detail") or "stt_server_failed"),
                 duration_ms=int(data.get("duration_ms") or ((time.perf_counter() - started) * 1000)),
                 timings={
-                    key: data.get(key)
-                    for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size")
-                    if key in data
+                    key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data
                 },
             )
         transcript = str(data.get("text") or "").strip()
-        timings = {
-            key: data.get(key)
-            for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size")
-            if key in data
-        }
+        timings = {key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data}
         duration_ms = int(data.get("duration_ms") or ((time.perf_counter() - started) * 1000))
         if not transcript:
             return TranscriptResult(
