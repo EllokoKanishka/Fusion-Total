@@ -39,6 +39,11 @@ The 1.7B model is Apache-2.0 and the published model files are roughly 4.7 GB.
 The forced aligner is a separate model because timestamp generation is not the
 same inference path as transcription.
 
+The official Qwen interface exposes `context` as free-form request guidance. It
+is useful for domain hints, but it should not be treated as an exact spelling
+lexicon or as equivalent to faster-whisper's native weighted hotword biasing.
+That distinction became important in the real PandaFusion benchmark below.
+
 ## Container compatibility learned from the real desktop run
 
 The first Foundation benchmark exposed a concrete input-contract mismatch in
@@ -161,6 +166,83 @@ For this migration gate compare:
 8. behavior on silence/music;
 9. practical cancellation feasibility before production integration.
 
+## Completed desktop benchmark — 2026-09-06
+
+The gate was executed on the target RTX 5090 workstation against the same
+3975.563-second Foundation audiobook used for the Whisper validation.
+
+Qwen3-ASR result:
+
+- model: `Qwen/Qwen3-ASR-1.7B`;
+- aligner: `Qwen/Qwen3-ForcedAligner-0.6B`;
+- `qwen-asr==0.0.6`;
+- Torch `2.14.0+cu130`, CUDA 13.0;
+- preprocessing: 1.634 s;
+- model load: 8.050 s;
+- inference: 109.564 s;
+- end-to-end total: 119.248 s;
+- speed: 36.28x real time;
+- inference peak GPU allocated: 10.855 GiB;
+- inference peak GPU reserved: 13.547 GiB;
+- process max RSS: 5.217 GiB;
+- 10,703 word-level aligned timestamp items;
+- final aligned timestamp at 3968.32 s, about 99.8% temporal coverage.
+
+The ForcedAligner result was excellent: timestamps were monotonic, dense and
+covered essentially the full audiobook without severe inversions or large gaps.
+Qwen also recognized common in-domain names such as `Trantor` very reliably.
+
+The migration gate nevertheless failed on the lexical criterion that matters
+most to PandaFusion. With only the request `context`, exact entity coverage was
+0.3. Notable results were:
+
+- `Trantor`: 45 exact occurrences;
+- `Terminus`: 4;
+- `Imperio Galáctico`: 3;
+- `Enciclopedia Galáctica`: 4;
+- `Hari Seldon`: 0 exact occurrences (`Harry Seldon` and other variants);
+- `Gaal Dornick`: 0 exact occurrences (`Gal Dornick`);
+- `psicohistoria`: 0 exact occurrences;
+- `psicohistoriador`: 0 exact occurrences;
+- `Anacreon`: 0 exact occurrences.
+
+The strongest failure was domain normalization: fictional/rare terminology such
+as `psicohistoria` was repeatedly pushed toward common Spanish words such as
+`psicología`, while the production faster-whisper path with native contextual
+biasing had already produced 16 exact `psicohistoria` occurrences, 7 exact
+`Hari Seldon` occurrences and 5 exact `Gaal Dornick` occurrences on the same
+material.
+
+A short music/no-speech file produced only one spurious word (`No.`) near the
+end rather than a long hallucinated passage. That is acceptable experimental
+behavior but not a reason to migrate.
+
+## Migration decision
+
+**Keep `large-v3-turbo` as PandaFusion's production STT default.**
+
+Qwen3-ASR is extremely competitive on throughput and clearly superior in the
+density/quality of forced word alignment, but it does not provide a material
+fidelity advantage on the real corpus. For PandaFusion's use case, the opposite
+is true on the most important hard vocabulary: faster-whisper's native
+request-scoped hotword/context biasing currently preserves proper nouns and rare
+technical/fictional terms more reliably.
+
+The speed difference is not material: Qwen's 119.248 s end-to-end result is
+essentially tied with the approximately 118 s production Whisper run for a
+66-minute file. Qwen also used substantially more benchmark GPU/RAM resources.
+
+No production provider swap is justified from this result. Preserve the Qwen
+harness for future releases because its ForcedAligner is strong and later Qwen
+versions may improve domain-term control.
+
+A future Qwen retest should require at least one of:
+
+- a newer model/package with materially improved domain vocabulary steering;
+- an official hotword/lexicon mechanism stronger than free-form context;
+- a demonstrated lexical-fidelity gain on the same Foundation corpus without
+  sacrificing the current alignment quality.
+
 ## Migration decision rule
 
 Do not replace faster-whisper merely because Qwen is newer or because a public
@@ -176,5 +258,6 @@ advantage on the real corpus while:
 - preserving a plausible route to cooperative cancellation and the existing
   media/PDF contracts.
 
-If the gain is small, keep `large-v3-turbo` as production default and retain the
-Qwen harness for future model releases.
+The September 2026 Qwen3-ASR-1.7B benchmark did **not** meet that gate. Keep
+`large-v3-turbo` as production default and retain the Qwen harness for future
+model releases.
