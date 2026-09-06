@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import tempfile
@@ -23,18 +24,62 @@ from fusion_reader_v2.owned_subprocess import run_owned  # noqa: E402
 
 HOST = os.environ.get("FUSION_READER_STT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FUSION_READER_STT_PORT", "8021"))
-MODEL_NAME = os.environ.get("FUSION_READER_STT_MODEL", "small")
+MODEL_NAME = os.environ.get("FUSION_READER_STT_MODEL", "large-v3-turbo")
 DEVICE = os.environ.get("FUSION_READER_STT_DEVICE", "cuda")
 COMPUTE_TYPE = os.environ.get("FUSION_READER_STT_COMPUTE_TYPE", "float16")
 LANGUAGE = os.environ.get("FUSION_READER_STT_LANGUAGE", "es")
-BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_BEAM_SIZE", "1"))
-RECOVERY_BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_RECOVERY_BEAM_SIZE", str(max(2, BEAM_SIZE))))
+BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_BEAM_SIZE", "5"))
+RECOVERY_BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_RECOVERY_BEAM_SIZE", str(max(5, BEAM_SIZE))))
 CONVERT_TIMEOUT_SECONDS = float(os.environ.get("FUSION_READER_STT_CONVERT_TIMEOUT_SECONDS", "1800"))
 MAX_BODY_BYTES = int(os.environ.get("FUSION_READER_STT_MAX_BODY_BYTES", str(2 * 1024 * 1024 * 1024)))
 SOCKET_TIMEOUT_SECONDS = float(os.environ.get("FUSION_READER_STT_SOCKET_TIMEOUT_SECONDS", "60"))
+CONTEXT_MAX_CHARS = int(os.environ.get("FUSION_READER_STT_CONTEXT_MAX_CHARS", "4096"))
+HOTWORD_MAX_ITEMS = int(os.environ.get("FUSION_READER_STT_HOTWORD_MAX_ITEMS", "128"))
 INFERENCE_LOCK = threading.Lock()
 REQUESTS_LOCK = threading.Lock()
 ACTIVE_REQUESTS: dict[str, threading.Event] = {}
+
+
+def _bounded_text(value: str | None, max_chars: int = CONTEXT_MAX_CHARS) -> str:
+    normalized = " ".join(str(value or "").split()).strip()
+    return normalized[: max(0, max_chars)]
+
+
+def _load_hotwords() -> str:
+    raw_items: list[str] = []
+    direct = os.environ.get("FUSION_READER_STT_HOTWORDS", "")
+    if direct:
+        raw_items.extend(re.split(r"[,;\n]+", direct))
+
+    hotwords_file = str(os.environ.get("FUSION_READER_STT_HOTWORDS_FILE", "") or "").strip()
+    if hotwords_file:
+        path = Path(hotwords_file).expanduser()
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                clean = line.strip()
+                if clean and not clean.startswith("#"):
+                    raw_items.append(clean)
+        except OSError as exc:
+            print(f"STT hotwords file unavailable: {path} ({exc})", file=sys.stderr, flush=True)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        clean = _bounded_text(item, 160)
+        key = clean.casefold()
+        if not clean or key in seen:
+            continue
+        seen.add(key)
+        unique.append(clean)
+        if len(unique) >= max(1, HOTWORD_MAX_ITEMS):
+            break
+
+    result = ", ".join(unique)
+    return result[: max(0, CONTEXT_MAX_CHARS)]
+
+
+INITIAL_PROMPT = _bounded_text(os.environ.get("FUSION_READER_STT_INITIAL_PROMPT", ""))
+HOTWORDS = _load_hotwords()
 
 
 def load_model():
@@ -46,6 +91,27 @@ def load_model():
 
 
 MODEL, LOAD_MS = load_model()
+try:
+    TRANSCRIBE_PARAMETERS = set(inspect.signature(MODEL.transcribe).parameters)
+except (TypeError, ValueError):
+    TRANSCRIBE_PARAMETERS = set()
+
+
+def _context_options() -> dict:
+    options: dict[str, str] = {}
+    prompt_parts: list[str] = []
+    if INITIAL_PROMPT:
+        prompt_parts.append(INITIAL_PROMPT)
+    if HOTWORDS:
+        if not TRANSCRIBE_PARAMETERS or "hotwords" in TRANSCRIBE_PARAMETERS:
+            options["hotwords"] = HOTWORDS
+        else:
+            # Older faster-whisper versions can still receive the terms through
+            # Whisper's initial prompt even when native hotword biasing is absent.
+            prompt_parts.append(f"Vocabulario relevante: {HOTWORDS}")
+    if prompt_parts and (not TRANSCRIBE_PARAMETERS or "initial_prompt" in TRANSCRIBE_PARAMETERS):
+        options["initial_prompt"] = _bounded_text(" ".join(prompt_parts))
+    return options
 
 
 def send_json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -134,7 +200,7 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
     started = time.perf_counter()
     attempts: list[dict] = []
     plan: list[tuple[str, int, bool]] = [
-        ("fast", max(1, BEAM_SIZE), bool(long_form)),
+        ("quality", max(1, BEAM_SIZE), bool(long_form)),
         ("recovery_vad", max(1, RECOVERY_BEAM_SIZE), True),
         ("recovery_novad", max(1, RECOVERY_BEAM_SIZE), False),
     ]
@@ -158,7 +224,8 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
                 language=selected_language,
                 beam_size=beam_size,
                 vad_filter=vad_filter,
-                condition_on_previous_text=False,
+                condition_on_previous_text=bool(long_form),
+                **_context_options(),
             )
             text, segment_items = _segment_payload(segments, cancel_event)
         finally:
@@ -189,7 +256,7 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "FusionReaderV2STT/0.1"
+    server_version = "FusionReaderV2STT/0.2"
 
     def do_GET(self) -> None:
         if urlparse(self.path).path == "/health":
@@ -204,6 +271,12 @@ class Handler(BaseHTTPRequestHandler):
                     "compute_type": COMPUTE_TYPE,
                     "beam_size": BEAM_SIZE,
                     "load_ms": LOAD_MS,
+                    "quality_profile": "quality" if DEVICE == "cuda" else "balanced",
+                    "context_biasing": {
+                        "initial_prompt": bool(INITIAL_PROMPT),
+                        "hotwords": bool(HOTWORDS),
+                        "native_hotwords": bool(not TRANSCRIBE_PARAMETERS or "hotwords" in TRANSCRIBE_PARAMETERS),
+                    },
                 },
             )
             return
@@ -331,7 +404,8 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     print(
         f"Fusion Reader v2 STT listening on http://{HOST}:{PORT} "
-        f"model={MODEL_NAME} device={DEVICE} compute={COMPUTE_TYPE} load_ms={LOAD_MS}",
+        f"model={MODEL_NAME} device={DEVICE} compute={COMPUTE_TYPE} beam={BEAM_SIZE} load_ms={LOAD_MS} "
+        f"context_biasing={'on' if INITIAL_PROMPT or HOTWORDS else 'off'}",
         flush=True,
     )
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
