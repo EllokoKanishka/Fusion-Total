@@ -105,6 +105,8 @@ def handle_media_post(responder: MediaResponder, path: str, payload: dict | None
             include_original_pdf=selected("original_pdf", True),
             include_translated_pdf=selected("translated_pdf", operation == "translate"),
             include_spanish_audio=selected("spanish_audio", operation == "translate"),
+            stt_initial_prompt=str((params.get("stt_prompt") or [""])[-1]),
+            stt_hotwords=str((params.get("stt_hotwords") or [""])[-1]),
         )
         responder._json(200 if result.get("ok") else 409, result)
         return True
