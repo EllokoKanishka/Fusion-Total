@@ -1,0 +1,3 @@
+# Isolated benchmark environment only. Do NOT install this into PandaFusion's runtime venv.
+# Qwen's official package pins its own Transformers/Accelerate compatibility set.
+qwen-asr==0.0.6

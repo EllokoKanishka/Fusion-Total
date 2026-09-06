@@ -1,0 +1,11 @@
+# Foundation audiobook benchmark vocabulary. One expected entity/term per line.
+Isaac Asimov
+Hari Seldon
+Gaal Dornick
+Trantor
+Terminus
+psicohistoria
+psicohistoriador
+Imperio Galáctico
+Enciclopedia Galáctica
+Anacreon
