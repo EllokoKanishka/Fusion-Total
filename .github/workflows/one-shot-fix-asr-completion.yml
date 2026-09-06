@@ -1,0 +1,91 @@
+name: One-shot ASR completion semantics fix
+
+on:
+  push:
+    branches:
+      - fix/asr-correction-completion-semantics
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/asr-correction-completion-semantics
+          fetch-depth: 0
+
+      - name: Apply semantic fix and regression coverage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          media = Path('fusion_reader_v2/media.py')
+          text = media.read_text(encoding='utf-8')
+          old = '''    correction_model: str = ""\n    correction_changed_paragraphs: int = 0\n    correction_rejected_paragraphs: int = 0\n'''
+          new = '''    correction_model: str = ""\n    correction_processed_paragraphs: int = 0\n    correction_accepted_paragraphs: int = 0\n    correction_unchanged_paragraphs: int = 0\n    correction_changed_paragraphs: int = 0\n    correction_rejected_paragraphs: int = 0\n'''
+          if old not in text:
+              raise SystemExit('MediaJob correction fields anchor not found')
+          text = text.replace(old, new, 1)
+          old = '''                "model": self.correction_model,\n                "changed_paragraphs": self.correction_changed_paragraphs,\n                "rejected_paragraphs": self.correction_rejected_paragraphs,\n'''
+          new = '''                "model": self.correction_model,\n                "processed_paragraphs": self.correction_processed_paragraphs,\n                "accepted_paragraphs": self.correction_accepted_paragraphs,\n                "unchanged_paragraphs": self.correction_unchanged_paragraphs,\n                "changed_paragraphs": self.correction_changed_paragraphs,\n                "rejected_paragraphs": self.correction_rejected_paragraphs,\n'''
+          if old not in text:
+              raise SystemExit('MediaJob correction payload anchor not found')
+          media.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          service = Path('fusion_reader_v2/services/media.py')
+          text = service.read_text(encoding='utf-8')
+          old = '''        completed = bool(paragraphs) and accepted == len(paragraphs)\n        warnings = list(self._job(job_id).warnings)\n'''
+          new = '''        processed = accepted + rejected\n        completed = bool(paragraphs) and processed == len(paragraphs)\n        warnings = list(self._job(job_id).warnings)\n'''
+          if old not in text:
+              raise SystemExit('completion semantics anchor not found')
+          text = text.replace(old, new, 1)
+          old = '''            correction_completed=completed,\n            correction_changed_paragraphs=changed,\n            correction_rejected_paragraphs=rejected,\n'''
+          new = '''            correction_completed=completed,\n            correction_processed_paragraphs=processed,\n            correction_accepted_paragraphs=accepted,\n            correction_unchanged_paragraphs=max(0, accepted - changed),\n            correction_changed_paragraphs=changed,\n            correction_rejected_paragraphs=rejected,\n'''
+          if old not in text:
+              raise SystemExit('completion telemetry anchor not found')
+          service.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('tests/unit/test_media_correction_contract.py')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace(
+              'import unittest\nfrom pathlib import Path\n',
+              'import unittest\nfrom pathlib import Path\nfrom types import SimpleNamespace\n\nfrom fusion_reader_v2.media import MediaJob\nfrom fusion_reader_v2.services.media import MediaProcessingService\n',
+              1,
+          )
+          anchor = '''    def test_frontend_exposes_opt_in_checkbox(self) -> None:\n        html = (ROOT / "fusion_reader_v2/web/static/index.html").read_text(encoding="utf-8")\n        js = (ROOT / "fusion_reader_v2/web/static/js/media.mjs").read_text(encoding="utf-8")\n        self.assertIn('id="mediaPostCorrectionToggle"', html)\n        self.assertIn("params.set('post_correct', postCorrect ? '1' : '0')", js)\n'''
+          addition = anchor + '''\n    def test_safe_rejection_still_completes_correction_stage(self) -> None:\n        service = object.__new__(MediaProcessingService)\n        job = MediaJob(job_id="job", operation="transcribe", filename="sample.wav", mime="audio/wav", voice="")\n        outcomes = iter(\n            [\n                SimpleNamespace(accepted=True, changed=True, text="Hari Seldon", detail="accepted"),\n                SimpleNamespace(accepted=True, changed=False, text="Trantor", detail="unchanged"),\n                SimpleNamespace(accepted=False, changed=False, text="", detail="rewrite_risk"),\n            ]\n        )\n        service.corrector = SimpleNamespace(correct=lambda *_args, **_kwargs: next(outcomes))\n        service._check_cancelled = lambda _job_id: None\n        service._job = lambda _job_id: job\n\n        def update(_job_id: str, **changes) -> None:\n            for key, value in changes.items():\n                setattr(job, key, value)\n\n        service._update = update\n        paragraphs = [(0.0, "Harry Seldon"), (5.0, "Trantor"), (10.0, "Texto que Qwen intentó reescribir") ]\n        corrected = service._correct_transcript_paragraphs("job", paragraphs)\n\n        self.assertTrue(job.correction_completed)\n        self.assertEqual(job.correction_processed_paragraphs, 3)\n        self.assertEqual(job.correction_accepted_paragraphs, 2)\n        self.assertEqual(job.correction_unchanged_paragraphs, 1)\n        self.assertEqual(job.correction_changed_paragraphs, 1)\n        self.assertEqual(job.correction_rejected_paragraphs, 1)\n        self.assertIn("asr_correction_partial", job.warnings)\n        self.assertEqual(corrected[-1][1], paragraphs[-1][1])\n\n        payload = job.to_dict()["correction"]\n        self.assertTrue(payload["completed"])\n        self.assertEqual(payload["processed_paragraphs"], 3)\n        self.assertEqual(payload["accepted_paragraphs"], 2)\n        self.assertEqual(payload["unchanged_paragraphs"], 1)\n        self.assertEqual(payload["rejected_paragraphs"], 1)\n'''
+          if anchor not in text:
+              raise SystemExit('test anchor not found')
+          test.write_text(text.replace(anchor, addition, 1), encoding='utf-8')
+
+          doc = Path('docs/research/ASR_POST_CORRECTION_2026-09.md')
+          text = doc.read_text(encoding='utf-8')
+          marker = '\n## Why not 27B\n'
+          validation = '''\n## Real 66-minute production validation\n\nA full end-to-end desktop validation was run on the 66-minute *Foundation* audiobook after the feature reached `main`. Whisper `large-v3-turbo` processed the audio in about 60.6 seconds. The optional Qwen3 14B Q8_0 pass then processed all 119 timestamped paragraphs in about 236.7 seconds, for about 299.8 seconds total pipeline time. It changed 98 paragraphs and conservatively rejected 14 proposed rewrites; every rejected candidate fell back to the untouched Whisper paragraph. The remaining accepted paragraphs were unchanged.\n\nObserved GPU usage remained comfortable on the RTX 5090: about 2.6 GiB for Whisper, about 16.1 GiB for Qwen, roughly 19.2 GiB peak combined, leaving about 12.9 GiB free. No OOM, hallucinated blocks, Markdown explanations or timestamp-alignment failures were observed. A second upload with post-correction disabled skipped the correction stage entirely, confirming per-file opt-in isolation.\n\nThis validation exposed one telemetry semantics defect: `correction.completed` was previously false whenever any candidate was safely rejected, even though the correction stage had actually processed every paragraph. Rejections are an expected safety outcome, not an incomplete run. The contract is therefore: `completed=true` means every paragraph reached a terminal correction decision; accepted/unchanged/changed/rejected counts describe those decisions separately. Cancellation or an exception before all paragraphs are processed still leaves `completed=false`.\n'''
+          if marker not in text:
+              raise SystemExit('research doc marker not found')
+          doc.write_text(text.replace(marker, validation + marker, 1), encoding='utf-8')
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install -c requirements/constraints-py312.txt -e '.[dev]'
+
+      - name: Run focused regression tests
+        run: |
+          python -m unittest tests.unit.test_media_correction_contract tests.unit.test_transcript_correction -v
+          ruff check fusion_reader_v2/media.py fusion_reader_v2/services/media.py tests/unit/test_media_correction_contract.py
+          ruff format --check fusion_reader_v2/media.py fusion_reader_v2/services/media.py tests/unit/test_media_correction_contract.py
+
+      - name: Commit fix and remove one-shot workflow
+        run: |
+          rm .github/workflows/one-shot-fix-asr-completion.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fusion_reader_v2/media.py fusion_reader_v2/services/media.py tests/unit/test_media_correction_contract.py docs/research/ASR_POST_CORRECTION_2026-09.md .github/workflows/one-shot-fix-asr-completion.yml
+          git commit -m 'fix(stt): distinguish safe rejections from incomplete correction'
+          git push origin HEAD:fix/asr-correction-completion-semantics
