@@ -210,7 +210,8 @@ class WhisperCliSTTProvider(STTProvider):
             path,
             mime=mime,
             language=language,
-            **_stt_context_kwargs(initial_prompt, hotwords),
+            initial_prompt=_bounded_stt_context(initial_prompt),
+            hotwords=_bounded_stt_context(hotwords),
         )
 
     def transcribe_file_cancellable(
