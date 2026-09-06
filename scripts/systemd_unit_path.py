@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import sys
 
-_SAFE_BYTES = frozenset(
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-"
-)
+_SAFE_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-")
 
 
 def escape_systemd_path(path: str) -> str:
@@ -19,10 +17,7 @@ def escape_systemd_path(path: str) -> str:
     if not path.startswith("/"):
         raise ValueError("systemd paths must be absolute")
 
-    return "".join(
-        chr(byte) if byte in _SAFE_BYTES else f"\\x{byte:02x}"
-        for byte in path.encode("utf-8")
-    )
+    return "".join(chr(byte) if byte in _SAFE_BYTES else f"\\x{byte:02x}" for byte in path.encode("utf-8"))
 
 
 def main(argv: list[str] | None = None) -> int:
