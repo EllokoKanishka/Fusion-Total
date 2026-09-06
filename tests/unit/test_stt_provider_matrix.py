@@ -156,6 +156,35 @@ class STTProviderMatrixTests(unittest.TestCase):
                     self.assertEqual(result.ok, ok)
                     self.assertEqual(result.detail, detail)
 
+    def test_auto_stt_does_not_mask_primary_errors_when_fallback_unhealthy(self) -> None:
+        primary = mock.Mock(spec=dialogue.STTProvider)
+        fallback = mock.Mock(spec=dialogue.STTProvider)
+        primary.name = "primary"
+        fallback.name = "fallback"
+        primary.health.return_value = {"ok": True}
+        fallback.health.return_value = {"ok": False, "detail": "command_not_found"}
+        primary.transcribe_file.return_value = dialogue.TranscriptResult(False, detail="transcribe_failed")
+        primary.transcribe_file_cancellable.return_value = dialogue.TranscriptResult(False, detail="transcribe_failed")
+
+        auto = dialogue.AutoSTTProvider(primary, fallback)
+
+        # 1. Primary returns transcribe_failed, fallback is unhealthy -> preserves primary detail and does not call fallback.transcribe
+        res_sync = auto.transcribe_file("audio.wav")
+        self.assertFalse(res_sync.ok)
+        self.assertEqual(res_sync.detail, "transcribe_failed")
+        fallback.transcribe_file.assert_not_called()
+
+        res_async = auto.transcribe_file_cancellable("audio.wav")
+        self.assertFalse(res_async.ok)
+        self.assertEqual(res_async.detail, "transcribe_failed")
+        fallback.transcribe_file_cancellable.assert_not_called()
+
+        # 2. Primary unhealthy and fallback unhealthy -> returns stt_not_available
+        primary.health.return_value = {"ok": False}
+        res_down = auto.transcribe_file("audio.wav")
+        self.assertFalse(res_down.ok)
+        self.assertEqual(res_down.detail, "stt_not_available")
+
     def test_auto_health_transcription_defaults_and_command_resolution(self) -> None:
         primary = mock.Mock(spec=dialogue.STTProvider)
         fallback = mock.Mock(spec=dialogue.STTProvider)

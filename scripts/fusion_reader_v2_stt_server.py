@@ -136,6 +136,7 @@ def transcribe_wav(path: Path, language: str, *, cancel_event=None, long_form: b
     plan: list[tuple[str, int, bool]] = [
         ("fast", max(1, BEAM_SIZE), bool(long_form)),
         ("recovery_vad", max(1, RECOVERY_BEAM_SIZE), True),
+        ("recovery_novad", max(1, RECOVERY_BEAM_SIZE), False),
     ]
     seen: set[tuple[int, bool]] = set()
     for label, beam_size, vad_filter in plan:

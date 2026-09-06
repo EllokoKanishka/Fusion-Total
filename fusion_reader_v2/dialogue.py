@@ -516,11 +516,21 @@ class AutoSTTProvider(STTProvider):
         return {**fallback_health, "selected": self.fallback.name, "primary": primary_health}
 
     def transcribe_file(self, path: str | Path, mime: str = "", language: str = "es") -> TranscriptResult:
-        if self.primary.health().get("ok"):
-            result = self.primary.transcribe_file(path, mime=mime, language=language)
-            if result.ok or result.detail == "hallucinated_transcript":
-                return result
-        return self.fallback.transcribe_file(path, mime=mime, language=language)
+        primary_ok = bool(self.primary.health().get("ok"))
+        primary_result = None
+        if primary_ok:
+            primary_result = self.primary.transcribe_file(path, mime=mime, language=language)
+            if primary_result.ok or primary_result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
+                return primary_result
+
+        fallback_ok = bool(self.fallback.health().get("ok"))
+        if fallback_ok:
+            return self.fallback.transcribe_file(path, mime=mime, language=language)
+
+        if primary_result is not None:
+            return primary_result
+
+        return TranscriptResult(False, provider=self.name, detail="stt_not_available")
 
     def transcribe_file_cancellable(
         self,
@@ -532,8 +542,13 @@ class AutoSTTProvider(STTProvider):
         request_id: str = "",
         long_form: bool = False,
     ) -> TranscriptResult:
-        if self.primary.health().get("ok"):
-            result = self.primary.transcribe_file_cancellable(
+        if cancel_event is not None and cancel_event.is_set():
+            return TranscriptResult(False, provider=self.name, detail="cancelled")
+
+        primary_ok = bool(self.primary.health().get("ok"))
+        primary_result = None
+        if primary_ok:
+            primary_result = self.primary.transcribe_file_cancellable(
                 path,
                 mime=mime,
                 language=language,
@@ -541,20 +556,27 @@ class AutoSTTProvider(STTProvider):
                 request_id=request_id,
                 long_form=long_form,
             )
-            if result.ok:
-                return result
-            if result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
-                return result
+            if primary_result.ok or primary_result.detail in {"hallucinated_transcript", "cancelled", "timeout"}:
+                return primary_result
+
         if cancel_event is not None and cancel_event.is_set():
             return TranscriptResult(False, provider=self.name, detail="cancelled")
-        return self.fallback.transcribe_file_cancellable(
-            path,
-            mime=mime,
-            language=language,
-            cancel_event=cancel_event,
-            request_id=request_id,
-            long_form=long_form,
-        )
+
+        fallback_ok = bool(self.fallback.health().get("ok"))
+        if fallback_ok:
+            return self.fallback.transcribe_file_cancellable(
+                path,
+                mime=mime,
+                language=language,
+                cancel_event=cancel_event,
+                request_id=request_id,
+                long_form=long_form,
+            )
+
+        if primary_result is not None:
+            return primary_result
+
+        return TranscriptResult(False, provider=self.name, detail="stt_not_available")
 
     def cancel(self, request_id: str) -> bool:
         return self.primary.cancel(request_id) or self.fallback.cancel(request_id)
