@@ -500,11 +500,7 @@ class MediaProcessingService:
                     title=title,
                     subtitle=(
                         f"Idioma detectado: {detected} · Generado localmente por Fusion Reader v2"
-                        + (
-                            f" · Corrección conservadora: {job.correction_model}"
-                            if job.correction_completed
-                            else ""
-                        )
+                        + (f" · Corrección conservadora: {job.correction_model}" if job.correction_completed else "")
                     ),
                     paragraphs=paragraphs,
                     suffix="transcripcion",

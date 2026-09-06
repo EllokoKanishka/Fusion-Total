@@ -103,9 +103,7 @@ class OllamaTranscriptCorrector:
         timeout_seconds: float | None = None,
         keep_alive: str = "",
     ) -> None:
-        self.base_url = (base_url or os.environ.get("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip(
-            "/"
-        )
+        self.base_url = (base_url or os.environ.get("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
         self.model = (model or os.environ.get("FUSION_READER_ASR_CORRECTOR_MODEL") or "qwen3:14b-q8_0").strip()
         self.timeout_seconds = float(
             timeout_seconds
@@ -135,9 +133,7 @@ class OllamaTranscriptCorrector:
             }
         models = payload.get("models") if isinstance(payload, dict) else []
         available = [
-            str(item.get("name") or item.get("model") or "")
-            for item in models or []
-            if isinstance(item, dict)
+            str(item.get("name") or item.get("model") or "") for item in models or [] if isinstance(item, dict)
         ]
         present = self.model in available
         return {
