@@ -86,6 +86,14 @@ The correction pass runs after Whisper and before transcript/PDF publication. Ea
 
 The implementation also records whether correction was requested/completed, the correction model, changed/rejected paragraph counts, and correction timing. Focused repository tests cover request scoping, deterministic Ollama parameters, preservation guards, model availability, and the UI/API contract. The final feature files are formatted with the repository's pinned Ruff formatter before the full merge gates run.
 
+## Real 66-minute production validation
+
+A full end-to-end desktop validation was run on the 66-minute *Foundation* audiobook after the feature reached `main`. Whisper `large-v3-turbo` processed the audio in about 60.6 seconds. The optional Qwen3 14B Q8_0 pass then processed all 119 timestamped paragraphs in about 236.7 seconds, for about 299.8 seconds total pipeline time. It changed 98 paragraphs and conservatively rejected 14 proposed rewrites; every rejected candidate fell back to the untouched Whisper paragraph. The remaining accepted paragraphs were unchanged.
+
+Observed GPU usage remained comfortable on the RTX 5090: about 2.6 GiB for Whisper, about 16.1 GiB for Qwen, roughly 19.2 GiB peak combined, leaving about 12.9 GiB free. No OOM, hallucinated blocks, Markdown explanations or timestamp-alignment failures were observed. A second upload with post-correction disabled skipped the correction stage entirely, confirming per-file opt-in isolation.
+
+This validation exposed one telemetry semantics defect: `correction.completed` was previously false whenever any candidate was safely rejected, even though the correction stage had actually processed every paragraph. Rejections are an expected safety outcome, not an incomplete run. The contract is therefore: `completed=true` means every paragraph reached a terminal correction decision; accepted/unchanged/changed/rejected counts describe those decisions separately. Cancellation or an exception before all paragraphs are processed still leaves `completed=false`.
+
 ## Why not 27B
 
 For this narrow task, 27B produced the same correction and preservation score while being slower and consuming roughly nine additional GiB of VRAM. The additional reasoning capacity has no demonstrated benefit here, while the reduced GPU margin would make concurrent local services less comfortable.
