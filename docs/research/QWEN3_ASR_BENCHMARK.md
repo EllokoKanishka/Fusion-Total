@@ -39,6 +39,36 @@ The 1.7B model is Apache-2.0 and the published model files are roughly 4.7 GB.
 The forced aligner is a separate model because timestamp generation is not the
 same inference path as transcription.
 
+## Container compatibility learned from the real desktop run
+
+The first Foundation benchmark exposed a concrete input-contract mismatch in
+`qwen-asr==0.0.6`: passing the `.mp4` audiobook path directly reached the
+package's `librosa`/`soundfile` loader, where `libsndfile` rejected the video
+container with `Format not recognised` before ASR inference began.
+
+That is not a model-quality failure and it is not specific to Foundation. The
+official Qwen examples use decoder-friendly audio inputs such as WAV or arrays,
+while PandaFusion's user-facing media surface intentionally accepts containers
+such as MP4, MKV, MOV and WebM.
+
+The benchmark runner therefore normalizes **every** source through local FFmpeg
+before calling Qwen:
+
+- audio only (`-vn`);
+- 16 kHz;
+- mono;
+- FLAC;
+- temporary file deleted automatically after inference.
+
+This is the same stable audio profile already used by PandaFusion's production
+media normalization path. It keeps the experiment representative of the real
+application without patching `qwen-asr`, and it handles both audio files and
+video containers consistently.
+
+The JSON report records `preprocess_seconds` separately. `inference_seconds`
+continues to measure Qwen inference only, while `total_seconds` includes local
+normalization, model loading and inference.
+
 ## Why an isolated harness
 
 Do not install `qwen-asr` into PandaFusion's normal virtual environment. The
@@ -53,9 +83,9 @@ need internet access to download the public model checkpoints.
 ## Repository tools
 
 - `scripts/setup_qwen3_asr_benchmark.sh`: creates the isolated benchmark venv.
-- `scripts/benchmark_qwen3_asr.py`: runs local Qwen3-ASR + optional
-  ForcedAligner, records timings/resources, and writes transcript/timestamp/JSON
-  artifacts.
+- `scripts/benchmark_qwen3_asr.py`: normalizes local media with FFmpeg, runs
+  local Qwen3-ASR + optional ForcedAligner, records timings/resources, and
+  writes transcript/timestamp/JSON artifacts.
 - `benchmarks/asr/foundation_entities.txt`: stable entity vocabulary used for
   the Foundation audiobook comparison.
 - `requirements/qwen3-asr-benchmark.txt`: isolated benchmark dependency pin.
@@ -98,9 +128,10 @@ The runner writes:
 - `qwen3_asr_timestamps.json`;
 - `qwen3_asr_report.json`.
 
-The JSON report includes model/package versions, detected language, load and
-inference times, real-time factor, GPU/RAM peaks, timestamp count, word/character
-counts, and accent-insensitive exact counts for the stable entity vocabulary.
+The JSON report includes model/package versions, detected language,
+normalization/load/inference times, real-time factor, GPU/RAM peaks, timestamp
+count, word/character counts, and accent-insensitive exact counts for the stable
+entity vocabulary.
 
 ## Comparison against current PandaFusion
 
