@@ -1,0 +1,39 @@
+name: One-shot Ruff format ASR correction
+
+on:
+  push:
+    branches:
+      - feat/asr-conservative-post-correction
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/asr-conservative-post-correction
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install repository tooling
+        run: python -m pip install -c requirements/constraints-py312.txt -e '.[dev]'
+      - name: Format correction files
+        run: ruff format fusion_reader_v2/services/media.py fusion_reader_v2/transcript_correction.py
+      - name: Verify lint and format
+        run: |
+          ruff check fusion_reader_v2/services/media.py fusion_reader_v2/transcript_correction.py
+          ruff format --check fusion_reader_v2/services/media.py fusion_reader_v2/transcript_correction.py
+          git diff --check
+      - name: Commit formatted files and remove helper
+        run: |
+          rm -f .github/workflows/_one_shot_ruff_format_post_correction.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style(stt): format conservative post-correction"
+          git push origin HEAD:feat/asr-conservative-post-correction
