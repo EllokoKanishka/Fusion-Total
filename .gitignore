@@ -37,7 +37,7 @@ ENV/
 .coverage
 coverage.xml
 coverage.json
-.codex/
+/.codex
 
 # Node / JS
 node_modules/
