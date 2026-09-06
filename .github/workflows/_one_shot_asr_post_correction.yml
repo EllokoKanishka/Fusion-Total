@@ -1,0 +1,41 @@
+name: One-shot ASR post-correction patch
+
+on:
+  push:
+    branches:
+      - feat/asr-conservative-post-correction
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/asr-conservative-post-correction
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Apply repository patch
+        run: python scripts/_apply_asr_post_correction_patch.py
+      - name: Run focused Python tests
+        run: python -m unittest tests.unit.test_transcript_correction tests.unit.test_media_correction_contract -v
+      - name: Run media controller tests
+        run: node --test tests/media_controller.test.js
+      - name: Check patch whitespace
+        run: git diff --check
+      - name: Commit patched tree and remove one-shot helpers
+        run: |
+          rm -f scripts/_apply_asr_post_correction_patch.py .github/workflows/_one_shot_asr_post_correction.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(stt): add optional conservative Qwen post-correction"
+          git push origin HEAD:feat/asr-conservative-post-correction
