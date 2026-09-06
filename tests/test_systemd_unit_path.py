@@ -17,9 +17,7 @@ spec.loader.exec_module(systemd_unit_path)
 
 class SystemdUnitPathTests(unittest.TestCase):
     def test_escape_systemd_path_preserves_absolute_path_and_encodes_unsafe_bytes(self):
-        escaped = systemd_unit_path.escape_systemd_path(
-            "/home/example/Escritorio/Fusión Total"
-        )
+        escaped = systemd_unit_path.escape_systemd_path("/home/example/Escritorio/Fusión Total")
         self.assertEqual(
             escaped,
             "/home/example/Escritorio/Fusi\\xc3\\xb3n\\x20Total",
@@ -30,9 +28,7 @@ class SystemdUnitPathTests(unittest.TestCase):
             systemd_unit_path.escape_systemd_path("Fusion Total")
 
     def test_installer_uses_escaped_paths_for_path_only_systemd_directives(self):
-        installer = (REPO_ROOT / "scripts" / "install_launcher.sh").read_text(
-            encoding="utf-8"
-        )
+        installer = (REPO_ROOT / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
 
         self.assertIn('SYSTEMD_ROOT="$("$PYTHON_BIN" "$ROOT/scripts/systemd_unit_path.py" "$ROOT")"', installer)
         self.assertIn("EnvironmentFile=$SYSTEMD_ROOT/.env", installer)
