@@ -6,7 +6,9 @@ import importlib.metadata
 import json
 import re
 import resource
+import shutil
 import subprocess
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -65,6 +67,45 @@ def ffprobe_duration(path: Path) -> float | None:
         return None
 
 
+def normalize_qwen_audio(source: Path, target: Path, *, timeout_seconds: float = 3600.0) -> float:
+    """Normalize arbitrary audio/video containers to the stable Qwen input profile."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg_not_available")
+    started = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-vn",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "flac",
+                str(target),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("qwen_audio_conversion_timeout") from exc
+    if proc.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
+        detail = " ".join((proc.stderr or proc.stdout or "").split())[-1000:]
+        suffix = f":{detail}" if detail else ""
+        raise RuntimeError(f"qwen_audio_conversion_failed{suffix}")
+    return time.perf_counter() - started
+
+
 def gibibytes(value: int | float) -> float:
     return round(float(value) / (1024**3), 3)
 
@@ -106,6 +147,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-inference-batch-size", type=int, default=4)
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument(
+        "--ffmpeg-timeout-seconds",
+        type=float,
+        default=3600.0,
+        help="Maximum time allowed for local container-to-FLAC normalization.",
+    )
+    parser.add_argument(
         "--no-timestamps",
         action="store_true",
         help="Disable ForcedAligner timestamps. The PandaFusion migration gate should normally keep timestamps enabled.",
@@ -146,38 +193,46 @@ def main() -> int:
         torch.cuda.reset_peak_memory_stats(cuda_index)
 
     started = time.perf_counter()
-    load_started = time.perf_counter()
-    aligner_kwargs = {"dtype": dtype, "device_map": args.device}
-    model = Qwen3ASRModel.from_pretrained(
-        args.model,
-        dtype=dtype,
-        device_map=args.device,
-        max_inference_batch_size=args.max_inference_batch_size,
-        max_new_tokens=args.max_new_tokens,
-        forced_aligner=None if args.no_timestamps else args.aligner,
-        forced_aligner_kwargs=None if args.no_timestamps else aligner_kwargs,
-    )
-    load_seconds = time.perf_counter() - load_started
+    with tempfile.TemporaryDirectory(prefix="pandafusion-qwen3-asr-") as temp_dir:
+        normalized_audio = Path(temp_dir) / "input.flac"
+        preprocess_seconds = normalize_qwen_audio(
+            audio,
+            normalized_audio,
+            timeout_seconds=max(1.0, float(args.ffmpeg_timeout_seconds)),
+        )
 
-    load_peak_allocated = None
-    load_peak_reserved = None
-    if torch.cuda.is_available():
-        torch.cuda.synchronize(cuda_index)
-        load_peak_allocated = torch.cuda.max_memory_allocated(cuda_index)
-        load_peak_reserved = torch.cuda.max_memory_reserved(cuda_index)
-        torch.cuda.reset_peak_memory_stats(cuda_index)
+        load_started = time.perf_counter()
+        aligner_kwargs = {"dtype": dtype, "device_map": args.device}
+        model = Qwen3ASRModel.from_pretrained(
+            args.model,
+            dtype=dtype,
+            device_map=args.device,
+            max_inference_batch_size=args.max_inference_batch_size,
+            max_new_tokens=args.max_new_tokens,
+            forced_aligner=None if args.no_timestamps else args.aligner,
+            forced_aligner_kwargs=None if args.no_timestamps else aligner_kwargs,
+        )
+        load_seconds = time.perf_counter() - load_started
 
-    inference_started = time.perf_counter()
-    results = model.transcribe(
-        audio=str(audio),
-        context=args.context,
-        language=args.language.strip() or None,
-        return_time_stamps=not args.no_timestamps,
-    )
-    if torch.cuda.is_available():
-        torch.cuda.synchronize(cuda_index)
-    inference_seconds = time.perf_counter() - inference_started
-    total_seconds = time.perf_counter() - started
+        load_peak_allocated = None
+        load_peak_reserved = None
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(cuda_index)
+            load_peak_allocated = torch.cuda.max_memory_allocated(cuda_index)
+            load_peak_reserved = torch.cuda.max_memory_reserved(cuda_index)
+            torch.cuda.reset_peak_memory_stats(cuda_index)
+
+        inference_started = time.perf_counter()
+        results = model.transcribe(
+            audio=str(normalized_audio),
+            context=args.context,
+            language=args.language.strip() or None,
+            return_time_stamps=not args.no_timestamps,
+        )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(cuda_index)
+        inference_seconds = time.perf_counter() - inference_started
+        total_seconds = time.perf_counter() - started
 
     if not results:
         raise SystemExit("qwen_asr_empty_result")
@@ -213,11 +268,17 @@ def main() -> int:
         "dtype": "bfloat16",
         "audio": str(audio),
         "audio_duration_seconds": duration_seconds,
+        "normalized_input": {
+            "container": "flac",
+            "sample_rate_hz": 16000,
+            "channels": 1,
+        },
         "language_requested": args.language.strip() or None,
         "language_detected": str(result.language or ""),
         "context": args.context,
         "timestamps_enabled": not args.no_timestamps,
         "timestamp_items": len(timestamps),
+        "preprocess_seconds": round(preprocess_seconds, 3),
         "load_seconds": round(load_seconds, 3),
         "inference_seconds": round(inference_seconds, 3),
         "total_seconds": round(total_seconds, 3),
