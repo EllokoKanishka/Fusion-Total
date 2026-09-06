@@ -8,13 +8,16 @@ The current local pipeline is reliable, but the `small` Whisper checkpoint makes
 
 ### 1. Qwen3-ASR-1.7B is the strongest replacement candidate
 
-Qwen3-ASR-1.7B is Apache-2.0, supports Spanish, long audio and prompt/context biasing. Its 2026 technical report describes the 1.7B model as state of the art among open-source ASR systems and competitive with strong proprietary APIs. The native Transformers model card explicitly supports free-form context/hotwords for names and domain vocabulary.
+Qwen3-ASR-1.7B is Apache-2.0, supports Spanish, long audio and prompt/context biasing. Its 2026 technical report describes the 1.7B model as state of the art among open-source ASR systems and competitive with strong proprietary APIs. The native Transformers model card explicitly supports free-form request context for names and domain vocabulary.
 
 Sources:
 - https://arxiv.org/abs/2601.21337
 - https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf
+- https://github.com/QwenLM/Qwen3-ASR
 
-Why it is not the immediate default: PandaFusion currently depends on Whisper segment timestamps throughout the PDF/media pipeline. Qwen3-ASR timestamping uses a separate Qwen3-ForcedAligner model, so replacing Whisper correctly requires an A/B integration with chunking/alignment rather than a blind model swap.
+Why it was not made the immediate default: PandaFusion depends on Whisper segment timestamps throughout the PDF/media pipeline. Qwen3-ASR timestamping uses a separate Qwen3-ForcedAligner model, so replacing Whisper correctly requires an A/B integration with chunking/alignment rather than a blind model swap.
+
+The real September 2026 PandaFusion benchmark is now complete. Qwen remained the strongest replacement candidate architecturally, but did not beat the production stack on the lexical fidelity that matters most to PandaFusion. See `docs/research/QWEN3_ASR_BENCHMARK.md` for the completed gate.
 
 ### 2. Voxtral is another serious open-weight candidate
 
@@ -56,7 +59,7 @@ Sources:
 
 ## Real PandaFusion A/B — Fundación audiobook
 
-The same 1 h 06 min Spanish audiobook was processed in three conditions:
+The same 1 h 06 min Spanish audiobook was processed in three Whisper conditions:
 
 - A: historical Whisper `small` baseline.
 - B: `large-v3-turbo`, CUDA float16, beam 5, no extra context.
@@ -72,6 +75,39 @@ Observed results:
 
 This experiment is not a formal WER benchmark because it does not use a human-aligned reference transcript. It is sufficient, however, to demonstrate a large named-entity benefit and justify an opt-in contextual-biasing interface.
 
+## Real PandaFusion Qwen migration gate — completed 2026-09-06
+
+The same 3975.563-second Foundation audiobook was then processed locally with:
+
+- `Qwen/Qwen3-ASR-1.7B`;
+- `Qwen/Qwen3-ForcedAligner-0.6B`;
+- BF16 on the RTX 5090;
+- Spanish forced as the requested language;
+- request context: `Audiolibro de Fundación de Isaac Asimov en castellano.`;
+- the same stable difficult-entity vocabulary used for evaluation.
+
+The result was technically strong:
+
+- 109.564 s ASR inference;
+- 119.248 s total including FFmpeg normalization and model load;
+- 36.28x real-time throughput;
+- 10,703 aligned word timestamps;
+- roughly 99.8% temporal coverage;
+- 13.547 GiB peak reserved GPU memory during inference;
+- low hallucination behavior on the short music/no-speech control (one spurious `No.` near the end).
+
+However, Qwen did not meet PandaFusion's lexical migration gate. Its free-form `context` did not preserve the hard vocabulary as reliably as faster-whisper native contextual biasing:
+
+- `Hari Seldon`: 0 exact Qwen occurrences versus 7 in the validated Whisper context run;
+- `Gaal Dornick`: 0 versus 5;
+- `psicohistoria`: 0 versus 16;
+- `psicohistoriador`: 0 exact Qwen occurrences;
+- Qwen often normalized rare terms toward common-language forms such as `Harry`, `Gal` and `psicología`.
+
+Qwen was excellent on `Trantor` (45 exact occurrences), `Terminus`, `Imperio Galáctico` and `Enciclopedia Galáctica`, and its ForcedAligner is a genuine strength. But the speed result was effectively tied with the approximately 118-second production Whisper run, while Qwen used materially more benchmark GPU/RAM resources and lost fidelity on the domain-specific terms PandaFusion explicitly needs to preserve.
+
+Decision: **do not migrate production STT to Qwen3-ASR-1.7B at this time.** Retain the isolated Qwen harness for future model/package releases.
+
 ## Decision implemented
 
 1. Dedicated CUDA STT defaults to `large-v3-turbo` instead of `small`.
@@ -85,6 +121,7 @@ This experiment is not a formal WER benchmark because it does not use a human-al
 6. Media jobs can also carry a bounded **per-request** prompt and hotword list. That context exists only for that upload and is not written to `.env`, manifests or the next transcription.
 7. The media UI exposes these per-file hints under **Ayudar con nombres y términos (opcional)**.
 8. User overrides always win.
+9. Qwen3-ASR remains an isolated benchmark/research path, not a production provider.
 
 ## Why per-request context instead of global hotwords
 
@@ -94,23 +131,24 @@ The per-job values are bounded before background processing, percent-encoded acr
 
 ## Next model migration gate
 
-Do not replace Whisper solely from leaderboard claims. Benchmark at least these engines against the same real PandaFusion corpus:
+The Qwen3-ASR-1.7B gate is complete and failed on named-entity/domain fidelity despite excellent alignment and competitive speed. Do not rerun the same Qwen version expecting a different production decision.
 
-- historical `small` baseline
-- `large-v3-turbo`
-- `large-v3`
-- Qwen3-ASR-1.7B + Qwen3-ForcedAligner
-- Voxtral Mini 3B if local runtime integration is practical
+Future candidates should be benchmarked against the same real corpus only when there is a meaningful new variable, such as:
+
+- a newer Qwen3-ASR release with stronger domain-vocabulary steering or an official hotword/lexicon mechanism;
+- `large-v3` if a measurable fidelity gain over `large-v3-turbo` is plausible;
+- Voxtral Mini 3B if a clean local runtime can preserve timestamps, cancellation and the media/PDF contracts;
+- a conservative, auditable LLM post-correction stage that fixes likely ASR errors without rewriting content.
 
 Measure:
 
-- normalized WER
-- named-entity WER / proper-noun accuracy
-- timestamp quality
-- hallucinations on silence/music
-- one-hour audiobook throughput
-- peak VRAM/RAM
-- cancellation behavior
-- startup/model-load time
+- normalized WER when a human reference exists;
+- named-entity WER / proper-noun accuracy;
+- timestamp quality;
+- hallucinations on silence/music;
+- one-hour audiobook throughput;
+- peak VRAM/RAM;
+- cancellation behavior;
+- startup/model-load time.
 
-For PandaFusion, named-entity accuracy and semantic fidelity are more important than shaving a few seconds from a one-hour offline transcription.
+For PandaFusion, named-entity accuracy and semantic fidelity remain more important than shaving a few seconds from a one-hour offline transcription.
