@@ -35,6 +35,7 @@ from fusion_reader_v2.media import (
 from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.reader import Document
 from fusion_reader_v2.tts import AudioArtifact
+from fusion_reader_v2.transcript_correction import OllamaTranscriptCorrector
 
 LOG = logging.getLogger(__name__)
 MEDIA_STT_PROMPT_MAX_CHARS = 1200
@@ -81,6 +82,7 @@ class MediaProcessingService:
         self.reader = reader
         self.stt = long_form_stt_provider(stt, timeout_seconds)
         self.chat = chat
+        self.corrector = OllamaTranscriptCorrector()
         self.synthesize = synthesize
         self.tts_health = tts_health
         self.runtime_root = runtime_root
@@ -115,6 +117,7 @@ class MediaProcessingService:
         operation: str,
         include_translated_pdf: bool = False,
         include_spanish_audio: bool = False,
+        include_post_correction: bool = False,
         input_bytes: int = 0,
     ) -> dict:
         normalized = str(operation or "").strip().lower()
@@ -134,6 +137,11 @@ class MediaProcessingService:
             dict(self.tts_health() or {})
             if normalized == "translate" and include_spanish_audio and self.tts_health is not None
             else {"ok": True}
+        )
+        correction = (
+            self.corrector.health()
+            if include_post_correction
+            else {"ok": True, "requested": False, "model": self.corrector.model, "detail": "not_requested"}
         )
         try:
             free_bytes = shutil.disk_usage(self.runtime_root.parent).free
@@ -157,6 +165,8 @@ class MediaProcessingService:
             errors.append("translation_not_available")
         if not tts.get("ok"):
             errors.append("tts_not_available")
+        if include_post_correction and not correction.get("ok"):
+            errors.append("asr_correction_not_available")
         required_free_bytes = max(512 * 1024 * 1024, max(0, int(input_bytes)) * 3 + 256 * 1024 * 1024)
         if free_bytes and free_bytes < required_free_bytes:
             errors.append("media_disk_space_low")
@@ -168,6 +178,7 @@ class MediaProcessingService:
             "stt_not_available": "Whisper no está disponible. Iniciá el servidor STT o instalá el fallback local.",
             "translation_not_available": "El modelo local de traducción no está disponible.",
             "tts_not_available": "El servicio de voz no está disponible para generar el audio.",
+            "asr_correction_not_available": "Qwen 14B no está disponible para la corrección conservadora opcional.",
             "media_disk_space_low": "No hay al menos 512 MiB libres para procesar el archivo.",
         }
         return {
@@ -182,6 +193,7 @@ class MediaProcessingService:
             "stt": stt,
             "translation": chat,
             "tts": tts,
+            "correction": correction,
             "free_bytes": free_bytes,
             "required_free_bytes": required_free_bytes,
             "max_duration_seconds": self.max_duration_seconds,
@@ -199,6 +211,7 @@ class MediaProcessingService:
         include_original_pdf: bool = True,
         include_translated_pdf: bool | None = None,
         include_spanish_audio: bool | None = None,
+        post_correct_transcript: bool = False,
         stt_initial_prompt: str = "",
         stt_hotwords: str = "",
     ) -> dict:
@@ -224,6 +237,7 @@ class MediaProcessingService:
             operation=normalized,
             include_translated_pdf=translated_requested,
             include_spanish_audio=audio_requested,
+            include_post_correction=bool(post_correct_transcript),
             input_bytes=input_path.stat().st_size if input_path.exists() else 0,
         )
         if not readiness.get("ok"):
@@ -249,6 +263,8 @@ class MediaProcessingService:
                 original_pdf_requested=original_requested,
                 translated_pdf_requested=translated_requested,
                 spanish_audio_requested=audio_requested,
+                correction_requested=bool(post_correct_transcript),
+                correction_model=self.corrector.model if post_correct_transcript else "",
             )
             self.registry.add(job.job_id, job)
             self.cancel_events[job.job_id] = threading.Event()
@@ -450,6 +466,16 @@ class MediaProcessingService:
                 raise RuntimeError(transcript.detail or "media_transcription_failed")
             detected = str(transcript.detected_language or "").strip().lower() or "desconocido"
             paragraphs = transcript_paragraphs(transcript.segments, transcript.text)
+            if self._job(job_id).correction_requested:
+                stage_started = time.perf_counter()
+                paragraphs = self._correct_transcript_paragraphs(
+                    job_id,
+                    paragraphs,
+                    context=stt_initial_prompt,
+                    glossary=stt_hotwords,
+                )
+                self._record_timing(job_id, "correction_ms", stage_started)
+                self._check_cancelled(job_id)
             title = f"{Path(self._job(job_id).filename).stem} — Transcripción"
             transcript_text = transcript_body_text(paragraphs)
             transcript_file = work_root / "transcript.txt"
@@ -472,7 +498,14 @@ class MediaProcessingService:
                     job_id,
                     work_root,
                     title=title,
-                    subtitle=f"Idioma detectado: {detected} · Generado localmente por Fusion Reader v2",
+                    subtitle=(
+                        f"Idioma detectado: {detected} · Generado localmente por Fusion Reader v2"
+                        + (
+                            f" · Corrección conservadora: {job.correction_model}"
+                            if job.correction_completed
+                            else ""
+                        )
+                    ),
                     paragraphs=paragraphs,
                     suffix="transcripcion",
                 )
@@ -492,7 +525,12 @@ class MediaProcessingService:
                 state="done",
                 stage="done",
                 progress=100,
-                detail="Procesamiento terminado. Ya podés descargar o montar el resultado.",
+                detail=(
+                    "Procesamiento terminado con corrección conservadora local. "
+                    "Ya podés descargar o montar el resultado."
+                    if self._job(job_id).correction_completed
+                    else "Procesamiento terminado. Ya podés descargar o montar el resultado."
+                ),
                 timings={**self._job(job_id).timings, "total_ms": int((time.perf_counter() - pipeline_started) * 1000)},
             )
         except _MediaCancelled:
@@ -527,6 +565,55 @@ class MediaProcessingService:
                     self.active_job_id = ""
                 self.cancel_events.pop(job_id, None)
                 self.deadlines.pop(job_id, None)
+
+    def _correct_transcript_paragraphs(
+        self,
+        job_id: str,
+        paragraphs: list[tuple[float, str]],
+        *,
+        context: str = "",
+        glossary: str = "",
+    ) -> list[tuple[float, str]]:
+        corrected: list[tuple[float, str]] = []
+        total = max(1, len(paragraphs))
+        changed = 0
+        rejected = 0
+        accepted = 0
+        for index, (start, text) in enumerate(paragraphs, start=1):
+            self._check_cancelled(job_id)
+            self._update(
+                job_id,
+                stage="correcting",
+                progress=36 + int(index * 11 / total),
+                detail=f"Corrigiendo conservadoramente fragmento {index} de {total} con Qwen 14B...",
+            )
+            outcome = self.corrector.correct(text, context=context, glossary=glossary)
+            self._check_cancelled(job_id)
+            if outcome.accepted:
+                accepted += 1
+                changed += int(outcome.changed)
+                corrected.append((start, outcome.text))
+            else:
+                rejected += 1
+                corrected.append((start, text))
+                LOG.warning(
+                    "media job %s rejected ASR correction paragraph %s: %s",
+                    job_id,
+                    index,
+                    outcome.detail,
+                )
+        completed = bool(paragraphs) and accepted == len(paragraphs)
+        warnings = list(self._job(job_id).warnings)
+        if rejected and "asr_correction_partial" not in warnings:
+            warnings.append("asr_correction_partial")
+        self._update(
+            job_id,
+            correction_completed=completed,
+            correction_changed_paragraphs=changed,
+            correction_rejected_paragraphs=rejected,
+            warnings=warnings,
+        )
+        return corrected
 
     def _translate_and_synthesize(
         self,
