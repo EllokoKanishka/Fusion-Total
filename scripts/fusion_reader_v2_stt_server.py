@@ -92,9 +92,10 @@ def load_model():
 
 MODEL, LOAD_MS = load_model()
 try:
-    TRANSCRIBE_PARAMETERS = set(inspect.signature(MODEL.transcribe).parameters)
-except (TypeError, ValueError):
-    TRANSCRIBE_PARAMETERS = set()
+    transcribe_method = getattr(MODEL, "transcribe")
+    TRANSCRIBE_PARAMETERS: set[str] | None = set(inspect.signature(transcribe_method).parameters)
+except (AttributeError, TypeError, ValueError):
+    TRANSCRIBE_PARAMETERS = None
 
 
 def _context_options() -> dict:
@@ -103,13 +104,13 @@ def _context_options() -> dict:
     if INITIAL_PROMPT:
         prompt_parts.append(INITIAL_PROMPT)
     if HOTWORDS:
-        if not TRANSCRIBE_PARAMETERS or "hotwords" in TRANSCRIBE_PARAMETERS:
+        if TRANSCRIBE_PARAMETERS is not None and "hotwords" in TRANSCRIBE_PARAMETERS:
             options["hotwords"] = HOTWORDS
         else:
             # Older faster-whisper versions can still receive the terms through
             # Whisper's initial prompt even when native hotword biasing is absent.
             prompt_parts.append(f"Vocabulario relevante: {HOTWORDS}")
-    if prompt_parts and (not TRANSCRIBE_PARAMETERS or "initial_prompt" in TRANSCRIBE_PARAMETERS):
+    if prompt_parts and (TRANSCRIBE_PARAMETERS is None or "initial_prompt" in TRANSCRIBE_PARAMETERS):
         options["initial_prompt"] = _bounded_text(" ".join(prompt_parts))
     return options
 
@@ -275,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
                     "context_biasing": {
                         "initial_prompt": bool(INITIAL_PROMPT),
                         "hotwords": bool(HOTWORDS),
-                        "native_hotwords": bool(not TRANSCRIBE_PARAMETERS or "hotwords" in TRANSCRIBE_PARAMETERS),
+                        "native_hotwords": bool(TRANSCRIBE_PARAMETERS and "hotwords" in TRANSCRIBE_PARAMETERS),
                     },
                 },
             )
