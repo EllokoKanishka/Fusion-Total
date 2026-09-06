@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import sys
 
-_SAFE_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-")
+_SAFE_BYTES = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-"
+)
 
 
 def escape_systemd_path(path: str) -> str:
