@@ -1,0 +1,35 @@
+name: One-shot stale TTS wait cleanup
+
+on:
+  push:
+    branches:
+      - fix/dictation-reader-lucy-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/dictation-reader-lucy-reliability
+          fetch-depth: 0
+      - name: Remove stale wait variable and validate shell
+        run: |
+          sed -i '/^GPU_TTS_WAIT_SECONDS=/d' scripts/start_fusion_reader_v2.sh
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y shellcheck >/dev/null
+          bash -n scripts/start_fusion_reader_v2.sh
+          shellcheck scripts/start_fusion_reader_v2.sh
+          git diff --check
+      - name: Commit and remove helper
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/start_fusion_reader_v2.sh
+          git commit -m 'fix(startup): remove stale TTS wait setting'
+          git rm .github/workflows/one-shot-remove-stale-tts-wait.yml
+          git commit -m 'chore: remove one-shot shellcheck helper'
+          git push origin HEAD:fix/dictation-reader-lucy-reliability
