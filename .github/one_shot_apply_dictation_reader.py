@@ -1,0 +1,700 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:80]!r}")
+    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+# 1) Deterministic, bounded proofreading command.
+replace_once(
+    "fusion_reader_v2/dictation.py",
+    "\ndef _read_instruction(command: str) -> DictationInstruction | None:\n",
+    '''
+def _proofread_instruction(command: str) -> DictationInstruction | None:
+    match = re.fullmatch(
+        r"(?:correg[ií]|corrige|corregir|revis[aá]|revisa|revisar|arregl[aá]|arregla|arreglar)\\s*(.*)",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    request = str(match.group(1) or "").strip(" .,:;!?")
+    lowered = request.lower()
+    if not request or lowered in {
+        "todo",
+        "el texto",
+        "todo el texto",
+        "el borrador",
+        "todo el borrador",
+        "el documento",
+        "completo",
+        "completo el texto",
+    }:
+        return DictationInstruction("proofread", scope="all")
+    if re.fullmatch(r"(?:la\\s+)?selecci[oó]n|esto|este\\s+fragmento|este\\s+tramo", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="selection")
+    if re.fullmatch(r"(?:el\\s+)?(?:p[aá]rrafo\\s+actual|este\\s+p[aá]rrafo)", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="current_paragraph")
+    if re.fullmatch(r"(?:el\\s+)?(?:[uú]ltimo|final)\\s+p[aá]rrafo", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="last_paragraph")
+    if re.fullmatch(r"(?:el\\s+)?p[aá]rrafo\\s+anterior", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="previous_paragraph")
+    return None
+
+
+def _read_instruction(command: str) -> DictationInstruction | None:
+''',
+)
+replace_once(
+    "fusion_reader_v2/dictation.py",
+    "    read = _read_instruction(command)\n    if read is not None:\n        return read\n",
+    "    proofread = _proofread_instruction(command)\n    if proofread is not None:\n        return proofread\n\n    read = _read_instruction(command)\n    if read is not None:\n        return read\n",
+)
+
+# 2) Assistant schema understands proofread and tolerates one JSON object
+# surrounded by harmless model chatter before enforcing the bounded schema.
+replace_once(
+    "fusion_reader_v2/dictation_assistant.py",
+    '    "noop",\n}',
+    '    "noop",\n    "proofread",\n}',
+)
+replace_once(
+    "fusion_reader_v2/dictation_assistant.py",
+    '_ALLOWED_READ_SCOPES = {\n',
+    '_ALLOWED_PROOFREAD_SCOPES = {"all", "selection", "current_paragraph", "previous_paragraph", "last_paragraph"}\n_ALLOWED_READ_SCOPES = {\n',
+)
+replace_once(
+    "fusion_reader_v2/dictation_assistant.py",
+    '            "replace_selection sólo si hay selección. "\n            "Para reescribir un párrafo sin selección, devolvé replace con el párrafo exacto en target y la nueva versión en text. "\n',
+    '            "replace_selection sólo si hay selección. "\n            "proofread sirve para corregir ortografía/ASR de forma conservadora y sólo usa scope all, selection, current_paragraph, previous_paragraph o last_paragraph; no incluyas el texto corregido. "\n            "Para reescribir un párrafo sin selección por una orden editorial explícita, devolvé replace con el párrafo exacto en target y la nueva versión en text. "\n',
+)
+replace_once(
+    "fusion_reader_v2/dictation_assistant.py",
+    '''        try:
+            payload = json.loads(clean)
+        except (TypeError, ValueError):
+            return None, "assistant_invalid_json"
+        if not isinstance(payload, dict):
+            return None, "assistant_invalid_instruction"
+''',
+    '''        try:
+            payload = json.loads(clean)
+        except (TypeError, ValueError):
+            payload = None
+            decoder = json.JSONDecoder()
+            for index, character in enumerate(clean):
+                if character != "{":
+                    continue
+                try:
+                    candidate, _ = decoder.raw_decode(clean[index:])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(candidate, dict):
+                    payload = candidate
+                    break
+        if payload is None:
+            return None, "assistant_invalid_json"
+        if not isinstance(payload, dict):
+            return None, "assistant_invalid_instruction"
+''',
+)
+replace_once(
+    "fusion_reader_v2/dictation_assistant.py",
+    '''        if kind == "read":
+            if scope not in _ALLOWED_READ_SCOPES:
+                return None, "assistant_invalid_read_scope"
+''',
+    '''        if kind == "proofread":
+            if scope not in _ALLOWED_PROOFREAD_SCOPES:
+                return None, "assistant_invalid_proofread_scope"
+            if text or target or number or all_matches:
+                return None, "assistant_invalid_instruction"
+        if kind == "read":
+            if scope not in _ALLOWED_READ_SCOPES:
+                return None, "assistant_invalid_read_scope"
+''',
+)
+
+# 3) Native Ollama structured outputs use deterministic temperature 0.
+replace_once(
+    "fusion_reader_v2/conversation.py",
+    '''        schema: dict | None = None,
+        keep_alive: str | int | None = None,
+    ) -> ChatResult:
+''',
+    '''        schema: dict | None = None,
+        keep_alive: str | int | None = None,
+        temperature: float | None = None,
+    ) -> ChatResult:
+''',
+)
+replace_once(
+    "fusion_reader_v2/conversation.py",
+    '''                "temperature": float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4"),
+''',
+    '''                "temperature": (
+                    float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4")
+                    if temperature is None
+                    else float(temperature)
+                ),
+''',
+)
+replace_once(
+    "fusion_reader_v2/conversation.py",
+    '''        return self._chat(
+            messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+            schema=schema,
+            keep_alive=keep_alive,
+        )
+''',
+    '''        return self._chat(
+            messages,
+            model=model,
+            think=think,
+            num_predict=num_predict,
+            schema=schema,
+            keep_alive=keep_alive,
+            temperature=0.0,
+        )
+''',
+)
+
+# 4) Request-scoped conservative proofreading endpoint reuses the already
+# validated Qwen14B corrector and preserves paragraph separators.
+replace_once(
+    "fusion_reader_v2/facade.py",
+    "from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider\n",
+    "from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider\nfrom .transcript_correction import OllamaTranscriptCorrector\n",
+)
+replace_once(
+    "fusion_reader_v2/facade.py",
+    "        self.dictation_assistant = dictation_assistant or DictationAssistant()\n",
+    "        self.dictation_assistant = dictation_assistant or DictationAssistant()\n        self._dictation_corrector = OllamaTranscriptCorrector()\n",
+)
+replace_once(
+    "fusion_reader_v2/facade.py",
+    "    def dictation_speak(self, text: str) -> dict:\n",
+    '''    def dictation_proofread(self, text: str) -> dict:
+        original = str(text or "")
+        if not original.strip():
+            return {"ok": False, "error": "empty_dictation_proofread", "detail": "El tramo está vacío."}
+        if len(original) > 12_000:
+            return {
+                "ok": False,
+                "error": "dictation_proofread_too_large",
+                "detail": "Seleccioná un tramo de hasta 12.000 caracteres para corregirlo con seguridad.",
+                "max_characters": 12_000,
+            }
+        health = dict(self._dictation_corrector.health() or {})
+        if not health.get("ok"):
+            return {
+                "ok": False,
+                "error": "dictation_proofread_unavailable",
+                "detail": "El corrector local Qwen 14B no está disponible.",
+                "technical_detail": str(health.get("detail") or "corrector_unavailable"),
+                "model": str(health.get("model") or getattr(self._dictation_corrector, "model", "")),
+            }
+
+        safe_rejections = {
+            "empty_candidate",
+            "explanatory_output",
+            "protocol_echo",
+            "word_count_delta",
+            "character_length_delta",
+            "rewrite_risk",
+        }
+        parts = re.split(r"(\n\s*\n+)", original)
+        output: list[str] = []
+        processed = accepted = changed = unchanged = rejected = 0
+        duration_ms = 0
+        model = str(health.get("model") or getattr(self._dictation_corrector, "model", ""))
+        for part in parts:
+            if not part or re.fullmatch(r"\n\s*\n+", part):
+                output.append(part)
+                continue
+            core = part.strip()
+            if not core:
+                output.append(part)
+                continue
+            processed += 1
+            outcome = self._dictation_corrector.correct(
+                core,
+                context="Borrador de dictado de Panda Fusión. Corregí sólo errores evidentes de ASR, ortografía y puntuación.",
+            )
+            duration_ms += int(outcome.duration_ms or 0)
+            model = str(outcome.model or model)
+            if not outcome.accepted:
+                if outcome.detail not in safe_rejections:
+                    return {
+                        "ok": False,
+                        "error": "dictation_proofread_failed",
+                        "detail": "La corrección local falló; conservé el borrador sin cambios.",
+                        "technical_detail": str(outcome.detail or "corrector_failed"),
+                        "model": model,
+                        "text": original,
+                        "processed_parts": processed,
+                        "duration_ms": duration_ms,
+                    }
+                rejected += 1
+                output.append(part)
+                continue
+            accepted += 1
+            if outcome.changed:
+                changed += 1
+            else:
+                unchanged += 1
+            leading = part[: len(part) - len(part.lstrip())]
+            trailing = part[len(part.rstrip()) :]
+            output.append(f"{leading}{outcome.text}{trailing}")
+
+        corrected = "".join(output)
+        return {
+            "ok": True,
+            "text": corrected,
+            "model": model,
+            "completed": True,
+            "processed_parts": processed,
+            "accepted_parts": accepted,
+            "changed_parts": changed,
+            "unchanged_parts": unchanged,
+            "rejected_parts": rejected,
+            "duration_ms": duration_ms,
+            "warning": "dictation_proofread_partial" if rejected else "",
+        }
+
+    def dictation_speak(self, text: str) -> dict:
+''',
+)
+replace_once(
+    "fusion_reader_v2/web/routes/dictation.py",
+    '''    if path == "/api/dictation/speak":
+        responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
+        return True
+''',
+    '''    if path == "/api/dictation/proofread":
+        responder._json(200, responder.app.dictation_proofread(str(payload.get("text") or "")))
+        return True
+    if path == "/api/dictation/speak":
+        responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
+        return True
+''',
+)
+
+# 5) Frontend: no duplicated wake word; proofread is a first-class,
+# undoable operation instead of an impossible generic replace.
+replace_once(
+    "fusion_reader_v2/web/static/js/dictation.mjs",
+    '''export function invokedInterpretationPayload(transcript) {
+  return {
+    text: `Lucy, ${cleanText(transcript)}`,
+    commands_enabled: true,
+    require_wake_word: true
+  };
+}
+''',
+    '''export function hasLucyInvocation(value) {
+  return /^l[uú]c(?:y|[ií])(?:\\b|(?=[,.:;!?_\\-…]))/iu.test(cleanText(value));
+}
+
+export function invokedInterpretationPayload(transcript) {
+  const clean = cleanText(transcript);
+  return {
+    text: hasLucyInvocation(clean) ? clean : `Lucy, ${clean}`,
+    commands_enabled: true,
+    require_wake_word: true
+  };
+}
+''',
+)
+replace_once(
+    "fusion_reader_v2/web/static/js/dictation.mjs",
+    "  async function requestAssistant(transcript) {\n",
+    '''  async function requestProofread(instruction, transcript = '') {
+    const selection = readTextForInstruction(editor, { ...instruction, kind: 'read' });
+    if (selection.error) {
+      addActivity(selection.error);
+      return;
+    }
+    flushManualHistory();
+    const before = snapshot(editor);
+    const source = before.value.slice(selection.start, selection.end);
+    setStatus('Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
+    try {
+      const data = await api('/api/dictation/proofread', { text: source });
+      if (editor.value !== before.value) {
+        addActivity('El borrador cambió mientras corregía; descarté la respuesta para no pisar tus cambios.');
+        return;
+      }
+      const revised = String(data.text ?? source);
+      if (revised !== source) {
+        replaceRange(editor, revised, selection.start, selection.end);
+        pushUndo(before);
+        redoStack.length = 0;
+        schedulePersist();
+        editor.focus();
+      }
+      const changed = Number(data.changed_parts || 0);
+      const rejected = Number(data.rejected_parts || 0);
+      addActivity(
+        `Corrección conservadora terminada con ${data.model || 'Qwen 14B'}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
+        `${rejected ? ` · ${rejected} propuesta${rejected === 1 ? '' : 's'} rechazada${rejected === 1 ? '' : 's'} por seguridad` : ''}` +
+        ` · ${Number(data.duration_ms || 0)} ms.`
+      );
+      return { changed: revised !== source, message: '' };
+    } catch (error) {
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      const technical = error && error.data && error.data.technical_detail ? ` (${error.data.technical_detail})` : '';
+      addActivity(`No pude corregir el tramo: ${detail}${technical}. No cambié el texto.`);
+    } finally {
+      setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+    }
+  }
+
+  async function requestAssistant(transcript) {
+''',
+)
+replace_once(
+    "fusion_reader_v2/web/static/js/dictation.mjs",
+    "    if (item.kind === 'read') {\n",
+    "    if (item.kind === 'proofread') {\n      return requestProofread(item, transcript);\n    }\n    if (item.kind === 'read') {\n",
+)
+replace_once(
+    "fusion_reader_v2/web/static/js/dictation.mjs",
+    "    if (item.kind === 'noop' && (/^lucy(?:\\b|(?=[,.:;!?_-]))/i.test(String(transcript || '').trim()) || assistantAttempted)) {\n",
+    "    if (item.kind === 'noop' && (hasLucyInvocation(transcript) || assistantAttempted)) {\n",
+)
+replace_once(
+    "fusion_reader_v2/web/static/js/dictation.mjs",
+    "      const invoked = claimedWakeCommand || /^lucy(?:\\b|(?=[,.:;!?_-]))/i.test(appliedTranscript);\n",
+    "      const invoked = claimedWakeCommand || hasLucyInvocation(appliedTranscript);\n",
+)
+
+# 6) fusionctl/start_fusion_reader_v2 now owns the same TTS lifecycle
+# expectation as desktop/systemd: ensure GPU or CPU TTS before web server.
+replace_once(
+    "scripts/start_fusion_reader_v2.sh",
+    '''LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
+PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
+STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
+''',
+    '''LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
+GPU_TTS_LOG_FILE="$LOG_DIR/alltalk_gpu_5090.log"
+CPU_TTS_LOG_FILE="$LOG_DIR/alltalk_cpu.log"
+PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
+STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
+TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-90}"
+TTS_CPU_START_WAIT_SECONDS="${FUSION_READER_TTS_CPU_START_WAIT_SECONDS:-60}"
+TTS_CHILD_PID=""
+''',
+)
+start = Path("scripts/start_fusion_reader_v2.sh")
+text = start.read_text(encoding="utf-8")
+begin = text.index("select_fusion_tts_url() {")
+end = text.index('current_commit="$(current_commit)"', begin)
+replacement = '''cpu_tts_ready() {
+  curl -fsS --max-time 2 "${CPU_TTS_URL}/api/ready" >/dev/null 2>&1
+}
+
+wait_until_tts_ready() {
+  local probe="$1"
+  local child_pid="${2:-}"
+  local wait_seconds="${3:-60}"
+  local deadline
+  deadline=$(( $(date +%s) + wait_seconds ))
+  while (( $(date +%s) < deadline )); do
+    if "$probe"; then
+      return 0
+    fi
+    if [[ -n "$child_pid" ]] && ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+start_fusion_gpu_tts() {
+  nohup "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" >>"$GPU_TTS_LOG_FILE" 2>&1 &
+  TTS_CHILD_PID="$!"
+}
+
+start_fusion_cpu_tts() {
+  nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 &
+  TTS_CHILD_PID="$!"
+}
+
+select_gpu_tts() {
+  export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
+  log_msg "Fusion TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
+}
+
+select_cpu_tts() {
+  export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"
+  log_msg "Fusion TTS fallback selected: ${FUSION_READER_ALLTALK_URL}"
+}
+
+ensure_fusion_tts_url() {
+  local child_pid=""
+  if fusion_gpu_ready; then
+    select_gpu_tts
+    return 0
+  fi
+  if cpu_tts_ready; then
+    select_cpu_tts
+    return 0
+  fi
+
+  if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
+    log_msg "Modo convivencia GPU: TTS CPU no está activo; iniciando fallback propio."
+    start_fusion_cpu_tts
+    child_pid="$TTS_CHILD_PID"
+    if wait_until_tts_ready cpu_tts_ready "$child_pid" "$TTS_CPU_START_WAIT_SECONDS"; then
+      select_cpu_tts
+      return 0
+    fi
+    export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"
+    log_msg "WARN: Fusion arrancará sin TTS operativo; falló el fallback CPU. Revisá $CPU_TTS_LOG_FILE"
+    return 1
+  fi
+
+  log_msg "Fusion TTS GPU no está activo; iniciando servicio propio en ${GPU_TTS_URL}."
+  start_fusion_gpu_tts
+  child_pid="$TTS_CHILD_PID"
+  if wait_until_tts_ready fusion_gpu_ready "$child_pid" "$TTS_GPU_START_WAIT_SECONDS"; then
+    select_gpu_tts
+    return 0
+  fi
+  if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
+    kill "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+
+  if cpu_tts_ready; then
+    select_cpu_tts
+    return 0
+  fi
+  log_msg "Fusion TTS GPU no quedó listo; iniciando fallback CPU propio en ${CPU_TTS_URL}."
+  start_fusion_cpu_tts
+  child_pid="$TTS_CHILD_PID"
+  if wait_until_tts_ready cpu_tts_ready "$child_pid" "$TTS_CPU_START_WAIT_SECONDS"; then
+    select_cpu_tts
+    return 0
+  fi
+
+  export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
+  log_msg "WARN: Fusion arrancará sin TTS operativo; fallaron GPU y CPU. Revisá $GPU_TTS_LOG_FILE y $CPU_TTS_LOG_FILE"
+  return 1
+}
+
+ensure_fusion_tts_url || true
+
+'''
+start.write_text(text[:begin] + replacement + text[end:], encoding="utf-8")
+
+replace_once(
+    "scripts/fusionctl.py",
+    'result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)',
+    'result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=240.0, check=False)',
+)
+
+# 7) Focused regression coverage.
+Path("tests/test_dictation_reliability_fix.py").write_text(
+    '''from __future__ import annotations
+
+import json
+import unittest
+from unittest import mock
+
+from fusion_reader_v2 import conversation, interpret_dictation_transcript
+from fusion_reader_v2.dictation_assistant import DictationAssistant
+from fusion_reader_v2.transcript_correction import CorrectionOutcome
+from tests.helpers import test_app
+
+
+class _Response:
+    def __init__(self, payload: object) -> None:
+        self.raw = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self) -> bytes:
+        return self.raw
+
+
+class DictationReliabilityFixTests(unittest.TestCase):
+    def test_proofread_is_a_first_class_wake_command(self) -> None:
+        cases = {
+            "Lucy, corregí el texto": "all",
+            "Lucy, revisá todo el borrador": "all",
+            "Lucy, arreglá la selección": "selection",
+            "Lucy, corregí este párrafo": "current_paragraph",
+            "Lucy, revisá el último párrafo": "last_paragraph",
+            "Lucy, corregí el párrafo anterior": "previous_paragraph",
+        }
+        for utterance, scope in cases.items():
+            with self.subTest(utterance=utterance):
+                instruction = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((instruction.kind, instruction.scope), ("proofread", scope))
+
+    def test_assistant_accepts_one_schema_valid_object_inside_chatter(self) -> None:
+        instruction, detail = DictationAssistant._parse_instruction(
+            'Claro. {"kind":"proofread","text":"","target":"","scope":"all","number":0,"all_matches":false} Listo.'
+        )
+        self.assertEqual(detail, "")
+        self.assertIsNotNone(instruction)
+        self.assertEqual((instruction.kind, instruction.scope), ("proofread", "all"))
+        invalid, reason = DictationAssistant._parse_instruction(
+            '{"kind":"proofread","text":"reescritura","target":"","scope":"all","number":0,"all_matches":false}'
+        )
+        self.assertIsNone(invalid)
+        self.assertEqual(reason, "assistant_invalid_instruction")
+
+    def test_ollama_structured_output_forces_temperature_zero(self) -> None:
+        provider = conversation.OllamaChatProvider(base_url="http://local", default_model="qwen3:14b-q8_0")
+        captured: dict = {}
+
+        def respond(request, timeout=0):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            return _Response({"message": {"content": '{"kind":"noop"}'}})
+
+        schema = {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["noop"]}},
+            "required": ["kind"],
+            "additionalProperties": False,
+        }
+        with mock.patch.object(conversation.urllib.request, "urlopen", side_effect=respond):
+            result = provider.chat_structured([{"role": "user", "content": "orden"}], schema=schema, think=False)
+        self.assertTrue(result.ok)
+        self.assertEqual(captured["options"]["temperature"], 0.0)
+
+    def test_proofread_preserves_safe_rejections_and_paragraph_breaks(self) -> None:
+        class Corrector:
+            model = "qwen3:14b-q8_0"
+
+            def health(self):
+                return {"ok": True, "model": self.model, "detail": "ready"}
+
+            def correct(self, text, **_kwargs):
+                if text == "hola mundo":
+                    return CorrectionOutcome("Hola, mundo.", True, True, "accepted", 11, self.model)
+                return CorrectionOutcome(text, False, False, "rewrite_risk", 7, self.model)
+
+        app = test_app()
+        app._dictation_corrector = Corrector()
+        result = app.dictation_proofread("hola mundo\n\nno me reescribas")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["text"], "Hola, mundo.\n\nno me reescribas")
+        self.assertEqual(result["processed_parts"], 2)
+        self.assertEqual(result["accepted_parts"], 1)
+        self.assertEqual(result["changed_parts"], 1)
+        self.assertEqual(result["rejected_parts"], 1)
+        self.assertEqual(result["warning"], "dictation_proofread_partial")
+
+    def test_proofread_transport_failure_is_atomic(self) -> None:
+        class FailingCorrector:
+            model = "qwen3:14b-q8_0"
+
+            def health(self):
+                return {"ok": True, "model": self.model}
+
+            def correct(self, text, **_kwargs):
+                return CorrectionOutcome(text, False, False, "connection_refused", 5, self.model)
+
+        app = test_app()
+        app._dictation_corrector = FailingCorrector()
+        source = "No cambies este texto si falla el modelo."
+        result = app.dictation_proofread(source)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["text"], source)
+        self.assertEqual(result["technical_detail"], "connection_refused")
+
+    def test_proofread_fails_closed_when_model_is_unavailable_or_input_is_unbounded(self) -> None:
+        class DownCorrector:
+            model = "qwen3:14b-q8_0"
+
+            def health(self):
+                return {"ok": False, "model": self.model, "detail": "ollama_down"}
+
+        app = test_app()
+        app._dictation_corrector = DownCorrector()
+        self.assertEqual(app.dictation_proofread("texto")["error"], "dictation_proofread_unavailable")
+        self.assertEqual(app.dictation_proofread("x" * 12_001)["error"], "dictation_proofread_too_large")
+        self.assertEqual(app.dictation_proofread("   ")["error"], "empty_dictation_proofread")
+
+    def test_fusionctl_start_path_ensures_tts_instead_of_only_selecting_a_dead_url(self) -> None:
+        script = open("scripts/start_fusion_reader_v2.sh", encoding="utf-8").read()
+        self.assertIn("start_reader_neural_tts_gpu_5090.sh", script)
+        self.assertIn("start_reader_neural_tts.sh", script)
+        self.assertIn("wait_until_tts_ready", script)
+        self.assertIn("ensure_fusion_tts_url", script)
+        self.assertIn("Fusion arrancará sin TTS operativo", script)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+    encoding="utf-8",
+)
+
+Path("tests/dictation_reliability_fix.test.js").write_text(
+    '''const assert = require('node:assert/strict');
+const path = require('node:path');
+const test = require('node:test');
+const { pathToFileURL } = require('node:url');
+
+const moduleUrl = pathToFileURL(path.resolve('fusion_reader_v2/web/static/js/dictation.mjs')).href;
+
+test('armed wake payload never duplicates Lucy when STT repeats the wake word', async () => {
+  const { invokedInterpretationPayload, hasLucyInvocation } = await import(moduleUrl);
+  assert.equal(hasLucyInvocation('Lucy, corregí el texto'), true);
+  assert.equal(hasLucyInvocation('Lúci, corregí el texto'), true);
+  assert.equal(hasLucyInvocation('corregí el texto'), false);
+  assert.deepEqual(invokedInterpretationPayload('Lucy, corregí el texto'), {
+    text: 'Lucy, corregí el texto',
+    commands_enabled: true,
+    require_wake_word: true
+  });
+  assert.deepEqual(invokedInterpretationPayload('corregí el texto'), {
+    text: 'Lucy, corregí el texto',
+    commands_enabled: true,
+    require_wake_word: true
+  });
+});
+''',
+    encoding="utf-8",
+)
+
+# 8) Document the newly explicit contracts.
+operations = Path("docs/OPERATIONS.md")
+operations.write_text(
+    operations.read_text(encoding="utf-8")
+    + "\n\n## Dictation/reader startup reliability (2026-09)\n\n"
+    "`fusionctl start` and `fusionctl restart` now ensure Panda's own TTS before starting the web server, matching the desktop/systemd lifecycle. The preferred service remains owner-validated GPU AllTalk on `7853`, with CPU `7851` fallback. If both fail, the UI may still start but the warning is explicit in the server log.\n\n"
+    "The Dictation workspace treats `Lucy, corregí/revisá/arreglá ...` as a bounded proofreading operation. It uses the installed Qwen3 14B Q8 corrector with thinking off and deterministic sampling, preserves paragraph boundaries, and keeps the original text whenever the conservative guard rejects a rewrite.\n",
+    encoding="utf-8",
+)
+contracts = Path("docs/CONTRACTS.md")
+contracts.write_text(
+    contracts.read_text(encoding="utf-8")
+    + "\n\n### Dictation proofreading\n\n"
+    "- `POST /api/dictation/proofread`: request `{text}`; bounded to 12,000 characters. Returns corrected `text`, model/timing counters and accepted/rejected-part telemetry. Operational failures are atomic and preserve the supplied text.\n"
+    "- `proofread` is a bounded dictation instruction with scopes `all`, `selection`, `current_paragraph`, `previous_paragraph`, or `last_paragraph`. It does not permit a model to return a whole-document editor operation.\n"
+    "- Native Ollama structured classification runs with thinking disabled and temperature `0`; final instructions are still schema-validated before any editor mutation.\n",
+    encoding="utf-8",
+)
