@@ -57,7 +57,7 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
             "FUSION_READER_LOG_DIR": str(settings.paths.logs),
         }
     )
-    result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=180.0, check=False)
+    result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=240.0, check=False)
     return int(result.returncode)
 
 

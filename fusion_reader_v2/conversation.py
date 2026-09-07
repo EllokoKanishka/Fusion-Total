@@ -171,6 +171,7 @@ class OllamaChatProvider(ChatProvider):
         num_predict: int | None = None,
         schema: dict | None = None,
         keep_alive: str | int | None = None,
+        temperature: float | None = None,
     ) -> ChatResult:
         started = time.perf_counter()
         selected_model = model or self.default_model
@@ -186,7 +187,11 @@ class OllamaChatProvider(ChatProvider):
             "stream": False,
             "think": selected_think,
             "options": {
-                "temperature": float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4"),
+                "temperature": (
+                    float(environment_value("FUSION_READER_CHAT_TEMPERATURE", "0.4") or "0.4")
+                    if temperature is None
+                    else float(temperature)
+                ),
                 "num_ctx": int(environment_value("FUSION_READER_CHAT_NUM_CTX", "32768") or "32768"),
                 "num_predict": selected_num_predict,
             },
@@ -258,6 +263,7 @@ class OllamaChatProvider(ChatProvider):
             num_predict=num_predict,
             schema=schema,
             keep_alive=keep_alive,
+            temperature=0.0,
         )
 
     def preload_model(self, model: str = "", *, keep_alive: str | int = "10m") -> dict:

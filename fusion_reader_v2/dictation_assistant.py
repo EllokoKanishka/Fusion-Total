@@ -22,7 +22,9 @@ _ALLOWED_KINDS = {
     "read",
     "stop_listening",
     "noop",
+    "proofread",
 }
+_ALLOWED_PROOFREAD_SCOPES = {"all", "selection", "current_paragraph", "previous_paragraph", "last_paragraph"}
 _ALLOWED_READ_SCOPES = {
     "all",
     "selection",
@@ -222,7 +224,8 @@ class DictationAssistant:
             "delete_from significa borrar desde target hasta el final; delete_last_words usa number; "
             "replace_last_words usa number y text. "
             "replace_selection sólo si hay selección. "
-            "Para reescribir un párrafo sin selección, devolvé replace con el párrafo exacto en target y la nueva versión en text. "
+            "proofread sirve para corregir ortografía/ASR de forma conservadora y sólo usa scope all, selection, current_paragraph, previous_paragraph o last_paragraph; no incluyas el texto corregido. "
+            "Para reescribir un párrafo sin selección por una orden editorial explícita, devolvé replace con el párrafo exacto en target y la nueva versión en text. "
             "Si la intención o el ancla no son seguras, devolvé kind=noop. Nunca devuelvas el borrador completo. "
             f"Esquema: {schema}"
         )
@@ -243,6 +246,19 @@ class DictationAssistant:
         try:
             payload = json.loads(clean)
         except (TypeError, ValueError):
+            payload = None
+            decoder = json.JSONDecoder()
+            for index, character in enumerate(clean):
+                if character != "{":
+                    continue
+                try:
+                    candidate, _ = decoder.raw_decode(clean[index:])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(candidate, dict):
+                    payload = candidate
+                    break
+        if payload is None:
             return None, "assistant_invalid_json"
         if not isinstance(payload, dict):
             return None, "assistant_invalid_instruction"
@@ -272,6 +288,11 @@ class DictationAssistant:
             return None, "assistant_invalid_word_count"
         if kind in {"insert", "replace", "replace_selection", "replace_last_words"} and not text:
             return None, "assistant_missing_text"
+        if kind == "proofread":
+            if scope not in _ALLOWED_PROOFREAD_SCOPES:
+                return None, "assistant_invalid_proofread_scope"
+            if text or target or number or all_matches:
+                return None, "assistant_invalid_instruction"
         if kind == "read":
             if scope not in _ALLOWED_READ_SCOPES:
                 return None, "assistant_invalid_read_scope"

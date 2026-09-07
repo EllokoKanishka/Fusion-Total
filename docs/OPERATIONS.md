@@ -343,3 +343,10 @@ Aclaración:
 - si falla investigación externa: responder humano, no exponer errores crudos
 - si `Dialogar` devuelve texto pero no audio: mirar `voice_ok`, `audio_available` y `detail`
 - si `reasoning_mode_requested=supreme` en voz: esperar `applied_mode=thinking` salvo override explícito
+
+
+## Dictation/reader startup reliability (2026-09)
+
+`fusionctl start` and `fusionctl restart` now ensure Panda's own TTS before starting the web server, matching the desktop/systemd lifecycle. The preferred service remains owner-validated GPU AllTalk on `7853`, with CPU `7851` fallback. If both fail, the UI may still start but the warning is explicit in the server log.
+
+The Dictation workspace treats `Lucy, corregí/revisá/arreglá ...` as a bounded proofreading operation. It uses the installed Qwen3 14B Q8 corrector with thinking off and deterministic sampling, preserves paragraph boundaries, and keeps the original text whenever the conservative guard rejects a rewrite.

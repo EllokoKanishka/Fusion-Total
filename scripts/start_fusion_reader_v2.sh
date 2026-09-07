@@ -16,8 +16,13 @@ RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/ru
 LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}}"
 OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
+GPU_TTS_LOG_FILE="$LOG_DIR/alltalk_gpu_5090.log"
+CPU_TTS_LOG_FILE="$LOG_DIR/alltalk_cpu.log"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
+TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-90}"
+TTS_CPU_START_WAIT_SECONDS="${FUSION_READER_TTS_CPU_START_WAIT_SECONDS:-60}"
+TTS_CHILD_PID=""
 
 if ! PYTHON_BIN="$(find_python)"; then
   echo "[ERROR] No se encontró ningún intérprete de Python válido con las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
@@ -99,44 +104,103 @@ fusion_gpu_ready() {
   curl -fsS --max-time 1 "${GPU_TTS_URL}/api/ready" >/dev/null 2>&1 && fusion_tts_owner_ok
 }
 
-select_fusion_tts_url() {
-  if fusion_gpu_ready; then
-    export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
-    log_msg "Fusion TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
-    return 0
-  fi
+cpu_tts_ready() {
+  curl -fsS --max-time 2 "${CPU_TTS_URL}/api/ready" >/dev/null 2>&1
+}
 
-  gpu_wait_deadline=$(( $(date +%s) + GPU_TTS_WAIT_SECONDS ))
-  while (( $(date +%s) < gpu_wait_deadline )); do
-    if fusion_gpu_ready; then
-      export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
-      log_msg "Fusion TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
+wait_until_tts_ready() {
+  local probe="$1"
+  local child_pid="${2:-}"
+  local wait_seconds="${3:-60}"
+  local deadline
+  deadline=$(( $(date +%s) + wait_seconds ))
+  while (( $(date +%s) < deadline )); do
+    if "$probe"; then
       return 0
+    fi
+    if [[ -n "$child_pid" ]] && ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      return 1
     fi
     sleep 1
   done
+  return 1
+}
 
+start_fusion_gpu_tts() {
+  nohup "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" >>"$GPU_TTS_LOG_FILE" 2>&1 &
+  TTS_CHILD_PID="$!"
+}
+
+start_fusion_cpu_tts() {
+  nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 &
+  TTS_CHILD_PID="$!"
+}
+
+select_gpu_tts() {
+  export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
+  log_msg "Fusion TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
+}
+
+select_cpu_tts() {
   export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"
-  if curl -fsS --max-time 1 "${GPU_TTS_URL}/api/ready" >/dev/null 2>&1; then
-    log_msg "AllTalk en ${GPU_TTS_URL} respondio Ready pero no tiene owner valido; usando fallback: ${FUSION_READER_ALLTALK_URL}"
-  else
-    log_msg "AllTalk GPU Fusion no quedo listo tras ${GPU_TTS_WAIT_SECONDS}s; usando fallback: ${FUSION_READER_ALLTALK_URL}"
-  fi
   log_msg "Fusion TTS fallback selected: ${FUSION_READER_ALLTALK_URL}"
 }
 
-if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
+ensure_fusion_tts_url() {
+  local child_pid=""
   if fusion_gpu_ready; then
-    log_msg "Modo convivencia GPU activo, pero Fusion conserva su TTS GPU owner-valid."
-    select_fusion_tts_url
-  else
-    export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"
-    log_msg "Modo convivencia GPU: usando TTS CPU/fallback: ${FUSION_READER_ALLTALK_URL}"
-    log_msg "Fusion TTS fallback selected: ${FUSION_READER_ALLTALK_URL}"
+    select_gpu_tts
+    return 0
   fi
-else
-  select_fusion_tts_url
-fi
+  if cpu_tts_ready; then
+    select_cpu_tts
+    return 0
+  fi
+
+  if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
+    log_msg "Modo convivencia GPU: TTS CPU no está activo; iniciando fallback propio."
+    start_fusion_cpu_tts
+    child_pid="$TTS_CHILD_PID"
+    if wait_until_tts_ready cpu_tts_ready "$child_pid" "$TTS_CPU_START_WAIT_SECONDS"; then
+      select_cpu_tts
+      return 0
+    fi
+    export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"
+    log_msg "WARN: Fusion arrancará sin TTS operativo; falló el fallback CPU. Revisá $CPU_TTS_LOG_FILE"
+    return 1
+  fi
+
+  log_msg "Fusion TTS GPU no está activo; iniciando servicio propio en ${GPU_TTS_URL}."
+  start_fusion_gpu_tts
+  child_pid="$TTS_CHILD_PID"
+  if wait_until_tts_ready fusion_gpu_ready "$child_pid" "$TTS_GPU_START_WAIT_SECONDS"; then
+    select_gpu_tts
+    return 0
+  fi
+  if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
+    kill "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+  fi
+
+  if cpu_tts_ready; then
+    select_cpu_tts
+    return 0
+  fi
+  log_msg "Fusion TTS GPU no quedó listo; iniciando fallback CPU propio en ${CPU_TTS_URL}."
+  start_fusion_cpu_tts
+  child_pid="$TTS_CHILD_PID"
+  if wait_until_tts_ready cpu_tts_ready "$child_pid" "$TTS_CPU_START_WAIT_SECONDS"; then
+    select_cpu_tts
+    return 0
+  fi
+
+  export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
+  log_msg "WARN: Fusion arrancará sin TTS operativo; fallaron GPU y CPU. Revisá $GPU_TTS_LOG_FILE y $CPU_TTS_LOG_FILE"
+  return 1
+}
+
+ensure_fusion_tts_url || true
 
 current_commit="$(current_commit)"
 existing_pid="$(listening_pid || true)"
