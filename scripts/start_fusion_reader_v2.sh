@@ -19,7 +19,7 @@ GPU_TTS_LOG_FILE="$LOG_DIR/alltalk_gpu_5090.log"
 CPU_TTS_LOG_FILE="$LOG_DIR/alltalk_cpu.log"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
-TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-90}"
+TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-${FUSION_READER_GPU_TTS_WAIT_SECONDS:-90}}"
 TTS_CPU_START_WAIT_SECONDS="${FUSION_READER_TTS_CPU_START_WAIT_SECONDS:-60}"
 TTS_CHILD_PID=""
 
@@ -210,14 +210,12 @@ if [[ -n "$existing_pid" ]]; then
   status_raw=$(curl -fsS --max-time 2 "$startup_status_url" 2>/dev/null || echo "")
   
   if [[ -n "$status_raw" ]]; then
-    # Parse metadata using python inline
     runtime_data=$(python3 -c "import json, sys; data=json.load(sys.stdin); rt=data.get('runtime', {}); print('|'.join([str(rt.get(k, '')) for k in ['app', 'commit', 'pid']]))" <<< "$status_raw")
     IFS='|' read -r rt_app rt_commit _rt_pid <<< "$runtime_data"
     
     if [[ "$rt_app" == "fusion_reader_v2" ]]; then
       if [[ "$rt_commit" == "$current_commit" ]]; then
         log_msg "Fusion Reader v2 ya está vivo con commit actual (${current_commit}). No se relanza."
-        # Update PID file just in case
         echo "$existing_pid" > "$PID_FILE"
         exit 0
       else
@@ -234,7 +232,6 @@ if [[ -n "$existing_pid" ]]; then
       exit 1
     fi
   else
-    # Status doesn't respond but port is busy. Check if it looks like our server script.
     if [[ -r "/proc/${existing_pid}/cmdline" ]]; then
       cmdline=$(tr '\0' ' ' <"/proc/${existing_pid}/cmdline")
       if [[ "$cmdline" == *"fusion_reader_v2_server.py"* ]]; then
