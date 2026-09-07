@@ -1,0 +1,46 @@
+name: One-shot TTS wait compatibility
+
+on:
+  push:
+    branches:
+      - fix/dictation-reader-lucy-reliability
+
+permissions:
+  contents: write
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/dictation-reader-lucy-reliability
+          fetch-depth: 0
+      - name: Preserve legacy timeout contract
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/start_fusion_reader_v2.sh')
+          text = path.read_text(encoding='utf-8')
+          old = 'TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-90}"'
+          new = 'TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-${FUSION_READER_GPU_TTS_WAIT_SECONDS:-90}}"'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one timeout anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y shellcheck >/dev/null
+          bash -n scripts/start_fusion_reader_v2.sh
+          shellcheck scripts/start_fusion_reader_v2.sh
+          python3 -m pip install -c requirements/constraints-py312.txt -e '.[dev]' >/dev/null
+          python3 -m unittest tests.test_tts.TTSTests.test_fusion_launcher_waits_for_owned_gpu_tts_before_cpu_fallback -v
+          git diff --check
+      - name: Commit and remove helper
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/start_fusion_reader_v2.sh
+          git commit -m 'fix(startup): preserve legacy GPU TTS wait override'
+          git rm .github/workflows/one-shot-tts-wait-compat.yml
+          git commit -m 'chore: remove one-shot TTS compatibility helper'
+          git push origin HEAD:fix/dictation-reader-lucy-reliability
