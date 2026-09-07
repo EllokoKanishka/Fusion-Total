@@ -18,7 +18,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply reliability fixes
-        run: python3 .github/one_shot_apply_dictation_reader.py
+        run: |
+          sed -i "0,/    '''    def dictation_proofread/s//    r'''    def dictation_proofread/" .github/one_shot_apply_dictation_reader.py
+          sed -i "0,/    '''from __future__ import annotations/s//    r'''from __future__ import annotations/" .github/one_shot_apply_dictation_reader.py
+          python3 .github/one_shot_apply_dictation_reader.py
 
       - name: Install focused test dependencies
         run: |
