@@ -44,6 +44,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add fusion_reader_v2 scripts/fusionctl.py scripts/start_fusion_reader_v2.sh tests docs
           git commit -m 'fix(dictation): restore reader voice and reliable Lucy editing'
-          git rm .github/workflows/one-shot-dictation-reader-reliability.yml .github/one_shot_apply_dictation_reader.py
+          git rm -f .github/workflows/one-shot-dictation-reader-reliability.yml .github/one_shot_apply_dictation_reader.py
           git commit -m 'chore: remove one-shot reliability helpers'
           git push origin HEAD:fix/dictation-reader-lucy-reliability
