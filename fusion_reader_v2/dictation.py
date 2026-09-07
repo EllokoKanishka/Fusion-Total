@@ -77,6 +77,38 @@ def _positive_count(value: str) -> int:
     return max(0, min(number, 10_000))
 
 
+def _proofread_instruction(command: str) -> DictationInstruction | None:
+    match = re.fullmatch(
+        r"(?:correg[ií]|corrige|corregir|revis[aá]|revisa|revisar|arregl[aá]|arregla|arreglar)\s*(.*)",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    request = str(match.group(1) or "").strip(" .,:;!?")
+    lowered = request.lower()
+    if not request or lowered in {
+        "todo",
+        "el texto",
+        "todo el texto",
+        "el borrador",
+        "todo el borrador",
+        "el documento",
+        "completo",
+        "completo el texto",
+    }:
+        return DictationInstruction("proofread", scope="all")
+    if re.fullmatch(r"(?:la\s+)?selecci[oó]n|esto|este\s+fragmento|este\s+tramo", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="selection")
+    if re.fullmatch(r"(?:el\s+)?(?:p[aá]rrafo\s+actual|este\s+p[aá]rrafo)", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="current_paragraph")
+    if re.fullmatch(r"(?:el\s+)?(?:[uú]ltimo|final)\s+p[aá]rrafo", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="last_paragraph")
+    if re.fullmatch(r"(?:el\s+)?p[aá]rrafo\s+anterior", request, flags=re.IGNORECASE):
+        return DictationInstruction("proofread", scope="previous_paragraph")
+    return None
+
+
 def _read_instruction(command: str) -> DictationInstruction | None:
     read_match = re.match(
         r"^(?:l[eé]eme|lee(?:me)?|leeme|reproduc[ií]|reproduce)\b\s*(.*)$",
@@ -224,6 +256,10 @@ def interpret_dictation_transcript(
         number = _positive_count(delete_last_words.group(1))
         if number:
             return DictationInstruction("delete_last_words", number=number)
+
+    proofread = _proofread_instruction(command)
+    if proofread is not None:
+        return proofread
 
     read = _read_instruction(command)
     if read is not None:

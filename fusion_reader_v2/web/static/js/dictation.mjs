@@ -11,9 +11,14 @@ export function isBareLucyInvocation(value) {
   return /^l[uú]c(?:y|[ií])(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
 }
 
+export function hasLucyInvocation(value) {
+  return /^l[uú]c(?:y|[ií])(?:\b|(?=[,.:;!?_\-…]))/iu.test(cleanText(value));
+}
+
 export function invokedInterpretationPayload(transcript) {
+  const clean = cleanText(transcript);
   return {
-    text: `Lucy, ${cleanText(transcript)}`,
+    text: hasLucyInvocation(clean) ? clean : `Lucy, ${clean}`,
     commands_enabled: true,
     require_wake_word: true
   };
@@ -697,6 +702,47 @@ export function createDictationController({
     }
   }
 
+  async function requestProofread(instruction, transcript = '') {
+    const selection = readTextForInstruction(editor, { ...instruction, kind: 'read' });
+    if (selection.error) {
+      addActivity(selection.error);
+      return;
+    }
+    flushManualHistory();
+    const before = snapshot(editor);
+    const source = before.value.slice(selection.start, selection.end);
+    setStatus('Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
+    try {
+      const data = await api('/api/dictation/proofread', { text: source });
+      if (editor.value !== before.value) {
+        addActivity('El borrador cambió mientras corregía; descarté la respuesta para no pisar tus cambios.');
+        return;
+      }
+      const revised = String(data.text ?? source);
+      if (revised !== source) {
+        replaceRange(editor, revised, selection.start, selection.end);
+        pushUndo(before);
+        redoStack.length = 0;
+        schedulePersist();
+        editor.focus();
+      }
+      const changed = Number(data.changed_parts || 0);
+      const rejected = Number(data.rejected_parts || 0);
+      addActivity(
+        `Corrección conservadora terminada con ${data.model || 'Qwen 14B'}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
+        `${rejected ? ` · ${rejected} propuesta${rejected === 1 ? '' : 's'} rechazada${rejected === 1 ? '' : 's'} por seguridad` : ''}` +
+        ` · ${Number(data.duration_ms || 0)} ms.`
+      );
+      return { changed: revised !== source, message: '' };
+    } catch (error) {
+      const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
+      const technical = error && error.data && error.data.technical_detail ? ` (${error.data.technical_detail})` : '';
+      addActivity(`No pude corregir el tramo: ${detail}${technical}. No cambié el texto.`);
+    } finally {
+      setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+    }
+  }
+
   async function requestAssistant(transcript) {
     const context = dictationAssistantContext(editor);
     setStatus('Lucy está interpretando la orden…', 'processing');
@@ -726,6 +772,9 @@ export function createDictationController({
       addActivity('Dictado detenido por voz.');
       return stopListening();
     }
+    if (item.kind === 'proofread') {
+      return requestProofread(item, transcript);
+    }
     if (item.kind === 'read') {
       const selection = readTextForInstruction(editor, item);
       if (selection.error) {
@@ -742,7 +791,7 @@ export function createDictationController({
     if (item.kind === 'noop' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript);
     }
-    if (item.kind === 'noop' && (/^lucy(?:\b|(?=[,.:;!?_-]))/i.test(String(transcript || '').trim()) || assistantAttempted)) {
+    if (item.kind === 'noop' && (hasLucyInvocation(transcript) || assistantAttempted)) {
       addActivity('Lucy oyó la invocación, pero no reconoció una orden segura. No cambié el texto.');
       return;
     }
@@ -846,7 +895,7 @@ export function createDictationController({
         const interpreted = await api('/api/dictation/interpret', payload);
         instruction = interpreted.instruction;
       }
-      const invoked = claimedWakeCommand || /^lucy(?:\b|(?=[,.:;!?_-]))/i.test(appliedTranscript);
+      const invoked = claimedWakeCommand || hasLucyInvocation(appliedTranscript);
       await applyInstruction(instruction, appliedTranscript, invoked);
       log(`Dictado: ${appliedTranscript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {

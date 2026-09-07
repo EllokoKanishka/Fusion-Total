@@ -178,3 +178,10 @@ OpenAI dialogue is a separate, explicit capability and may only use the
 `fusion-dialogue` agent. It changes the conversation `ChatProvider` while STT,
 TTS, reading and multimedia processing remain local. A provider failure must
 not interrupt reader controls and must not silently fall back to another model.
+
+
+### Dictation proofreading
+
+- `POST /api/dictation/proofread`: request `{text}`; bounded to 12,000 characters. Returns corrected `text`, model/timing counters and accepted/rejected-part telemetry. Operational failures are atomic and preserve the supplied text.
+- `proofread` is a bounded dictation instruction with scopes `all`, `selection`, `current_paragraph`, `previous_paragraph`, or `last_paragraph`. It does not permit a model to return a whole-document editor operation.
+- Native Ollama structured classification runs with thinking disabled and temperature `0`; final instructions are still schema-validated before any editor mutation.

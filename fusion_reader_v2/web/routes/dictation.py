@@ -106,6 +106,9 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
             ),
         )
         return True
+    if path == "/api/dictation/proofread":
+        responder._json(200, responder.app.dictation_proofread(str(payload.get("text") or "")))
+        return True
     if path == "/api/dictation/speak":
         responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
         return True

@@ -31,6 +31,7 @@ from .local_web_bridge import default_external_research_bridge
 from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
 from .reader import Document, ReaderSession, chunk_index_for_offset
 from .tts import AllTalkProvider, AudioArtifact, AudioCache, TTSProvider
+from .transcript_correction import OllamaTranscriptCorrector
 from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from .services.notes import NotesService
@@ -80,6 +81,7 @@ class FusionReaderV2:
         self.metrics = metrics or VoiceMetricsStore()
         self.conversation = conversation or ConversationCore()
         self.dictation_assistant = dictation_assistant or DictationAssistant()
+        self._dictation_corrector = OllamaTranscriptCorrector()
         self.external_research = external_research or default_external_research_bridge()
         self.stt = stt or default_stt_provider()
         self.notes = notes or ReaderNotesStore()
@@ -2382,6 +2384,94 @@ class FusionReaderV2:
             "instruction": instruction.to_dict(),
             "stt_provider": "text",
             "stt_ms": 0,
+        }
+
+    def dictation_proofread(self, text: str) -> dict:
+        original = str(text or "")
+        if not original.strip():
+            return {"ok": False, "error": "empty_dictation_proofread", "detail": "El tramo está vacío."}
+        if len(original) > 12_000:
+            return {
+                "ok": False,
+                "error": "dictation_proofread_too_large",
+                "detail": "Seleccioná un tramo de hasta 12.000 caracteres para corregirlo con seguridad.",
+                "max_characters": 12_000,
+            }
+        health = dict(self._dictation_corrector.health() or {})
+        if not health.get("ok"):
+            return {
+                "ok": False,
+                "error": "dictation_proofread_unavailable",
+                "detail": "El corrector local Qwen 14B no está disponible.",
+                "technical_detail": str(health.get("detail") or "corrector_unavailable"),
+                "model": str(health.get("model") or getattr(self._dictation_corrector, "model", "")),
+            }
+
+        safe_rejections = {
+            "empty_candidate",
+            "explanatory_output",
+            "protocol_echo",
+            "word_count_delta",
+            "character_length_delta",
+            "rewrite_risk",
+        }
+        parts = re.split(r"(\n\s*\n+)", original)
+        output: list[str] = []
+        processed = accepted = changed = unchanged = rejected = 0
+        duration_ms = 0
+        model = str(health.get("model") or getattr(self._dictation_corrector, "model", ""))
+        for part in parts:
+            if not part or re.fullmatch(r"\n\s*\n+", part):
+                output.append(part)
+                continue
+            core = part.strip()
+            if not core:
+                output.append(part)
+                continue
+            processed += 1
+            outcome = self._dictation_corrector.correct(
+                core,
+                context="Borrador de dictado de Panda Fusión. Corregí sólo errores evidentes de ASR, ortografía y puntuación.",
+            )
+            duration_ms += int(outcome.duration_ms or 0)
+            model = str(outcome.model or model)
+            if not outcome.accepted:
+                if outcome.detail not in safe_rejections:
+                    return {
+                        "ok": False,
+                        "error": "dictation_proofread_failed",
+                        "detail": "La corrección local falló; conservé el borrador sin cambios.",
+                        "technical_detail": str(outcome.detail or "corrector_failed"),
+                        "model": model,
+                        "text": original,
+                        "processed_parts": processed,
+                        "duration_ms": duration_ms,
+                    }
+                rejected += 1
+                output.append(part)
+                continue
+            accepted += 1
+            if outcome.changed:
+                changed += 1
+            else:
+                unchanged += 1
+            leading = part[: len(part) - len(part.lstrip())]
+            trailing = part[len(part.rstrip()) :]
+            output.append(f"{leading}{outcome.text}{trailing}")
+
+        corrected = "".join(output)
+        return {
+            "ok": True,
+            "text": corrected,
+            "model": model,
+            "completed": True,
+            "processed_parts": processed,
+            "accepted_parts": accepted,
+            "changed_parts": changed,
+            "unchanged_parts": unchanged,
+            "rejected_parts": rejected,
+            "duration_ms": duration_ms,
+            "warning": "dictation_proofread_partial" if rejected else "",
         }
 
     def dictation_speak(self, text: str) -> dict:
