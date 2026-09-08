@@ -60,6 +60,18 @@ test('dictation keeps continuous speech chunks short enough for responsive trans
   assert.doesNotMatch(source, /elapsed >= 30000/);
 });
 
+test('dictation reports actionable microphone failures', async () => {
+  const { microphoneFailureMessage } = await import(moduleUrl);
+  assert.equal(
+    microphoneFailureMessage({ name: 'NotAllowedError' }),
+    'El escritorio no autorizó el micrófono.'
+  );
+  assert.equal(
+    microphoneFailureMessage({ name: 'NotFoundError' }),
+    'No encontré un micrófono disponible.'
+  );
+});
+
 test('delete from removes an anchored tail and tolerates punctuation differences', async () => {
   const { applyEditorInstruction } = await import(moduleUrl);
   const target = editor('Una tarde en Buenos Aires. Lo sé.', 32);

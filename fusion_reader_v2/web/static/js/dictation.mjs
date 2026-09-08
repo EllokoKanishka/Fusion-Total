@@ -37,6 +37,24 @@ export function assistantFailureActivity(error) {
   return `${detail} [${model} · ${technical || 'sin detalle'} · ${elapsed} ms]${unchanged}`;
 }
 
+export function microphoneFailureMessage(error) {
+  const name = cleanText(error && error.name);
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'El escritorio no autorizó el micrófono.';
+  }
+  if (name === 'NotFoundError') {
+    return 'No encontré un micrófono disponible.';
+  }
+  if (name === 'NotReadableError') {
+    return 'El micrófono está ocupado por otra aplicación.';
+  }
+  if (name === 'OverconstrainedError') {
+    return 'El micrófono no admite esta configuración.';
+  }
+  const detail = cleanText(error && error.message);
+  return detail ? `No pude abrir el micrófono: ${detail}.` : 'No pude abrir el micrófono.';
+}
+
 export function createWakeCommandGate({ now = () => Date.now(), ttlMs = WAKE_COMMAND_WINDOW_MS } = {}) {
   let armedUntil = 0;
   return {
@@ -400,7 +418,9 @@ export function createDictationController({
     const labels = {
       listening: 'Escuchando', armed: 'Orden', processing: 'Procesando', speaking: 'Leyendo', error: 'Error'
     };
-    elements.dictationStatus.textContent = labels[mode] || 'En pausa';
+    elements.dictationStatus.textContent = mode === 'error'
+      ? (cleanText(message) || 'Error de micrófono')
+      : (labels[mode] || 'En pausa');
     elements.dictationStatus.title = message;
     elements.dictationStatus.dataset.mode = mode;
   }
@@ -1123,7 +1143,9 @@ export function createDictationController({
       addActivity('Micrófono abierto. Las pausas separan los tramos.');
       startRecorderCycle();
     } catch (error) {
-      setStatus(`No pude abrir el micrófono: ${error.message}.`, 'error');
+      const message = microphoneFailureMessage(error);
+      setStatus(message, 'error');
+      addActivity(message);
     }
   }
 

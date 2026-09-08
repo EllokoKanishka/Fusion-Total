@@ -1207,6 +1207,10 @@ html[data-skin="neon"] .skins-menu-options {
   line-height: 1.35;
   cursor: default;
   opacity: 1;
+  max-width: min(360px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dictation-status-chip[data-mode="listening"] {
   border-color: var(--accent);

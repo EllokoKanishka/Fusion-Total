@@ -8,6 +8,9 @@ use std::{
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(target_os = "linux")]
+use webkit2gtk::prelude::*;
+
 const FUSION_URL: &str = "http://127.0.0.1:8010";
 const FUSION_ADDRESS: &str = "127.0.0.1:8010";
 
@@ -69,6 +72,27 @@ fn main() {
                             .inner_size(1440.0, 940.0)
                             .min_inner_size(1100.0, 720.0)
                             .build()
+                            .map(|reader| {
+                                // WebKitGTK denies getUserMedia requests by default when no
+                                // permission-request handler is connected.  The reader is a
+                                // fixed loopback window; grant only its microphone request.
+                                #[cfg(target_os = "linux")]
+                                let _ = reader.with_webview(|platform_webview| {
+                                    let native_webview = platform_webview.inner();
+                                    if let Some(settings) = native_webview.settings() {
+                                        settings.set_enable_media_stream(true);
+                                        settings.set_enable_webrtc(true);
+                                    }
+                                    native_webview.connect_permission_request(|_, request| {
+                                        if request.is::<webkit2gtk::UserMediaPermissionRequest>() {
+                                            request.allow();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                });
+                            })
                             .is_ok()
                             {
                                 if let Some(loading) = app_handle.get_webview_window("panda-fusion-loading") {

@@ -10,3 +10,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+
+# Tauri uses WebKitGTK on Linux.  We access the native view only to answer the
+# WebKit media-permission signal for the loopback reader window.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2"
