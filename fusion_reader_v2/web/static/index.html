@@ -94,6 +94,13 @@
         </div>
         <div class="header-selectors">
           <button id="dictationToggleBtn" class="compact-btn dictation-toggle-btn" type="button" aria-expanded="false" aria-controls="dictationWorkspace">Dictado</button>
+          <details class="skins-menu">
+            <summary>Skins</summary>
+            <div class="skins-menu-options" role="group" aria-label="Elegir apariencia">
+              <button type="button" data-skin-choice="classic">Clásica</button>
+              <button type="button" data-skin-choice="neon">Neón</button>
+            </div>
+          </details>
           <select id="profileSelect" class="compact-select" aria-label="Perfil">
             <option value="academica">Académica</option>
             <option value="bohemia">Bohemia</option>
@@ -255,6 +262,13 @@
         <select id="dictationAssistantSelect" class="compact-select dictation-assistant-select" aria-label="Asistente de escritura"></select>
         <span id="dictationAssistantStatus" class="dictation-assistant-status" aria-live="polite"></span>
         <button id="dictationAssistantInstallBtn" class="compact-btn" type="button" hidden>Instalar modelo local</button>
+        <details class="skins-menu skins-menu-dictation">
+          <summary>Skins</summary>
+          <div class="skins-menu-options" role="group" aria-label="Elegir apariencia">
+            <button type="button" data-skin-choice="classic">Clásica</button>
+            <button type="button" data-skin-choice="neon">Neón</button>
+          </div>
+        </details>
         <button id="dictationStatus" class="dictation-status-chip" type="button" disabled aria-live="polite" title="Dictado en pausa.">En pausa</button>
         <details class="dictation-help dictation-help-compact">
           <summary title="Ver órdenes de voz y escritura">Órdenes</summary>

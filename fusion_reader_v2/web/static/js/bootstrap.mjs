@@ -9,7 +9,36 @@ import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
 import { createMediaController } from './media.mjs';
 import { createDictationController } from './dictation.mjs';
 
+const SKIN_STORAGE_KEY = 'pandafusion.skin.v1';
+const SKINS = new Set(['classic', 'neon']);
+
+function setSkin(value, { persist = true } = {}) {
+  const skin = SKINS.has(String(value || '')) ? String(value) : 'classic';
+  document.documentElement.dataset.skin = skin;
+  for (const button of document.querySelectorAll('[data-skin-choice]')) {
+    const selected = button.dataset.skinChoice === skin;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  if (persist) {
+    try { window.localStorage.setItem(SKIN_STORAGE_KEY, skin); } catch (_) {}
+  }
+}
+
+function initializeSkin() {
+  let saved = 'classic';
+  try { saved = window.localStorage.getItem(SKIN_STORAGE_KEY) || 'classic'; } catch (_) {}
+  setSkin(saved, { persist: false });
+  for (const button of document.querySelectorAll('[data-skin-choice]')) {
+    button.addEventListener('click', () => {
+      setSkin(button.dataset.skinChoice);
+      button.closest('details')?.removeAttribute('open');
+    });
+  }
+}
+
 const els = collectElements();
+initializeSkin();
 let status = null;
 let lastRenderedDocId = '';
 let lastRenderedBlockIndex = 0;

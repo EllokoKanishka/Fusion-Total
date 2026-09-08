@@ -17,6 +17,24 @@
   --danger: #d08371;
   --warn: #c5a66c;
 }
+html[data-skin="neon"] {
+  --bg: #05040c;
+  --panel: #0c0918;
+  --panel-2: #160a24;
+  --surface: #100d1c;
+  --surface-deep: #070611;
+  --surface-hover: #251130;
+  --line: #51305f;
+  --line-soft: rgba(106, 52, 120, .62);
+  --text: #f3e9ff;
+  --muted: #c4afd3;
+  --accent: #00d9ff;
+  --accent-soft: rgba(0, 217, 255, .16);
+  --accent-2: #ff2d92;
+  --accent-2-soft: rgba(255, 45, 146, .16);
+  --danger: #ff5b64;
+  --warn: #ffb347;
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -24,6 +42,12 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+html[data-skin="neon"] body {
+  background:
+    radial-gradient(circle at 8% 12%, rgba(0, 221, 255, .12), transparent 25%),
+    radial-gradient(circle at 88% 8%, rgba(255, 25, 136, .16), transparent 30%),
+    #05040c;
 }
 button, input, textarea {
   font: inherit;
@@ -35,6 +59,11 @@ button, input, textarea {
   grid-template-columns: minmax(280px, 330px) minmax(560px, 1fr) minmax(280px, 330px);
   grid-template-rows: minmax(0, 58vh) minmax(280px, 42vh);
 }
+html[data-skin="neon"] .app {
+  background:
+    linear-gradient(135deg, rgba(0, 217, 255, .05), transparent 22%, rgba(255, 45, 146, .06) 72%, transparent),
+    #080611;
+}
 aside, main, .lab {
   min-width: 0;
   border-color: var(--line);
@@ -44,6 +73,27 @@ aside {
   background: var(--panel);
   padding: 16px;
   overflow: auto;
+}
+html[data-skin="neon"] aside,
+html[data-skin="neon"] .lab,
+html[data-skin="neon"] .topbar,
+html[data-skin="neon"] .controls {
+  border-color: rgba(0, 217, 255, .48);
+  box-shadow: inset 0 1px 0 rgba(255, 45, 146, .28), 0 0 22px rgba(0, 217, 255, .06);
+}
+html[data-skin="neon"] .left-sidebar,
+html[data-skin="neon"] .lab {
+  position: relative;
+  clip-path: polygon(0 0, calc(100% - 22px) 0, 100% 22px, 100% calc(100% - 22px), calc(100% - 22px) 100%, 0 100%);
+}
+html[data-skin="neon"] .left-sidebar::after,
+html[data-skin="neon"] .lab::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  inset: 10px;
+  border: 1px solid rgba(255, 45, 146, .23);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
 }
 .left-sidebar {
   grid-column: 1;
@@ -546,6 +596,9 @@ h2 {
   gap: 14px;
   background: var(--panel-2);
 }
+html[data-skin="neon"] .topbar {
+  clip-path: polygon(0 0, calc(100% - 28px) 0, 100% 28px, 100% 100%, 0 100%);
+}
 .title {
   min-width: 0;
 }
@@ -587,6 +640,13 @@ h2 {
   justify-content: center;
   align-items: stretch;
 }
+html[data-skin="neon"] .reader {
+  margin: 16px 18px 0;
+  padding: 24px clamp(26px, 3vw, 42px) 14px;
+  background: linear-gradient(135deg, #f8f0dd, #e7dbc5);
+  border: 1px solid rgba(0, 217, 255, .72);
+  box-shadow: 0 0 0 2px rgba(255, 45, 146, .16), 0 0 28px rgba(0, 217, 255, .18);
+}
 .chunk {
   width: 100%;
   max-width: 72ch;
@@ -601,6 +661,12 @@ h2 {
   color: var(--muted);
   font-style: italic;
   text-align: center;
+}
+html[data-skin="neon"] .chunk {
+  color: #18212b;
+}
+html[data-skin="neon"] .chunk.empty {
+  color: #5b5060;
 }
 .controls {
   border-top: 1px solid var(--line);
@@ -671,6 +737,18 @@ button.compact-btn {
   border-radius: 8px;
   font-size: 11px;
   line-height: 1.1;
+}
+html[data-skin="neon"] button,
+html[data-skin="neon"] .compact-select,
+html[data-skin="neon"] textarea,
+html[data-skin="neon"] input:not([type="checkbox"]):not([type="file"]) {
+  border-color: rgba(0, 217, 255, .48);
+  box-shadow: inset 0 1px 0 rgba(255, 45, 146, .14);
+}
+html[data-skin="neon"] button.primary {
+  background: linear-gradient(135deg, #00d9ff, #d72dff);
+  border-color: #ff54ad;
+  color: #080611;
 }
 .compact-toggle {
   min-height: 24px;
@@ -838,6 +916,54 @@ textarea {
   align-items: center;
   margin-left: auto;
   margin-right: 14px;
+}
+.skins-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.skins-menu summary {
+  min-height: 24px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-hover);
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.1;
+}
+.skins-menu summary::-webkit-details-marker { display: none; }
+.skins-menu-options {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 112px;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-deep);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .36);
+}
+.skins-menu-options button {
+  min-height: 25px;
+  padding: 4px 7px;
+  font-size: 11px;
+  text-align: left;
+}
+.skins-menu-options button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+html[data-skin="neon"] .skins-menu summary,
+html[data-skin="neon"] .skins-menu-options {
+  border-color: rgba(255, 45, 146, .7);
+  box-shadow: 0 0 14px rgba(255, 45, 146, .18);
 }
 .header-selectors select {
   max-width: 120px;
