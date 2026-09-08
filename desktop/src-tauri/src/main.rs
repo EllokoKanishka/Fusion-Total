@@ -9,7 +9,9 @@ use std::{
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "linux")]
-use webkit2gtk::prelude::*;
+use webkit2gtk::{
+    glib::prelude::*, PermissionRequestExt, SettingsExt, WebViewExt,
+};
 
 const FUSION_URL: &str = "http://127.0.0.1:8010";
 const FUSION_ADDRESS: &str = "127.0.0.1:8010";
