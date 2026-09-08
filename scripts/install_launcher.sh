@@ -56,8 +56,8 @@ cat << EOF > "$LAUNCHER_PATH"
 # Lanzador de escritorio para Fusion Reader v2 generado por el instalador.
 set -euo pipefail
 
-# Iniciar open_fusion_reader.sh desde el repositorio
-exec "$ROOT/scripts/open_fusion_reader.sh"
+# Abrir la carcasa nativa; el script inicia Fusion si hace falta.
+exec "$ROOT/scripts/start_pandafusion_desktop.sh"
 EOF
 
 chmod +x "$LAUNCHER_PATH"
@@ -99,10 +99,10 @@ install_desktop_file() {
   cat << EOF > "$target"
 [Desktop Entry]
 Type=Application
-Name=PandaFusion
-Comment=Abrir Fusion Reader v2
+Name=Panda Fusión
+Comment=Lector y dictado por voz
 Exec=$LAUNCHER_PATH
-Icon=$ROOT/assets/icons/fusion_red.svg
+Icon=$ROOT/desktop/src-tauri/icons/icon.png
 Terminal=false
 Categories=Office;
 StartupNotify=true
@@ -110,14 +110,25 @@ EOF
   chmod +x "$target"
 }
 
-echo "Instalando acceso directo de aplicaciones en $DESKTOP_DIR/fusion.desktop..."
-install_desktop_file "$DESKTOP_DIR/fusion.desktop"
+remove_legacy_launcher() {
+  local target="$1"
+  # Sólo borramos el acceso directo que generaban versiones previas de Fusion;
+  # un archivo llamado igual pero creado por la persona usuaria se conserva.
+  if [[ -f "$target" ]] && grep -q "fusion-reader-launcher" "$target"; then
+    rm -f "$target"
+  fi
+}
+
+echo "Instalando acceso directo de aplicaciones en $DESKTOP_DIR/panda-fusion.desktop..."
+install_desktop_file "$DESKTOP_DIR/panda-fusion.desktop"
+remove_legacy_launcher "$DESKTOP_DIR/fusion.desktop"
 
 # Instalar también en Escritorio / Desktop si existen
 for d in "Desktop" "Escritorio"; do
   if [[ -d "${HOME}/$d" ]]; then
-    echo "Instalando acceso directo en escritorio ~/ $d/fusion.desktop..."
-    install_desktop_file "${HOME}/$d/fusion.desktop"
+    echo "Instalando acceso directo en escritorio ~/ $d/panda-fusion.desktop..."
+    install_desktop_file "${HOME}/$d/panda-fusion.desktop"
+    remove_legacy_launcher "${HOME}/$d/fusion.desktop"
   fi
 done
 

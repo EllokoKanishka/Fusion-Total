@@ -1,6 +1,8 @@
 const DEFAULT_PAGE_CHARS = 1800;
 const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const WAKE_COMMAND_WINDOW_MS = 20000;
+const MAX_DICTATION_UTTERANCE_MS = 10000;
+const END_OF_UTTERANCE_SILENCE_MS = 1000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 const SESSION_SCHEMA_VERSION = 2;
 const MAX_SAVED_SESSIONS = 30;
@@ -963,7 +965,9 @@ export function createDictationController({
     const delta = Math.max(16, Math.min(250, now - (lastTick || now)));
     lastTick = now;
     const level = micLevel();
-    const threshold = Math.max(0.018, noiseFloor * 2.15);
+    // Un umbral fijo alto volvía invisible a micrófonos de bajo volumen y
+    // retenía la frase hasta el límite largo de la grabación.
+    const threshold = Math.max(0.010, noiseFloor * 2.15);
     if (level >= threshold) {
       speechMs += delta;
       silenceMs = 0;
@@ -981,7 +985,9 @@ export function createDictationController({
       if (!voiceDetected) noiseFloor = noiseFloor * 0.96 + level * 0.04;
     }
     const elapsed = now - recorderStartedAt;
-    if ((voiceDetected && elapsed >= 650 && silenceMs >= 1150) || elapsed >= 30000) {
+    // Las pausas cierran antes el tramo. Si alguien habla de corrido, enviamos
+    // cada diez segundos: Dictado no debe sentirse como un audio de medio minuto.
+    if ((voiceDetected && elapsed >= 650 && silenceMs >= END_OF_UTTERANCE_SILENCE_MS) || elapsed >= MAX_DICTATION_UTTERANCE_MS) {
       stopRecorderCycle(false);
       return;
     }

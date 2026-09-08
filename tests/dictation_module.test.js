@@ -50,6 +50,16 @@ test('speech text is chunked without dropping long sentences', async () => {
   assert.ok(chunks.every(chunk => chunk.length <= 180));
 });
 
+test('dictation keeps continuous speech chunks short enough for responsive transcription', async () => {
+  const source = await require('node:fs').promises.readFile(
+    path.resolve('fusion_reader_v2/web/static/js/dictation.mjs'),
+    'utf8'
+  );
+  assert.match(source, /const MAX_DICTATION_UTTERANCE_MS = 10000;/);
+  assert.match(source, /const END_OF_UTTERANCE_SILENCE_MS = 1000;/);
+  assert.doesNotMatch(source, /elapsed >= 30000/);
+});
+
 test('delete from removes an anchored tail and tolerates punctuation differences', async () => {
   const { applyEditorInstruction } = await import(moduleUrl);
   const target = editor('Una tarde en Buenos Aires. Lo sé.', 32);

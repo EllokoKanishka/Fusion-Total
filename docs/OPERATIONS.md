@@ -157,7 +157,8 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 
 1. abrir `Dictado` desde la barra superior;
 2. pulsar `Iniciar dictado` y aprobar el permiso de micrófono;
-3. hacer una pausa breve para cerrar cada tramo;
+3. hacer una pausa breve para cerrar cada tramo; si hablás de corrido, Dictado
+   envía automáticamente un tramo cada diez segundos para no retener la voz;
 4. mantener `Órdenes con «Lucy»` activo para corregir o leer por voz: sólo las
    frases que empiezan con “Lucy” se ejecutan como órdenes; o
    desactivarlo cuando todo lo pronunciado deba entrar literalmente;

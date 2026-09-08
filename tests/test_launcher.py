@@ -245,6 +245,17 @@ exit 0
         self.assertIn('export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"', entrypoint)
         self.assertIn("-m scripts.fusion_reader_v2_server", entrypoint)
 
+    def test_desktop_launcher_uses_native_shell_and_panda_icon(self):
+        installer = (self.repo_root / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
+        desktop_launcher = (self.repo_root / "scripts" / "start_pandafusion_desktop.sh").read_text(encoding="utf-8")
+
+        self.assertIn('exec "$ROOT/scripts/start_pandafusion_desktop.sh"', installer)
+        self.assertIn('Name=Panda Fusión', installer)
+        self.assertIn('Icon=$ROOT/desktop/src-tauri/icons/icon.png', installer)
+        self.assertIn('panda-fusion.desktop', installer)
+        self.assertIn('Panda\\ Fusión_*.AppImage', desktop_launcher)
+        self.assertNotIn('exec npm run dev', desktop_launcher.split('if [[ -x "$desktop_root/node_modules/.bin/tauri" ]]')[0])
+
     def test_systemd_entrypoint_selects_ready_cpu_fallback_before_web_server(self):
         self.mock_python.write_text(
             f'''#!/usr/bin/env bash
