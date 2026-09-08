@@ -253,6 +253,7 @@ exit 0
         self.assertIn('Name=Panda Fusión', installer)
         self.assertIn('Icon=$ROOT/desktop/src-tauri/icons/icon.png', installer)
         self.assertIn('panda-fusion.desktop', installer)
+        self.assertIn('DEFAULT_PORT="8010"', installer)
         self.assertIn('Panda\\ Fusión_*.AppImage', desktop_launcher)
         self.assertNotIn('exec npm run dev', desktop_launcher.split('if [[ -x "$desktop_root/node_modules/.bin/tauri" ]]')[0])
 

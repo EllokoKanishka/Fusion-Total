@@ -6,7 +6,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # Default local port for this installation
-DEFAULT_PORT="9010"
+# La carcasa Tauri y el contrato operativo de Panda Fusión usan este puerto.
+# Mantenerlo alineado evita instalar un lanzador que inicie otro origen local.
+DEFAULT_PORT="8010"
 
 source "$ROOT/scripts/lib/env_helper.sh"
 
