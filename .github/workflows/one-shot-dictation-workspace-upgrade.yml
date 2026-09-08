@@ -1,0 +1,75 @@
+name: One-shot Dictation workspace upgrade
+
+on:
+  push:
+    branches:
+      - feat/dictation-workspace-projects-export
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/dictation-workspace-projects-export
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y poppler-utils >/dev/null
+          python -m pip install --upgrade pip >/dev/null
+          python -m pip install -c requirements/constraints-py312.txt -e '.[dev]' >/dev/null
+          npm ci
+
+      - name: Apply workspace patch
+        run: python scripts/apply_dictation_workspace_upgrade.py
+
+      - name: Format and validate focused changes
+        run: |
+          python -m ruff format \
+            fusion_reader_v2/dictation_workspace.py \
+            fusion_reader_v2/web/context.py \
+            fusion_reader_v2/web/routes/dictation.py \
+            tests/test_dictation_workspace.py
+          python -m ruff check \
+            fusion_reader_v2/dictation_workspace.py \
+            fusion_reader_v2/web/context.py \
+            fusion_reader_v2/web/routes/dictation.py \
+            tests/test_dictation_workspace.py
+          python -m unittest tests.test_dictation_workspace -v
+          node --test tests/dictation_module.test.js tests/frontend_contracts.test.js
+          git diff --check
+
+      - name: Commit applied upgrade
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            fusion_reader_v2/web/context.py \
+            fusion_reader_v2/web/routes/dictation.py \
+            fusion_reader_v2/web/routing.py \
+            fusion_reader_v2/web/static/index.html \
+            fusion_reader_v2/web/static/js/ui.mjs \
+            fusion_reader_v2/web/static/js/bootstrap.mjs \
+            fusion_reader_v2/web/static/js/dictation.mjs \
+            fusion_reader_v2/web/static/styles.css \
+            docs/OPERATIONS.md \
+            docs/ARCHITECTURE.md \
+            FUSION_READER_V2_STATE.md \
+            tests/dictation_module.test.js \
+            tests/frontend_contracts.test.js
+          git commit -m 'feat(dictation): consolidate workspace navigation projects and PDF export'
+          git push origin HEAD:feat/dictation-workspace-projects-export
