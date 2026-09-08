@@ -395,8 +395,18 @@ export function createDictationController({
   const wakeGate = createWakeCommandGate({ now: () => Date.now() });
 
   function setStatus(message, mode = '') {
-    elements.dictationStatus.textContent = message;
+    const labels = {
+      listening: 'Escuchando', armed: 'Orden', processing: 'Procesando', speaking: 'Leyendo', error: 'Error'
+    };
+    elements.dictationStatus.textContent = labels[mode] || 'En pausa';
+    elements.dictationStatus.title = message;
     elements.dictationStatus.dataset.mode = mode;
+  }
+
+  function resizeEditor() {
+    editor.style.height = 'auto';
+    const viewportHeight = Math.max(480, Number(windowRef.innerHeight || 900));
+    editor.style.height = `${Math.max(editor.scrollHeight, viewportHeight * 0.5)}px`;
   }
 
   function addActivity(message) {
@@ -618,6 +628,7 @@ export function createDictationController({
     } catch (_) {}
     updateStats();
     renderSessions();
+    resizeEditor();
   }
 
   function schedulePersist() {
@@ -684,6 +695,7 @@ export function createDictationController({
       elements.dictationVoiceSelect.dispatchEvent(new windowRef.Event('change'));
     }
     persistNow();
+    resizeEditor();
     editor.focus();
     addActivity(`Borrador recuperado: ${next.title || 'sin título'}.`);
   }
@@ -702,6 +714,7 @@ export function createDictationController({
     undoStack.length = 0;
     redoStack.length = 0;
     persistNow();
+    resizeEditor();
     editor.focus();
     addActivity('Borrador nuevo listo.');
   }
@@ -1254,11 +1267,13 @@ export function createDictationController({
     windowRef.clearTimeout(manualTimer);
     manualTimer = windowRef.setTimeout(flushManualHistory, 700);
     schedulePersist();
+    resizeEditor();
   });
   elements.dictationTitleInput.addEventListener('input', schedulePersist);
   elements.dictationVoiceSelect.addEventListener('change', schedulePersist);
 
   restoreDraft();
+  resizeEditor();
   refreshAssistantStatus();
 
   return {
