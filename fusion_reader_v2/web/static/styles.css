@@ -1067,7 +1067,9 @@ textarea {
 }
 .dictation-editor {
   min-height: 50vh;
-  height: 50vh;
+  height: auto;
+  field-sizing: content;
+  box-sizing: border-box;
   resize: none;
   padding: 18px clamp(16px, 2vw, 28px);
   border-color: var(--line);
