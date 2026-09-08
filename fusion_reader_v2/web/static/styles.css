@@ -1325,3 +1325,278 @@ html[data-skin="neon"] .skins-menu-options {
     min-height: 48vh;
   }
 }
+
+/* Neon is a separate cockpit, not a recolor of the classic interface. */
+.neon-chassis { display: none; }
+
+html[data-skin="neon"] body {
+  min-width: 1080px;
+  overflow: hidden;
+  padding: 18px;
+  background:
+    radial-gradient(ellipse at 50% -20%, rgba(16, 222, 255, .18), transparent 42%),
+    radial-gradient(circle at 0 100%, rgba(255, 37, 146, .12), transparent 30%),
+    #03030a;
+}
+html[data-skin="neon"] .app {
+  position: relative;
+  isolation: isolate;
+  height: calc(100vh - 36px);
+  grid-template-columns: minmax(250px, 286px) minmax(620px, 1fr) minmax(244px, 282px);
+  grid-template-rows: minmax(0, 65vh) minmax(220px, 1fr);
+  gap: 8px;
+  padding: 17px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 220, 255, .76);
+  clip-path: polygon(0 30px, 30px 0, calc(100% - 42px) 0, 100% 42px, 100% calc(100% - 36px), calc(100% - 36px) 100%, 42px 100%, 0 calc(100% - 42px));
+  box-shadow: 0 0 0 1px rgba(255, 38, 153, .5), 0 0 42px rgba(0, 217, 255, .16), inset 0 0 55px rgba(24, 8, 39, .86);
+}
+html[data-skin="neon"] .app::before,
+html[data-skin="neon"] .app::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: -1;
+}
+html[data-skin="neon"] .app::before {
+  inset: 7px;
+  border: 1px solid rgba(255, 45, 146, .42);
+  clip-path: polygon(0 28px, 28px 0, calc(100% - 39px) 0, 100% 39px, 100% calc(100% - 32px), calc(100% - 32px) 100%, 39px 100%, 0 calc(100% - 39px));
+}
+html[data-skin="neon"] .app::after {
+  inset: 0;
+  opacity: .28;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(116, 199, 255, .03) 4px);
+}
+html[data-skin="neon"] .neon-chassis {
+  position: absolute;
+  display: block;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+html[data-skin="neon"] .neon-chassis-corner {
+  position: absolute;
+  width: 96px;
+  height: 96px;
+  border: 3px solid #ff2d92;
+  filter: drop-shadow(0 0 9px rgba(255, 45, 146, .82));
+}
+html[data-skin="neon"] .neon-chassis-corner-tl { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+html[data-skin="neon"] .neon-chassis-corner-tr { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+html[data-skin="neon"] .neon-chassis-corner-bl { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+html[data-skin="neon"] .neon-chassis-corner-br { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+html[data-skin="neon"] .neon-chassis-scanline {
+  position: absolute;
+  top: 90px;
+  bottom: 90px;
+  width: 4px;
+  background: linear-gradient(#00d9ff, transparent 16%, #ff2d92 52%, transparent 84%, #00d9ff);
+  box-shadow: 0 0 10px #00d9ff, 0 0 20px rgba(255, 45, 146, .62);
+}
+html[data-skin="neon"] .neon-chassis-scanline-left { left: 11px; }
+html[data-skin="neon"] .neon-chassis-scanline-right { right: 11px; }
+html[data-skin="neon"] aside,
+html[data-skin="neon"] main,
+html[data-skin="neon"] .lab {
+  position: relative;
+  z-index: 1;
+  border: 1px solid rgba(91, 209, 255, .43);
+  background: linear-gradient(155deg, rgba(19, 16, 36, .97), rgba(5, 5, 15, .98));
+  box-shadow: inset 0 0 0 1px rgba(255, 45, 146, .12), inset 0 18px 34px rgba(35, 20, 65, .18);
+}
+html[data-skin="neon"] .left-sidebar,
+html[data-skin="neon"] .right-sidebar {
+  padding: 18px 14px;
+  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% calc(100% - 28px), calc(100% - 28px) 100%, 0 100%);
+}
+html[data-skin="neon"] .right-sidebar {
+  clip-path: polygon(18px 0, 100% 0, 100% 100%, 28px 100%, 0 calc(100% - 28px), 0 18px);
+}
+html[data-skin="neon"] .left-sidebar::after,
+html[data-skin="neon"] .lab::after { inset: 8px; border-color: rgba(0, 217, 255, .18); }
+html[data-skin="neon"] .brand-header {
+  min-height: 78px;
+  margin: -3px 0 16px;
+  padding: 8px 5px 10px;
+  border-bottom: 1px solid rgba(255, 45, 146, .5);
+}
+html[data-skin="neon"] .brand-header h1 {
+  font-size: 21px;
+  letter-spacing: -.04em;
+  color: #eafcff;
+  text-shadow: 0 0 14px rgba(0, 217, 255, .7);
+}
+html[data-skin="neon"] .brand-header h1::after {
+  content: "VOICE READER";
+  display: block;
+  margin-top: 7px;
+  color: #ff49a4;
+  font: 700 9px/1.1 "IBM Plex Mono", monospace;
+  letter-spacing: .24em;
+}
+html[data-skin="neon"] .brand-emblem {
+  border-radius: 17px 4px 17px 4px;
+  border-color: #00d9ff;
+  box-shadow: 0 0 0 2px rgba(255, 45, 146, .46), 0 0 18px rgba(0, 217, 255, .35);
+}
+html[data-skin="neon"] .quick-text-panel,
+html[data-skin="neon"] .media-tool-card,
+html[data-skin="neon"] .media-job-card,
+html[data-skin="neon"] .notes-panel,
+html[data-skin="neon"] .reference-card,
+html[data-skin="neon"] .reference-section {
+  border-radius: 5px 14px 5px 14px;
+  border-color: rgba(255, 45, 146, .45);
+  background: linear-gradient(145deg, rgba(21, 12, 38, .92), rgba(6, 7, 19, .96));
+}
+html[data-skin="neon"] .quick-text-panel summary,
+html[data-skin="neon"] .media-tool-card summary,
+html[data-skin="neon"] .notes-panel summary,
+html[data-skin="neon"] .document-upload-heading strong,
+html[data-skin="neon"] .reference-label,
+html[data-skin="neon"] .media-tools h1 {
+  color: #ff4ca6;
+  text-shadow: 0 0 12px rgba(255, 45, 146, .5);
+}
+html[data-skin="neon"] .upload-zone {
+  border-style: solid;
+  border-radius: 5px 14px 5px 14px;
+  border-color: rgba(0, 217, 255, .62);
+  background: rgba(3, 11, 22, .7);
+}
+html[data-skin="neon"] main {
+  grid-template-rows: 64px minmax(0, 1fr) 82px;
+  border-radius: 18px 5px 18px 5px;
+  overflow: hidden;
+}
+html[data-skin="neon"] .topbar {
+  min-height: 64px;
+  padding: 10px 16px 10px 22px;
+  border: 0;
+  border-bottom: 1px solid rgba(0, 217, 255, .55);
+  background: linear-gradient(90deg, #121328, #070914 72%, #22102d);
+  clip-path: none;
+}
+html[data-skin="neon"] .title strong { color: #f8f4ff; font-size: 15px; }
+html[data-skin="neon"] .title span { color: #a5b4ca; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+html[data-skin="neon"] .status {
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border-color: rgba(255, 45, 146, .5);
+  background: rgba(21, 8, 31, .85);
+  color: #e7d9ff;
+  font-size: 11px;
+}
+html[data-skin="neon"] .header-selectors { gap: 6px; margin-right: 3px; }
+html[data-skin="neon"] .reader {
+  position: relative;
+  align-items: stretch;
+  justify-content: stretch;
+  margin: 14px 15px 9px;
+  padding: clamp(34px, 4vw, 68px) clamp(42px, 6vw, 108px);
+  border: 2px solid rgba(0, 217, 255, .75);
+  border-radius: 3px;
+  background:
+    linear-gradient(125deg, rgba(255, 255, 255, .5), transparent 28%),
+    linear-gradient(135deg, #fffaf0, #eee0c9);
+  box-shadow: 0 0 0 3px rgba(255, 45, 146, .17), inset 0 0 24px rgba(97, 69, 44, .1), 0 0 28px rgba(0, 217, 255, .14);
+}
+html[data-skin="neon"] .chunk { max-width: 78ch; color: #19202a; font-family: Georgia, "Times New Roman", serif; font-size: clamp(20px, 1.6vw, 25px); }
+html[data-skin="neon"] .reader::before {
+  content: "LECTURA / PÁGINA ACTIVA";
+  position: absolute;
+  margin-top: -26px;
+  color: #70526a;
+  font: 700 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: .18em;
+}
+html[data-skin="neon"] .controls {
+  padding: 9px 18px 10px;
+  gap: 7px;
+  border-top: 1px solid rgba(255, 45, 146, .5);
+  background: linear-gradient(90deg, #11101f, #05050d 45%, #1c0b24);
+}
+html[data-skin="neon"] .controls .row { justify-content: center; }
+html[data-skin="neon"] .slim-audio { filter: sepia(.1) saturate(1.3); }
+html[data-skin="neon"] .lab {
+  padding: 15px 18px;
+  border-radius: 5px 18px 5px 18px;
+  background: linear-gradient(135deg, rgba(9, 9, 22, .97), rgba(21, 8, 34, .96));
+}
+html[data-skin="neon"] .lab h2::after {
+  content: " / CONVERSACIÓN ANCLADA";
+  color: #98b7c9;
+  font: 700 9px/1 "IBM Plex Mono", monospace;
+  letter-spacing: .14em;
+}
+html[data-skin="neon"] .lab-focus,
+html[data-skin="neon"] .chat-log,
+html[data-skin="neon"] .chat-input {
+  border-radius: 4px 12px 4px 12px;
+  border-color: rgba(0, 217, 255, .4);
+  background: rgba(4, 5, 15, .76);
+}
+html[data-skin="neon"] button,
+html[data-skin="neon"] .compact-select,
+html[data-skin="neon"] textarea,
+html[data-skin="neon"] input:not([type="checkbox"]):not([type="file"]) {
+  border-radius: 4px 9px 4px 9px;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+html[data-skin="neon"] button:hover:not(:disabled),
+html[data-skin="neon"] .skins-menu summary:hover {
+  border-color: #ff58aa;
+  box-shadow: 0 0 12px rgba(255, 45, 146, .45), inset 0 0 12px rgba(0, 217, 255, .08);
+  transform: translateY(-1px);
+}
+html[data-skin="neon"] button.primary {
+  background: linear-gradient(100deg, #00d9ff, #8160ff 48%, #ff2d92);
+  border-color: #ff73b8;
+  color: #070611;
+  text-shadow: none;
+}
+html[data-skin="neon"] .right-sidebar h2 { color: #f4f0ff; }
+html[data-skin="neon"] .reference-panel { gap: 16px; }
+html[data-skin="neon"] .right-sidebar::before {
+  content: "LISTEN · THINK · SPEAK · CREATE";
+  display: block;
+  margin: 4px 4px 20px;
+  color: #bdaac8;
+  font: 700 9px/1.8 "IBM Plex Mono", monospace;
+  letter-spacing: .22em;
+  white-space: pre-line;
+}
+html[data-skin="neon"] .dictation-workspace {
+  width: auto;
+  min-height: auto;
+  height: 100%;
+  padding: 26px 34px 22px;
+  border: 1px solid rgba(0, 217, 255, .7);
+  border-radius: 28px 6px 28px 6px;
+  background: linear-gradient(145deg, #070713, #17091e 65%, #05050c);
+  box-shadow: inset 0 0 0 2px rgba(255, 45, 146, .16), 0 0 40px rgba(0, 217, 255, .16);
+}
+html[data-skin="neon"] .dictation-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 45, 146, .55);
+}
+html[data-skin="neon"] .dictation-header h1 { color: #f3f0ff; text-shadow: 0 0 16px rgba(0, 217, 255, .5); }
+html[data-skin="neon"] .dictation-editor {
+  border: 2px solid rgba(0, 217, 255, .58);
+  border-radius: 3px;
+  background: linear-gradient(135deg, #fffaf0, #eee0c9);
+  color: #19202a;
+  box-shadow: 0 0 0 3px rgba(255, 45, 146, .15), inset 0 0 24px rgba(97, 69, 44, .1);
+  caret-color: #ff2d92;
+}
+html[data-skin="neon"] .dictation-title-input,
+html[data-skin="neon"] .dictation-command-row input { background: rgba(5, 5, 16, .9); }
+
+@media (max-width: 980px) {
+  html[data-skin="neon"] body { min-width: 0; overflow: auto; padding: 8px; }
+  html[data-skin="neon"] .app { height: auto; min-height: calc(100vh - 16px); padding: 12px; clip-path: none; }
+  html[data-skin="neon"] .neon-chassis { display: none; }
+  html[data-skin="neon"] .reader { margin: 8px; padding: 32px 26px; }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Panda Fusión",
+  "version": "0.1.0",
+  "identifier": "ar.pandafusion.reader",
+  "build": {
+    "frontendDist": "../../fusion_reader_v2/web/static",
+    "devUrl": "http://127.0.0.1:8010"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

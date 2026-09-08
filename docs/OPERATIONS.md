@@ -35,6 +35,19 @@ UI:
 http://127.0.0.1:8010/
 ```
 
+## Ventana de escritorio
+
+Panda Fusión puede abrirse sin Chrome mediante la carcasa Tauri versionada en
+`desktop/`. No sustituye el backend: primero debe estar activo `fusionctl start`
+y la ventana carga exclusivamente `http://127.0.0.1:8010`.
+
+```bash
+./scripts/start_pandafusion_desktop.sh
+```
+
+La primera vez requiere `cd desktop && npm install`. Para un paquete instalable,
+usar `npm run build` desde esa carpeta.
+
 Manifiesto único de dependencias:
 
 - [docs/DEPENDENCIES_V2.md](DEPENDENCIES_V2.md)

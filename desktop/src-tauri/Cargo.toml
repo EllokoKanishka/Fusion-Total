@@ -1,0 +1,12 @@
+[package]
+name = "panda-fusion-desktop"
+version = "0.1.0"
+description = "Panda Fusión desktop shell"
+authors = ["Panda Fusión"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

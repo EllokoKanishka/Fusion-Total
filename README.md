@@ -18,7 +18,8 @@ python3 -m venv .venv
 ```
 
 La UI queda disponible en `http://127.0.0.1:8010/`. Fusion escucha sólo en
-loopback por defecto.
+loopback por defecto. Para abrirla como aplicación de escritorio, sin navegador,
+ver [`desktop/README.md`](desktop/README.md).
 
 ## Capacidades
 

@@ -1,0 +1,13 @@
+{
+  "name": "panda-fusion-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Carcasa de escritorio de Panda Fusión",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}
