@@ -954,8 +954,9 @@ textarea {
   background: var(--bg);
   padding: clamp(16px, 2vw, 30px);
   display: grid;
-  grid-template-rows: repeat(10, auto);
-  align-content: start;
+  /* El borrador toma el remanente de pantalla; no deja un bloque muerto bajo el audio. */
+  grid-template-rows: auto auto auto auto minmax(50vh, 1fr) auto auto auto auto auto;
+  align-content: stretch;
   gap: 10px;
 }
 .dictation-header {
