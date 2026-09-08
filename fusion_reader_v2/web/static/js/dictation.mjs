@@ -2,6 +2,8 @@ const DEFAULT_PAGE_CHARS = 1800;
 const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const WAKE_COMMAND_WINDOW_MS = 20000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
+const SESSION_SCHEMA_VERSION = 2;
+const MAX_SAVED_SESSIONS = 30;
 
 function cleanText(value) {
   return String(value || '').trim();
@@ -367,7 +369,7 @@ export function createDictationController({
   const editor = elements.dictationEditor;
   const undoStack = [];
   const redoStack = [];
-  const activity = [];
+  let sessionStore = { schemaVersion: SESSION_SCHEMA_VERSION, activeId: '', sessions: [] };
   let saveTimer = 0;
   let manualTimer = 0;
   let assistantInstallTimer = 0;
@@ -400,15 +402,9 @@ export function createDictationController({
   function addActivity(message) {
     const clean = cleanText(message);
     if (!clean) return;
-    activity.unshift(clean);
-    activity.splice(20);
-    elements.dictationActivity.innerHTML = '';
-    for (const item of activity) {
-      const row = documentRoot.createElement('div');
-      row.className = 'dictation-activity-row';
-      row.textContent = item;
-      elements.dictationActivity.appendChild(row);
-    }
+    // La actividad técnica ya no ocupa el escritorio; el borrador queda como
+    // unidad recuperable y el log general conserva el diagnóstico mínimo.
+    log(`Dictado: ${clean}`);
   }
 
   function renderAssistantStatus(data) {
@@ -561,17 +557,67 @@ export function createDictationController({
     elements.dictationRedoBtn.disabled = redoStack.length === 0;
   }
 
+  function newSessionId() {
+    if (windowRef.crypto && typeof windowRef.crypto.randomUUID === 'function') return windowRef.crypto.randomUUID();
+    return `dictation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function activeSession() {
+    return sessionStore.sessions.find(item => item.id === sessionStore.activeId) || null;
+  }
+
+  function snapshotSession() {
+    const now = Date.now();
+    const existing = activeSession();
+    return {
+      id: existing ? existing.id : newSessionId(),
+      title: cleanText(elements.dictationTitleInput.value) || 'Dictado sin título',
+      text: String(editor.value || ''),
+      selectionStart: Number(editor.selectionStart || 0),
+      selectionEnd: Number(editor.selectionEnd || 0),
+      voice: String(elements.dictationVoiceSelect.value || ''),
+      createdAt: Number(existing && existing.createdAt || now),
+      updatedAt: now
+    };
+  }
+
+  function renderSessions() {
+    const list = elements.dictationSessionsList;
+    if (!list) return;
+    list.replaceChildren();
+    const sorted = [...sessionStore.sessions].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    for (const item of sorted) {
+      const button = documentRoot.createElement('button');
+      button.type = 'button';
+      button.className = 'dictation-session-item';
+      button.dataset.sessionId = item.id;
+      button.setAttribute('aria-current', String(item.id === sessionStore.activeId));
+      const title = documentRoot.createElement('span');
+      title.className = 'dictation-session-title';
+      title.textContent = item.title || 'Dictado sin título';
+      const meta = documentRoot.createElement('span');
+      meta.className = 'dictation-session-meta';
+      const words = String(item.text || '').trim() ? String(item.text).trim().split(/\s+/).length : 0;
+      const date = Number(item.updatedAt || 0) ? new Date(Number(item.updatedAt)).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : 'sin fecha';
+      meta.textContent = `${words} palabras · ${date}`;
+      button.append(title, meta);
+      button.addEventListener('click', () => loadSession(item.id));
+      list.appendChild(button);
+    }
+  }
+
   function persistNow() {
     windowRef.clearTimeout(saveTimer);
     saveTimer = 0;
     try {
-      storage.setItem(STORAGE_KEY, JSON.stringify({
-        title: elements.dictationTitleInput.value,
-        text: editor.value,
-        updatedAt: Date.now()
-      }));
+      const current = snapshotSession();
+      sessionStore.activeId = current.id;
+      sessionStore.sessions = [current, ...sessionStore.sessions.filter(item => item.id !== current.id)]
+        .slice(0, MAX_SAVED_SESSIONS);
+      storage.setItem(STORAGE_KEY, JSON.stringify(sessionStore));
     } catch (_) {}
     updateStats();
+    renderSessions();
   }
 
   function schedulePersist() {
@@ -584,14 +630,80 @@ export function createDictationController({
     try {
       const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
       if (saved && typeof saved === 'object') {
-        editor.value = String(saved.text || '');
-        elements.dictationTitleInput.value = String(saved.title || 'Dictado sin título');
+        if (Number(saved.schemaVersion) === SESSION_SCHEMA_VERSION && Array.isArray(saved.sessions)) {
+          sessionStore = {
+            schemaVersion: SESSION_SCHEMA_VERSION,
+            activeId: String(saved.activeId || ''),
+            sessions: saved.sessions.slice(0, MAX_SAVED_SESSIONS).filter(item => item && typeof item === 'object')
+          };
+        } else if (saved.text || saved.title) {
+          sessionStore = {
+            schemaVersion: SESSION_SCHEMA_VERSION,
+            activeId: newSessionId(),
+            sessions: [{
+              id: '', title: String(saved.title || 'Dictado sin título'), text: String(saved.text || ''),
+              selectionStart: String(saved.text || '').length, selectionEnd: String(saved.text || '').length,
+              voice: '', createdAt: Number(saved.updatedAt || Date.now()), updatedAt: Number(saved.updatedAt || Date.now())
+            }]
+          };
+          sessionStore.sessions[0].id = sessionStore.activeId;
+        }
       }
     } catch (_) {}
+    if (!sessionStore.sessions.length) {
+      const id = newSessionId();
+      sessionStore.activeId = id;
+      sessionStore.sessions = [{ id, title: 'Dictado sin título', text: '', selectionStart: 0, selectionEnd: 0, voice: '', createdAt: Date.now(), updatedAt: Date.now() }];
+    }
+    if (!activeSession()) sessionStore.activeId = sessionStore.sessions[0].id;
+    const current = activeSession();
+    editor.value = String(current.text || '');
+    elements.dictationTitleInput.value = String(current.title || 'Dictado sin título');
     if (!elements.dictationTitleInput.value) elements.dictationTitleInput.value = 'Dictado sin título';
-    editor.selectionStart = editor.value.length;
-    editor.selectionEnd = editor.value.length;
+    editor.selectionStart = Math.min(editor.value.length, Number(current.selectionStart || editor.value.length));
+    editor.selectionEnd = Math.min(editor.value.length, Math.max(editor.selectionStart, Number(current.selectionEnd || editor.selectionStart)));
     updateStats();
+    renderSessions();
+  }
+
+  function loadSession(id) {
+    if (id === sessionStore.activeId) return;
+    flushManualHistory();
+    persistNow();
+    const next = sessionStore.sessions.find(item => item.id === id);
+    if (!next) return;
+    sessionStore.activeId = id;
+    editor.value = String(next.text || '');
+    elements.dictationTitleInput.value = String(next.title || 'Dictado sin título');
+    editor.selectionStart = Math.min(editor.value.length, Number(next.selectionStart || 0));
+    editor.selectionEnd = Math.min(editor.value.length, Math.max(editor.selectionStart, Number(next.selectionEnd || editor.selectionStart)));
+    undoStack.length = 0;
+    redoStack.length = 0;
+    if (next.voice && [...elements.dictationVoiceSelect.options].some(option => option.value === next.voice)) {
+      elements.dictationVoiceSelect.value = next.voice;
+      elements.dictationVoiceSelect.dispatchEvent(new windowRef.Event('change'));
+    }
+    persistNow();
+    editor.focus();
+    addActivity(`Borrador recuperado: ${next.title || 'sin título'}.`);
+  }
+
+  function createNewSession() {
+    if (editor.value.trim() && !windowRef.confirm('¿Abrir un borrador nuevo? El actual queda guardado en el historial.')) return;
+    flushManualHistory();
+    persistNow();
+    const id = newSessionId();
+    sessionStore.activeId = id;
+    sessionStore.sessions.unshift({ id, title: 'Dictado sin título', text: '', selectionStart: 0, selectionEnd: 0, voice: String(elements.dictationVoiceSelect.value || ''), createdAt: Date.now(), updatedAt: Date.now() });
+    editor.value = '';
+    editor.selectionStart = 0;
+    editor.selectionEnd = 0;
+    elements.dictationTitleInput.value = 'Dictado sin título';
+    undoStack.length = 0;
+    redoStack.length = 0;
+    persistNow();
+    editor.focus();
+    addActivity('Borrador nuevo listo.');
   }
 
   function pushUndo(state) {
@@ -656,6 +768,16 @@ export function createDictationController({
     try { elements.dictationPlayer.pause(); } catch (_) {}
     elements.dictationPlayer.removeAttribute('src');
     if (active && !processing) startRecorderCycle();
+  }
+
+  function seekSpeech(seconds) {
+    const player = elements.dictationPlayer;
+    if (!player || !Number.isFinite(Number(player.duration)) || !player.src) {
+      addActivity('No hay una lectura activa para desplazar.');
+      return;
+    }
+    const target = Math.max(0, Math.min(Number(player.duration), Number(player.currentTime || 0) + Number(seconds || 0)));
+    player.currentTime = target;
   }
 
   async function playAudioUrl(url, sequence) {
@@ -1061,19 +1183,54 @@ export function createDictationController({
     addActivity(`Descargado: ${filename}.`);
   }
 
+  async function downloadPdf() {
+    if (!editor.value.trim()) {
+      addActivity('No hay texto para exportar en PDF.');
+      return;
+    }
+    const title = cleanText(elements.dictationTitleInput.value) || 'Dictado';
+    const filenameStem = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'dictado';
+    try {
+      const response = await fetchFn('/api/dictation/export/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, text: editor.value, page_numbers: Boolean(elements.dictationPdfPageNumbers.checked) })
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || data.error || 'pdf_export_failed');
+      }
+      const url = windowRef.URL.createObjectURL(await response.blob());
+      const anchor = documentRoot.createElement('a');
+      anchor.href = url;
+      anchor.download = `${filenameStem}.pdf`;
+      documentRoot.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      windowRef.URL.revokeObjectURL(url);
+      addActivity(`PDF exportado: ${filenameStem}.pdf.`);
+    } catch (error) {
+      addActivity(`No pude exportar el PDF: ${error.message}.`);
+    }
+  }
+
   elements.dictationToggleBtn.addEventListener('click', () => elements.dictationWorkspace.hidden ? open() : close());
   elements.dictationCloseBtn.addEventListener('click', close);
   elements.dictationMicBtn.addEventListener('click', () => active ? stopListening() : startListening());
   elements.dictationStopSpeechBtn.addEventListener('click', stopSpeech);
   elements.dictationUndoBtn.addEventListener('click', undo);
   elements.dictationRedoBtn.addEventListener('click', redo);
+  elements.dictationBackBtn.addEventListener('click', () => seekSpeech(-10));
   elements.dictationReadBtn.addEventListener('click', () => {
     const selection = readTextForInstruction(editor, { kind: 'read', scope: 'selection' });
     if (selection.error) return addActivity(selection.error);
     speakText(selection.text, 'selección');
   });
+  elements.dictationForwardBtn.addEventListener('click', () => seekSpeech(10));
   elements.dictationUseReaderBtn.addEventListener('click', mountInReader);
   elements.dictationDownloadBtn.addEventListener('click', downloadText);
+  elements.dictationDownloadPdfBtn.addEventListener('click', downloadPdf);
+  elements.dictationNewBtn.addEventListener('click', createNewSession);
   elements.dictationClearBtn.addEventListener('click', () => {
     if (editor.value && !windowRef.confirm('¿Limpiar el borrador de dictado? Podrás deshacerlo mientras esta pestaña siga abierta.')) return;
     mutate({ kind: 'clear' });
@@ -1099,6 +1256,7 @@ export function createDictationController({
     schedulePersist();
   });
   elements.dictationTitleInput.addEventListener('input', schedulePersist);
+  elements.dictationVoiceSelect.addEventListener('change', schedulePersist);
 
   restoreDraft();
   refreshAssistantStatus();
@@ -1108,6 +1266,9 @@ export function createDictationController({
     close,
     undo,
     redo,
+    loadSession,
+    createNewSession,
+    seekSpeech,
     applyInstruction,
     stopListening,
     stopSpeech,

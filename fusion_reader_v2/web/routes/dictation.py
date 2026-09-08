@@ -4,6 +4,13 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qs, urlparse
 
+from reportlab.lib.colors import HexColor
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
 from fusion_reader_v2 import FusionReaderV2
 
 
@@ -19,6 +26,67 @@ class DictationResponder(Protocol):
     def _result(self, status: int, payload: dict) -> None: ...
 
     def _read_body_to_temp(self, filename: str) -> Path: ...
+
+    def _send(self, status: int, content_type: str, raw: bytes) -> None: ...
+
+
+def _dictation_pdf(title: str, text: str, show_page_numbers: bool) -> bytes:
+    """Create a clean, local A4 export without involving any cloud service."""
+    from io import BytesIO
+    from xml.sax.saxutils import escape
+
+    source = str(text or "").strip()
+    if not source:
+        raise ValueError("dictation_empty")
+    if len(source) > 500_000:
+        raise ValueError("dictation_too_large")
+    buffer = BytesIO()
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle(
+        "DictationBody",
+        parent=styles["BodyText"],
+        fontName="Times-Roman",
+        fontSize=11.5,
+        leading=17,
+        textColor=HexColor("#172a2e"),
+        spaceAfter=10,
+    )
+    heading = ParagraphStyle(
+        "DictationHeading",
+        parent=styles["Title"],
+        fontName="Times-Bold",
+        fontSize=20,
+        leading=25,
+        alignment=TA_CENTER,
+        textColor=HexColor("#123d45"),
+        spaceAfter=20,
+    )
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=2.5 * cm,
+        rightMargin=2.5 * cm,
+        topMargin=2.4 * cm,
+        bottomMargin=2.2 * cm,
+        title=title,
+        author="Panda Fusión",
+    )
+
+    def page_number(canvas, document) -> None:
+        if not show_page_numbers:
+            return
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(HexColor("#52666b"))
+        canvas.drawCentredString(A4[0] / 2, 1.15 * cm, str(document.page))
+        canvas.restoreState()
+
+    story = [Paragraph(escape(title or "Dictado"), heading), Spacer(1, 0.15 * cm)]
+    paragraphs = [part.strip() for part in source.replace("\r\n", "\n").split("\n\n") if part.strip()]
+    for part in paragraphs:
+        story.append(Paragraph(escape(part).replace("\n", "<br/>"), body))
+    doc.build(story, onFirstPage=page_number, onLaterPages=page_number)
+    return buffer.getvalue()
 
 
 def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
@@ -67,6 +135,15 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/export/pdf":
+        title = str(payload.get("title") or "Dictado").strip()[:160] or "Dictado"
+        try:
+            raw = _dictation_pdf(title, str(payload.get("text") or ""), bool(payload.get("page_numbers", True)))
+        except ValueError as exc:
+            responder._json(400, {"ok": False, "error": str(exc), "detail": "No hay texto válido para exportar."})
+        else:
+            responder._send(200, "application/pdf", raw)
+        return True
     if path == "/api/dictation/assistant/warm":
         warm = getattr(getattr(responder, "context", None), "warm_dictation_model", None)
         if not callable(warm):

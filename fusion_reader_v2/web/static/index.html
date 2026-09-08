@@ -263,9 +263,14 @@
       <div class="dictation-editor-tools">
         <button id="dictationUndoBtn" class="compact-btn" type="button">Deshacer</button>
         <button id="dictationRedoBtn" class="compact-btn" type="button">Rehacer</button>
+        <button id="dictationBackBtn" class="compact-btn" type="button" title="Retrocede diez segundos en la lectura actual">⏪ Atrás</button>
         <button id="dictationReadBtn" class="compact-btn" type="button">Leer selección</button>
+        <button id="dictationForwardBtn" class="compact-btn" type="button" title="Adelanta diez segundos en la lectura actual">Adelante ⏩</button>
         <button id="dictationUseReaderBtn" class="compact-btn" type="button">Pasar al lector</button>
         <button id="dictationDownloadBtn" class="compact-btn" type="button">Descargar TXT</button>
+        <button id="dictationDownloadPdfBtn" class="compact-btn" type="button">Descargar PDF</button>
+        <label class="toggle compact-toggle dictation-pdf-pages"><input id="dictationPdfPageNumbers" type="checkbox" checked> Números de página</label>
+        <button id="dictationNewBtn" class="compact-btn" type="button">Nuevo borrador</button>
         <button id="dictationClearBtn" class="compact-btn danger-btn" type="button">Limpiar</button>
       </div>
       <p id="dictationStats" class="dictation-stats">0 caracteres · 0 palabras · 0 hojas virtuales</p>
@@ -277,10 +282,10 @@
         <summary>Órdenes que entiende</summary>
         <p>El dictado normal se escribe literalmente. Para ejecutar una acción, podés decir la frase completa —“Lucy, borrá X”— o decir sólo “Lucy”, hacer una pausa y dictar la orden cuando aparezca <em>Lucy está escuchando tu orden</em>. También entiende “Lucy, borrá 10 palabras”, “Lucy, cambiá las últimas 20 palabras por Y”, “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
       </details>
-      <div>
-        <strong class="dictation-activity-title">Consola</strong>
-        <div id="dictationActivity" class="dictation-activity" aria-live="polite"></div>
-      </div>
+      <details id="dictationSessions" class="dictation-sessions">
+        <summary>Borradores guardados</summary>
+        <div id="dictationSessionsList" class="dictation-sessions-list" aria-live="polite"></div>
+      </details>
       <audio id="dictationPlayer" class="dictation-player" controls></audio>
     </section>
   </div>

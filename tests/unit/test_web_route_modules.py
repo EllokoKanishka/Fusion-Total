@@ -36,9 +36,13 @@ class Responder:
     def __init__(self) -> None:
         self.context = Context()
         self.responses: list[tuple[int, dict]] = []
+        self.raw_responses: list[tuple[int, str, bytes]] = []
 
     def _json(self, status: int, payload: dict) -> None:
         self.responses.append((status, payload))
+
+    def _send(self, status: int, content_type: str, raw: bytes) -> None:
+        self.raw_responses.append((status, content_type, raw))
 
 
 class App:
@@ -164,6 +168,15 @@ class WebRouteModuleTests(unittest.TestCase):
             )
         )  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["selection"], [0, 5])
+        self.assertTrue(
+            handle_dictation_post(
+                responder,
+                "/api/dictation/export/pdf",
+                {"title": "Borrador", "text": "Primer párrafo.\n\nSegundo párrafo.", "page_numbers": True},
+            )
+        )  # type: ignore[arg-type]
+        self.assertEqual(responder.raw_responses[-1][1], "application/pdf")
+        self.assertTrue(responder.raw_responses[-1][2].startswith(b"%PDF-"))
 
     def test_preparation_module_owns_status_start_and_cancel(self) -> None:
         responder = DomainResponder()
