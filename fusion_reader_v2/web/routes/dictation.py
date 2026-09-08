@@ -5,11 +5,13 @@ from typing import Protocol
 from urllib.parse import parse_qs, urlparse
 
 from fusion_reader_v2 import FusionReaderV2
+from fusion_reader_v2.dictation_workspace import DictationProjectStore, render_dictation_pdf
 
 
 class DictationResponder(Protocol):
     path: str
     headers: object
+    context: object
 
     @property
     def app(self) -> FusionReaderV2: ...
@@ -17,6 +19,8 @@ class DictationResponder(Protocol):
     def _json(self, status: int, payload: dict) -> None: ...
 
     def _result(self, status: int, payload: dict) -> None: ...
+
+    def _send(self, status: int, content_type: str, raw: bytes) -> None: ...
 
     def _read_body_to_temp(self, filename: str) -> Path: ...
 
@@ -32,7 +36,20 @@ def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
     return out
 
 
+def _project_store(responder: DictationResponder) -> DictationProjectStore:
+    store = getattr(getattr(responder, "context", None), "dictation_projects", None)
+    if not isinstance(store, DictationProjectStore):
+        raise RuntimeError("dictation_projects_unavailable")
+    return store
+
+
 def handle_dictation_get(responder: DictationResponder, path: str) -> bool:
+    if path == "/api/dictation/projects":
+        try:
+            responder._json(200, {"ok": True, "projects": _project_store(responder).list()})
+        except RuntimeError as exc:
+            responder._json(503, {"ok": False, "error": str(exc)})
+        return True
     if path != "/api/dictation/assistant":
         return False
     responder._json(200, _assistant_status(responder, responder.app.dictation_assistant_status()))
@@ -67,6 +84,36 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
 
 
 def handle_dictation_post(responder: DictationResponder, path: str, payload: dict) -> bool:
+    if path == "/api/dictation/projects":
+        action = str(payload.get("action") or "save").strip().lower()
+        try:
+            store = _project_store(responder)
+            if action == "save":
+                project_payload = payload.get("project") if isinstance(payload.get("project"), dict) else payload
+                responder._json(200, {"ok": True, **store.save(dict(project_payload))})
+            elif action == "load":
+                responder._json(200, {"ok": True, "project": store.load(str(payload.get("project_id") or ""))})
+            elif action == "delete":
+                responder._json(200, {"ok": True, **store.delete(str(payload.get("project_id") or ""))})
+            else:
+                responder._json(400, {"ok": False, "error": "invalid_dictation_project_action"})
+        except KeyError as exc:
+            responder._json(404, {"ok": False, "error": str(exc.args[0] if exc.args else exc)})
+        except (RuntimeError, TypeError, ValueError) as exc:
+            responder._json(400 if not isinstance(exc, RuntimeError) else 503, {"ok": False, "error": str(exc)})
+        return True
+    if path == "/api/dictation/export/pdf":
+        try:
+            raw = render_dictation_pdf(
+                str(payload.get("title") or "Dictado"),
+                str(payload.get("text") or ""),
+                page_numbers=bool(payload.get("page_numbers", True)),
+            )
+        except ValueError as exc:
+            responder._json(400, {"ok": False, "error": str(exc)})
+            return True
+        responder._send(200, "application/pdf", raw)
+        return True
     if path == "/api/dictation/assistant/warm":
         warm = getattr(getattr(responder, "context", None), "warm_dictation_model", None)
         if not callable(warm):

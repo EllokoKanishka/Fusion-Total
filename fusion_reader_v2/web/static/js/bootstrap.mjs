@@ -50,7 +50,15 @@ const dictationController = createDictationController({
   api,
   elements: els,
   refreshMainStatus: data => renderStatus(data),
-  log
+  log,
+  applyVoice: async voice => {
+    const wanted = String(voice || '');
+    if (!wanted) return false;
+    els.dictationVoiceSelect.value = wanted;
+    if (!els.dictationVoiceSelect.value) return false;
+    await changeDictationVoice();
+    return true;
+  }
 });
 
 function beginBusyLease() {

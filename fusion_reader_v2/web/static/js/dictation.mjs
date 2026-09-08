@@ -1,7 +1,7 @@
 const DEFAULT_PAGE_CHARS = 1800;
 const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const WAKE_COMMAND_WINDOW_MS = 20000;
-const STORAGE_KEY = 'pandafusion.dictation.v1';
+const STORAGE_KEY = 'pandafusion.dictation.v1'; // legacy emergency snapshot and migration source
 
 function cleanText(value) {
   return String(value || '').trim();
@@ -292,6 +292,13 @@ export function readTextForInstruction(editor, instruction, pageChars = DEFAULT_
   return { text: selected, start: range.start, end: range.end, label: scope };
 }
 
+export function speechNavigationTarget(index, delta, total) {
+  const count = Math.max(0, Number(total || 0));
+  if (!count) return -1;
+  const current = Math.max(0, Math.min(Number(index || 0), count - 1));
+  return Math.max(0, Math.min(current + Number(delta || 0), count - 1));
+}
+
 export function splitSpeechText(value, maxChars = 620) {
   const clean = String(value || '').trim();
   if (!clean) return [];
@@ -359,6 +366,7 @@ export function createDictationController({
   elements,
   refreshMainStatus,
   log,
+  applyVoice = null,
   documentRoot = document,
   windowRef = window,
   fetchFn = fetch,
@@ -390,6 +398,12 @@ export function createDictationController({
   let lastTick = 0;
   let noiseFloor = 0.012;
   let chunks = [];
+  let projects = [];
+  let currentProjectId = '';
+  let projectsReady = false;
+  let projectSaveChain = Promise.resolve();
+  let pendingProjectVoice = '';
+  let speechQueue = { parts: [], urls: [], label: 'tramo', index: -1 };
   const wakeGate = createWakeCommandGate({ now: () => Date.now() });
 
   function setStatus(message, mode = '') {
@@ -397,11 +411,7 @@ export function createDictationController({
     elements.dictationStatus.dataset.mode = mode;
   }
 
-  function addActivity(message) {
-    const clean = cleanText(message);
-    if (!clean) return;
-    activity.unshift(clean);
-    activity.splice(20);
+  function renderActivity() {
     elements.dictationActivity.innerHTML = '';
     for (const item of activity) {
       const row = documentRoot.createElement('div');
@@ -409,6 +419,14 @@ export function createDictationController({
       row.textContent = item;
       elements.dictationActivity.appendChild(row);
     }
+  }
+
+  function addActivity(message) {
+    const clean = cleanText(message);
+    if (!clean) return;
+    activity.unshift(clean);
+    activity.splice(50);
+    renderActivity();
   }
 
   function renderAssistantStatus(data) {
@@ -463,13 +481,14 @@ export function createDictationController({
     }
   }
 
-  async function changeAssistant() {
+  async function changeAssistant({ persist = true, announce = true } = {}) {
     const provider = String(elements.dictationAssistantSelect.value || 'rules');
     try {
       const data = await api('/api/dictation/assistant', { provider });
       renderAssistantStatus(data);
       const selected = (data.available || []).find(item => String(item.id || '') === data.selected) || {};
-      addActivity(`Asistente: ${selected.label || provider}${selected.model ? ` (${selected.model})` : ''}.`);
+      if (announce) addActivity(`Asistente: ${selected.label || provider}${selected.model ? ` (${selected.model})` : ''}.`);
+      if (persist) schedulePersist();
     } catch (error) {
       addActivity(`No pude cambiar el asistente: ${error.message}.`);
       await refreshAssistantStatus();
@@ -561,9 +580,58 @@ export function createDictationController({
     elements.dictationRedoBtn.disabled = redoStack.length === 0;
   }
 
-  function persistNow() {
-    windowRef.clearTimeout(saveTimer);
-    saveTimer = 0;
+  function projectTime(value) {
+    const millis = Number(value || 0) * 1000;
+    if (!millis) return '';
+    try {
+      return new Intl.DateTimeFormat('es-AR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(millis));
+    } catch (_) {
+      return new Date(millis).toLocaleString();
+    }
+  }
+
+  function renderProjects() {
+    elements.dictationProjectList.innerHTML = '';
+    if (!projects.length) {
+      const empty = documentRoot.createElement('div');
+      empty.className = 'dictation-project-empty';
+      empty.textContent = 'Todavía no hay otros dictados guardados.';
+      elements.dictationProjectList.appendChild(empty);
+    }
+    for (const item of projects) {
+      const row = documentRoot.createElement('div');
+      row.className = `dictation-project-row${item.project_id === currentProjectId ? ' active' : ''}`;
+      const openButton = documentRoot.createElement('button');
+      openButton.type = 'button';
+      openButton.className = 'dictation-project-open';
+      const title = documentRoot.createElement('strong');
+      title.textContent = String(item.title || 'Dictado sin título');
+      const meta = documentRoot.createElement('span');
+      meta.textContent = `${Number(item.words || 0)} palabras${item.updated_ts ? ` · ${projectTime(item.updated_ts)}` : ''}`;
+      openButton.append(title, meta);
+      openButton.addEventListener('click', () => loadProject(String(item.project_id || '')));
+      const deleteButton = documentRoot.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'compact-btn danger-btn dictation-project-delete';
+      deleteButton.textContent = 'Eliminar';
+      deleteButton.addEventListener('click', () => deleteProject(String(item.project_id || ''), String(item.title || '')));
+      row.append(openButton, deleteButton);
+      elements.dictationProjectList.appendChild(row);
+    }
+    if (!elements.dictationProjectStatus.textContent || /cargando/i.test(elements.dictationProjectStatus.textContent)) {
+      elements.dictationProjectStatus.textContent = projectsReady ? 'Guardado automático activo' : 'Respaldo local';
+    }
+  }
+
+  function upsertProjectSummary(summary) {
+    if (!summary || !summary.project_id) return;
+    projects = projects.filter(item => item.project_id !== summary.project_id);
+    projects.push(summary);
+    projects.sort((left, right) => Number(right.updated_ts || 0) - Number(left.updated_ts || 0));
+    renderProjects();
+  }
+
+  function persistLegacyFallback() {
     try {
       storage.setItem(STORAGE_KEY, JSON.stringify({
         title: elements.dictationTitleInput.value,
@@ -571,27 +639,214 @@ export function createDictationController({
         updatedAt: Date.now()
       }));
     } catch (_) {}
+  }
+
+  function legacyDraft() {
+    try {
+      const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+      return saved && typeof saved === 'object' ? saved : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function projectPayload() {
+    return {
+      project_id: currentProjectId,
+      title: elements.dictationTitleInput.value,
+      text: editor.value,
+      voice: String(elements.dictationVoiceSelect.value || ''),
+      assistant: String(elements.dictationAssistantSelect.value || 'rules'),
+      commands_enabled: Boolean(elements.dictationCommandsToggle.checked),
+      pdf_page_numbers: Boolean(elements.dictationPdfPageNumbersToggle.checked),
+      selection_start: Number(editor.selectionStart || 0),
+      selection_end: Number(editor.selectionEnd || 0),
+      activity: [...activity]
+    };
+  }
+
+  function persistNow() {
+    windowRef.clearTimeout(saveTimer);
+    saveTimer = 0;
+    persistLegacyFallback();
     updateStats();
+    if (!projectsReady) return projectSaveChain;
+    const payload = projectPayload();
+    elements.dictationProjectStatus.textContent = 'Guardando…';
+    projectSaveChain = projectSaveChain.catch(() => {}).then(async () => {
+      try {
+        const data = await api('/api/dictation/projects', { action: 'save', project: payload });
+        currentProjectId = String(data.project && data.project.project_id || currentProjectId);
+        upsertProjectSummary(data.summary);
+        elements.dictationProjectStatus.textContent = 'Guardado';
+        return data;
+      } catch (error) {
+        elements.dictationProjectStatus.textContent = 'Respaldo local; Panda no pudo guardar el proyecto';
+        return null;
+      }
+    });
+    return projectSaveChain;
   }
 
   function schedulePersist() {
     windowRef.clearTimeout(saveTimer);
-    saveTimer = windowRef.setTimeout(persistNow, 350);
+    saveTimer = windowRef.setTimeout(persistNow, 450);
     updateStats();
   }
 
-  function restoreDraft() {
+  async function applyPendingProjectVoice() {
+    if (!pendingProjectVoice || typeof applyVoice !== 'function') return false;
+    const options = Array.from(elements.dictationVoiceSelect.options || []);
+    if (!options.some(option => String(option.value || '') === pendingProjectVoice)) return false;
+    const wanted = pendingProjectVoice;
+    elements.dictationVoiceSelect.value = wanted;
     try {
-      const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
-      if (saved && typeof saved === 'object') {
-        editor.value = String(saved.text || '');
-        elements.dictationTitleInput.value = String(saved.title || 'Dictado sin título');
-      }
-    } catch (_) {}
-    if (!elements.dictationTitleInput.value) elements.dictationTitleInput.value = 'Dictado sin título';
-    editor.selectionStart = editor.value.length;
-    editor.selectionEnd = editor.value.length;
+      const applied = await applyVoice(wanted);
+      if (applied === false) return false;
+      pendingProjectVoice = '';
+      return true;
+    } catch (error) {
+      addActivity(`No pude restaurar la voz ${wanted}: ${error.message}.`);
+      return false;
+    }
+  }
+
+  async function applyLoadedProject(project, { announce = true } = {}) {
+    if (!project || typeof project !== 'object') return;
+    if (active) stopListening();
+    stopSpeech({ clearQueue: true, resumeDictation: false });
+    currentProjectId = String(project.project_id || '');
+    elements.dictationTitleInput.value = String(project.title || 'Dictado sin título');
+    editor.value = String(project.text || '');
+    elements.dictationCommandsToggle.checked = project.commands_enabled !== false;
+    elements.dictationPdfPageNumbersToggle.checked = project.pdf_page_numbers !== false;
+    activity.splice(0, activity.length, ...(Array.isArray(project.activity) ? project.activity.slice(0, 50) : []));
+    renderActivity();
+    undoStack.length = 0;
+    redoStack.length = 0;
+    const start = Math.max(0, Math.min(Number(project.selection_start || 0), editor.value.length));
+    const end = Math.max(start, Math.min(Number(project.selection_end || start), editor.value.length));
+    editor.selectionStart = start;
+    editor.selectionEnd = end;
+    pendingProjectVoice = String(project.voice || '');
+    const wantedAssistant = String(project.assistant || 'rules');
+    if (Array.from(elements.dictationAssistantSelect.options || []).some(option => option.value === wantedAssistant)) {
+      elements.dictationAssistantSelect.value = wantedAssistant;
+      await changeAssistant({ persist: false, announce: false });
+    }
+    await applyPendingProjectVoice();
     updateStats();
+    renderProjects();
+    if (announce) addActivity(`Proyecto abierto: ${elements.dictationTitleInput.value || 'Dictado sin título'}.`);
+  }
+
+  async function loadProject(projectId) {
+    const wanted = cleanText(projectId);
+    if (!wanted || wanted === currentProjectId) return;
+    if (currentProjectId) await persistNow();
+    try {
+      const data = await api('/api/dictation/projects', { action: 'load', project_id: wanted });
+      await applyLoadedProject(data.project);
+    } catch (error) {
+      addActivity(`No pude abrir ese dictado: ${error.message}.`);
+    }
+  }
+
+  async function createNewProject() {
+    if (currentProjectId) await persistNow();
+    try {
+      const data = await api('/api/dictation/projects', {
+        action: 'save',
+        project: {
+          title: 'Dictado sin título',
+          text: '',
+          voice: String(elements.dictationVoiceSelect.value || ''),
+          assistant: String(elements.dictationAssistantSelect.value || 'rules'),
+          commands_enabled: Boolean(elements.dictationCommandsToggle.checked),
+          pdf_page_numbers: true,
+          activity: []
+        }
+      });
+      projectsReady = true;
+      upsertProjectSummary(data.summary);
+      await applyLoadedProject(data.project, { announce: false });
+      addActivity('Nuevo dictado creado.');
+      schedulePersist();
+      editor.focus();
+      elements.dictationTitleInput.focus();
+      elements.dictationTitleInput.select();
+    } catch (error) {
+      addActivity(`No pude crear el dictado: ${error.message}.`);
+    }
+  }
+
+  async function deleteProject(projectId, label) {
+    const wanted = cleanText(projectId);
+    if (!wanted) return;
+    if (!windowRef.confirm(`¿Eliminar “${label || 'este dictado'}”? Esta acción no se puede deshacer.`)) return;
+    if (wanted === currentProjectId) await persistNow();
+    try {
+      await api('/api/dictation/projects', { action: 'delete', project_id: wanted });
+      projects = projects.filter(item => item.project_id !== wanted);
+      if (wanted === currentProjectId) {
+        currentProjectId = '';
+        if (projects.length) {
+          await loadProject(String(projects[0].project_id || ''));
+        } else {
+          await createNewProject();
+        }
+      } else {
+        renderProjects();
+      }
+    } catch (error) {
+      addActivity(`No pude eliminar ese dictado: ${error.message}.`);
+    }
+  }
+
+  async function initializeProjects() {
+    await refreshAssistantStatus();
+    const fallback = legacyDraft();
+    try {
+      const data = await api('/api/dictation/projects');
+      projects = Array.isArray(data.projects) ? data.projects : [];
+      projectsReady = true;
+      renderProjects();
+      if (projects.length) {
+        const loaded = await api('/api/dictation/projects', { action: 'load', project_id: projects[0].project_id });
+        await applyLoadedProject(loaded.project, { announce: false });
+        return;
+      }
+      if (String(fallback.text || '').trim() || String(fallback.title || '').trim()) {
+        const migrated = await api('/api/dictation/projects', {
+          action: 'save',
+          project: {
+            title: String(fallback.title || 'Dictado sin título'),
+            text: String(fallback.text || ''),
+            voice: String(elements.dictationVoiceSelect.value || ''),
+            assistant: String(elements.dictationAssistantSelect.value || 'rules'),
+            commands_enabled: Boolean(elements.dictationCommandsToggle.checked),
+            pdf_page_numbers: true,
+            activity: ['Borrador anterior migrado al historial de Panda Fusión.']
+          }
+        });
+        upsertProjectSummary(migrated.summary);
+        await applyLoadedProject(migrated.project, { announce: false });
+        schedulePersist();
+        return;
+      }
+      await createNewProject();
+    } catch (error) {
+      projectsReady = false;
+      editor.value = String(fallback.text || '');
+      elements.dictationTitleInput.value = String(fallback.title || 'Dictado sin título');
+      if (!elements.dictationTitleInput.value) elements.dictationTitleInput.value = 'Dictado sin título';
+      editor.selectionStart = editor.value.length;
+      editor.selectionEnd = editor.value.length;
+      elements.dictationProjectStatus.textContent = 'Respaldo local';
+      renderProjects();
+      addActivity(`No pude abrir el historial de Panda: ${error.message}. El borrador local sigue disponible.`);
+      updateStats();
+    }
   }
 
   function pushUndo(state) {
@@ -614,6 +869,7 @@ export function createDictationController({
     const before = snapshot(editor);
     const result = applyEditorInstruction(editor, instruction);
     if (result.changed) {
+      invalidateSpeechQueue();
       pushUndo(before);
       redoStack.length = 0;
       schedulePersist();
@@ -650,12 +906,25 @@ export function createDictationController({
     addActivity('Cambio rehecho.');
   }
 
-  function stopSpeech() {
+  function renderSpeechNavigation() {
+    const total = speechQueue.parts.length;
+    elements.dictationReadPrevBtn.disabled = !total || speechQueue.index <= 0;
+    elements.dictationReadNextBtn.disabled = !total || speechQueue.index < 0 || speechQueue.index >= total - 1;
+  }
+
+  function stopSpeech({ clearQueue = false, resumeDictation = true } = {}) {
     speechSequence += 1;
     speaking = false;
     try { elements.dictationPlayer.pause(); } catch (_) {}
     elements.dictationPlayer.removeAttribute('src');
-    if (active && !processing) startRecorderCycle();
+    if (clearQueue) speechQueue = { parts: [], urls: [], label: 'tramo', index: -1 };
+    renderSpeechNavigation();
+    if (resumeDictation && active && !processing) startRecorderCycle();
+  }
+
+  function invalidateSpeechQueue() {
+    if (!speechQueue.parts.length && !speaking) return;
+    stopSpeech({ clearQueue: true });
   }
 
   async function playAudioUrl(url, sequence) {
@@ -674,32 +943,66 @@ export function createDictationController({
     });
   }
 
-  async function speakText(text, label = 'tramo') {
-    const parts = splitSpeechText(text);
-    if (!parts.length) return;
+  async function playSpeechQueueFrom(startIndex) {
+    if (!speechQueue.parts.length) return;
+    const target = speechNavigationTarget(startIndex, 0, speechQueue.parts.length);
+    if (target < 0) return;
     stopRecorderCycle(true);
     speaking = true;
     speechSequence += 1;
     const sequence = speechSequence;
-    setStatus(`Leyendo ${label}: 1 de ${parts.length}…`, 'speaking');
     try {
-      for (let index = 0; index < parts.length && sequence === speechSequence; index += 1) {
-        setStatus(`Leyendo ${label}: ${index + 1} de ${parts.length}…`, 'speaking');
-        const data = await api('/api/dictation/speak', { text: parts[index] });
-        if (!data.audio_url) throw new Error('La voz no devolvió un audio reproducible.');
-        await playAudioUrl(data.audio_url, sequence);
+      for (let index = target; index < speechQueue.parts.length && sequence === speechSequence; index += 1) {
+        speechQueue.index = index;
+        renderSpeechNavigation();
+        setStatus(`Leyendo ${speechQueue.label}: ${index + 1} de ${speechQueue.parts.length}…`, 'speaking');
+        let url = speechQueue.urls[index];
+        if (!url) {
+          const data = await api('/api/dictation/speak', { text: speechQueue.parts[index] });
+          if (sequence !== speechSequence) return;
+          if (!data.audio_url) throw new Error('La voz no devolvió un audio reproducible.');
+          url = data.audio_url;
+          speechQueue.urls[index] = url;
+        }
+        await playAudioUrl(url, sequence);
       }
-      if (sequence === speechSequence) addActivity(`Lectura terminada (${label}).`);
+      if (sequence === speechSequence) addActivity(`Lectura terminada (${speechQueue.label}).`);
     } catch (error) {
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
       addActivity(`No pude leer: ${detail}.`);
     } finally {
       if (sequence === speechSequence) {
         speaking = false;
+        renderSpeechNavigation();
         setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
         if (active && !processing) startRecorderCycle();
       }
     }
+  }
+
+  function speakText(text, label = 'tramo') {
+    const parts = splitSpeechText(text);
+    if (!parts.length) return;
+    stopSpeech({ clearQueue: true, resumeDictation: false });
+    speechQueue = { parts, urls: Array(parts.length).fill(''), label, index: 0 };
+    renderSpeechNavigation();
+    return playSpeechQueueFrom(0);
+  }
+
+  function moveSpeech(delta) {
+    if (!speechQueue.parts.length || speechQueue.index < 0) {
+      addActivity('Primero usá “Leer selección” para crear una lectura navegable.');
+      return;
+    }
+    const target = speechNavigationTarget(speechQueue.index, delta, speechQueue.parts.length);
+    if (target === speechQueue.index) {
+      addActivity(delta < 0 ? 'Ya estás al comienzo de esta lectura.' : 'Ya estás al final de esta lectura.');
+      return;
+    }
+    stopSpeech({ clearQueue: false, resumeDictation: false });
+    speechQueue.index = target;
+    renderSpeechNavigation();
+    return playSpeechQueueFrom(target);
   }
 
   async function requestProofread(instruction, transcript = '') {
@@ -720,6 +1023,7 @@ export function createDictationController({
       }
       const revised = String(data.text ?? source);
       if (revised !== source) {
+        invalidateSpeechQueue();
         replaceRange(editor, revised, selection.start, selection.end);
         pushUndo(before);
         redoStack.length = 0;
@@ -1013,6 +1317,7 @@ export function createDictationController({
     elements.appRoot.classList.add('dictation-open');
     elements.dictationWorkspace.hidden = false;
     elements.dictationToggleBtn.setAttribute('aria-expanded', 'true');
+    applyPendingProjectVoice();
     editor.focus();
   }
 
@@ -1043,13 +1348,18 @@ export function createDictationController({
     }
   }
 
+  function exportFilename(extension) {
+    const title = cleanText(elements.dictationTitleInput.value) || 'dictado';
+    const stem = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'dictado';
+    return `${stem}.${extension}`;
+  }
+
   function downloadText() {
     if (!editor.value.trim()) {
       addActivity('No hay texto para descargar.');
       return;
     }
-    const title = cleanText(elements.dictationTitleInput.value) || 'dictado';
-    const filename = `${title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'dictado'}.txt`;
+    const filename = exportFilename('txt');
     const url = windowRef.URL.createObjectURL(new windowRef.Blob([editor.value], { type: 'text/plain;charset=utf-8' }));
     const anchor = documentRoot.createElement('a');
     anchor.href = url;
@@ -1061,29 +1371,75 @@ export function createDictationController({
     addActivity(`Descargado: ${filename}.`);
   }
 
+  async function downloadPdf() {
+    if (!editor.value.trim()) {
+      addActivity('No hay texto para descargar.');
+      return;
+    }
+    const filename = exportFilename('pdf');
+    try {
+      const response = await fetchFn('/api/dictation/export/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: cleanText(elements.dictationTitleInput.value) || 'Dictado',
+          text: editor.value,
+          page_numbers: Boolean(elements.dictationPdfPageNumbersToggle.checked)
+        })
+      });
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+          const data = await response.json();
+          detail = data.detail || data.error || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      const blob = await response.blob();
+      const url = windowRef.URL.createObjectURL(blob);
+      const anchor = documentRoot.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      documentRoot.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      windowRef.URL.revokeObjectURL(url);
+      addActivity(`PDF académico descargado: ${filename}${elements.dictationPdfPageNumbersToggle.checked ? ' · páginas numeradas' : ' · sin numeración'}.`);
+    } catch (error) {
+      addActivity(`No pude generar el PDF: ${error.message}.`);
+    }
+  }
+
   elements.dictationToggleBtn.addEventListener('click', () => elements.dictationWorkspace.hidden ? open() : close());
   elements.dictationCloseBtn.addEventListener('click', close);
   elements.dictationMicBtn.addEventListener('click', () => active ? stopListening() : startListening());
-  elements.dictationStopSpeechBtn.addEventListener('click', stopSpeech);
+  elements.dictationStopSpeechBtn.addEventListener('click', () => stopSpeech());
   elements.dictationUndoBtn.addEventListener('click', undo);
   elements.dictationRedoBtn.addEventListener('click', redo);
+  elements.dictationReadPrevBtn.addEventListener('click', () => moveSpeech(-1));
   elements.dictationReadBtn.addEventListener('click', () => {
     const selection = readTextForInstruction(editor, { kind: 'read', scope: 'selection' });
     if (selection.error) return addActivity(selection.error);
     speakText(selection.text, 'selección');
   });
+  elements.dictationReadNextBtn.addEventListener('click', () => moveSpeech(1));
   elements.dictationUseReaderBtn.addEventListener('click', mountInReader);
   elements.dictationDownloadBtn.addEventListener('click', downloadText);
+  elements.dictationPdfDownloadBtn.addEventListener('click', downloadPdf);
+  elements.dictationPdfPageNumbersToggle.addEventListener('change', schedulePersist);
+  elements.dictationNewProjectBtn.addEventListener('click', createNewProject);
   elements.dictationClearBtn.addEventListener('click', () => {
     if (editor.value && !windowRef.confirm('¿Limpiar el borrador de dictado? Podrás deshacerlo mientras esta pestaña siga abierta.')) return;
     mutate({ kind: 'clear' });
   });
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
-  elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
+  elements.dictationAssistantSelect.addEventListener('change', () => changeAssistant());
   elements.dictationAssistantInstallBtn.addEventListener('click', installAssistantModel);
   elements.dictationCommandsToggle.addEventListener('change', () => {
     if (!elements.dictationCommandsToggle.checked) clearWakeCommand();
+    schedulePersist();
   });
+  elements.dictationVoiceSelect.addEventListener('change', schedulePersist);
   elements.dictationCommandInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       event.preventDefault();
@@ -1094,14 +1450,15 @@ export function createDictationController({
     if (!manualBaseline) manualBaseline = snapshot(editor);
   });
   editor.addEventListener('input', () => {
+    invalidateSpeechQueue();
     windowRef.clearTimeout(manualTimer);
     manualTimer = windowRef.setTimeout(flushManualHistory, 700);
     schedulePersist();
   });
   elements.dictationTitleInput.addEventListener('input', schedulePersist);
 
-  restoreDraft();
-  refreshAssistantStatus();
+  renderSpeechNavigation();
+  initializeProjects();
 
   return {
     open,

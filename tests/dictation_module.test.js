@@ -158,3 +158,12 @@ test('assistant failure activity does not repeat the unchanged-text notice', asy
   assert.equal((message.match(/no cambi[eé] el texto/gi) || []).length, 1);
   assert.match(message, /assistant_invalid_json/);
 });
+
+test('speech navigation clamps at both queue boundaries', async () => {
+  const { speechNavigationTarget } = await import(moduleUrl);
+  assert.equal(speechNavigationTarget(0, -1, 5), 0);
+  assert.equal(speechNavigationTarget(2, -1, 5), 1);
+  assert.equal(speechNavigationTarget(2, 1, 5), 3);
+  assert.equal(speechNavigationTarget(4, 1, 5), 4);
+  assert.equal(speechNavigationTarget(0, 1, 0), -1);
+});

@@ -9,6 +9,7 @@ from pathlib import Path
 from fusion_reader_v2 import FusionReaderV2
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.domain.jobs import JobRegistry
+from fusion_reader_v2.dictation_workspace import DictationProjectStore
 from fusion_reader_v2.pdf_to_docx import JobStatus
 from fusion_reader_v2.services.media import MediaProcessingService
 from fusion_reader_v2.version import __version__
@@ -23,6 +24,7 @@ class WebContext:
     pdf_jobs: JobRegistry[JobStatus] = field(init=False)
     pdf_downloads: JobRegistry[dict] = field(init=False)
     media: MediaProcessingService = field(init=False)
+    dictation_projects: DictationProjectStore = field(init=False)
     _threads: set[threading.Thread] = field(default_factory=set, init=False)
     _threads_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _closed: bool = field(default=False, init=False)
@@ -53,6 +55,7 @@ class WebContext:
             is_terminal=lambda _item: True,
             updated_at=lambda item: float(item.get("created_ts") or 0),
         )
+        self.dictation_projects = DictationProjectStore(self.settings.paths.runtime / "dictation_projects.json")
         # The OpenAI selector is deliberately scoped to reader conversations.
         # Multimedia translation remains local so choosing cloud dialogue never
         # uploads a conference, recording, or book as a side effect.

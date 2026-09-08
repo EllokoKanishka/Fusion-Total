@@ -155,9 +155,9 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
 6. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
    conservar un archivo.
 
-El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
-escribe en el upload temporal únicamente durante la transcripción y se elimina
-en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectura.
+Los dictados se guardan como proyectos versionados dentro del runtime de Panda, con texto, título, voz, asistente, modo de órdenes, preferencia de numeración PDF y actividad reciente. El antiguo `localStorage` se conserva como respaldo de emergencia y fuente de migración para no perder borradores existentes. El audio se escribe en el upload temporal únicamente durante la transcripción y se elimina en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectura.
+
+La barra de Dictado permite navegar hacia atrás/adelante entre tramos de la lectura actual, descargar TXT fiel al borrador y generar un PDF académico A4 con numeración opcional. El panel `Dictados guardados y actividad` permanece plegado salvo que el usuario lo abra.
 
 Órdenes base: `Lucy, borrá X y escribí Y`, `Lucy, reemplazá X por Y`,
 `Lucy, deshacer`, `Lucy, rehacer`, `Lucy, pará acá`,

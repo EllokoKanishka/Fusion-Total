@@ -57,9 +57,7 @@ y laboratorio, no como dependencia del producto v2.
   timeout global y resultados parciales recuperables.
 - `Dictado` abre un escritorio exclusivo de pantalla completa: captura audio en
   el navegador, reutiliza el STT local en castellano, aplica sólo operaciones
-  editoriales acotadas cuando la frase invoca a “Lucy” y conserva el borrador en
-  `localStorage`; comparte la voz del lector y elimina el audio temporal después
-  de cada turno.
+  editoriales acotadas cuando la frase invoca a “Lucy”, conserva varios proyectos de dictado en el runtime (con migración del antiguo `localStorage`), comparte la voz del lector y elimina el audio temporal después de cada turno. La lectura del borrador permite volver/avanzar por tramos y exportar TXT o PDF académico A4 con numeración opcional.
 - las órdenes conocidas de Dictado son instantáneas; las desconocidas pueden
   escalar, por elección explícita, a Qwen3 4B local, Qwen3 14B Q8 local o GPT-5
   nano mediante `fusion-dialogue`. Sólo reciben una ventana acotada del borrador

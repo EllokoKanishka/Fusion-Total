@@ -124,8 +124,7 @@ Propiedades:
 - para una escalada opcional el navegador envía como máximo una ventana de
   12.000 caracteres alrededor del cursor; el modelo nunca devuelve un borrador
   completo y toda operación sigue bajo el historial local de deshacer;
-- `localStorage` conserva el borrador por origen; pasar al lector o descargar TXT
-  siempre requiere una acción explícita;
+- el runtime de Panda conserva múltiples proyectos de Dictado con `AtomicJSONStore`; el antiguo `localStorage` queda como respaldo/migración de emergencia; pasar al lector o exportar siempre requiere una acción explícita;
 - una hoja virtual equivale a aproximadamente 1800 caracteres y no pretende
   reproducir la paginación editorial de un PDF o DOCX.
 
