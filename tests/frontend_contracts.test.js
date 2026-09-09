@@ -83,6 +83,18 @@ test('interactive controls have explicit semantics and live status regions', () 
   assert.match(html, /id="dictationStatus"[^>]+aria-live="polite"/);
 });
 
+test('reader playback uses contained controls instead of the native WebKit widget', () => {
+  assert.match(html, /id="readerPlayerToggleBtn"[^>]+type="button"[^>]+disabled/);
+  assert.match(html, /id="readerPlayerSeek"[^>]+type="range"[^>]+aria-label="Posición de lectura"/);
+  assert.match(html, /id="readerPlayerTime"/);
+  assert.match(html, /<audio id="player" class="slim-audio"><\/audio>/);
+  assert.doesNotMatch(html, /<audio[^>]+id="player"[^>]+\bcontrols\b/);
+  assert.match(app, /function syncReaderPlayer\(\)/);
+  assert.match(app, /els\.readerPlayerToggleBtn\.addEventListener\('click', toggleReaderPlayer\)/);
+  assert.match(app, /els\.readerPlayerSeek\.addEventListener\('input'/);
+  assert.match(styles, /\.slim-audio\s*\{[\s\S]*?display:\s*none;/);
+});
+
 test('destructive button text meets WCAG AA contrast in its resting state', () => {
   assert.ok(contrastRatio(cssColor('danger'), cssColor('surface-hover')) >= 4.5);
 });
