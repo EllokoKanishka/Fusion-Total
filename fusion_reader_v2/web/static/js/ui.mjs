@@ -13,7 +13,7 @@ const ELEMENT_IDS = [
   'audioExportEndInput', 'audioExportBtn', 'audioExportCancelBtn', 'audioExportInfo',
   'audioExportDownload', 'notesSummary', 'noteInput', 'saveNoteBtn', 'notesInfo', 'notesList',
   'docTitle', 'docMeta', 'chunk', 'ttsChip', 'ttsDot', 'ttsStatus', 'sttChip', 'sttDot', 'sttStatus',
-  'log', 'player', 'prevBtn', 'readBtn', 'repeatBtn', 'nextBtn', 'jumpInput', 'jumpBtn',
+  'log', 'player', 'readerPlayerToggleBtn', 'readerPlayerSeek', 'readerPlayerTime', 'prevBtn', 'readBtn', 'repeatBtn', 'nextBtn', 'jumpInput', 'jumpBtn',
   'continuousToggle', 'chatLog', 'chatInput', 'sendChatBtn', 'clearLabHistoryBtn', 'reasoningNormalBtn',
   'reasoningThinkingBtn', 'reasoningSupremeBtn', 'reasoningPensamientoCriticoBtn', 'profileSelect',
   'veilSelect', 'chatProviderSelect', 'freeModeBtn', 'reasoningCaption', 'dialogueBtn', 'dialogueInfo', 'dialoguePlayer',

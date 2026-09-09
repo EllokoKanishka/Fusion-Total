@@ -138,7 +138,12 @@
           <button id="jumpBtn" class="compact-btn">Ir</button>
           <label class="toggle compact-toggle"><input id="continuousToggle" type="checkbox"> Continuo</label>
         </div>
-        <audio id="player" class="slim-audio" controls></audio>
+        <div class="reader-player" aria-label="Controles de lectura">
+          <button id="readerPlayerToggleBtn" class="compact-btn" type="button" disabled>▶ Reproducir</button>
+          <input id="readerPlayerSeek" type="range" min="0" max="0" value="0" step="0.1" aria-label="Posición de lectura" disabled>
+          <span id="readerPlayerTime" class="reader-player-time">0:00 / 0:00</span>
+        </div>
+        <audio id="player" class="slim-audio"></audio>
         <div id="log" class="log">Lista para cargar.</div>
       </section>
     </main>

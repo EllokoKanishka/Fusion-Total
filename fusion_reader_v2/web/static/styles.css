@@ -855,7 +855,25 @@ audio {
   min-height: 18px;
   height: 18px;
   margin: 0;
-  display: block;
+  display: none;
+}
+.reader-player {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.reader-player input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.reader-player-time {
+  min-width: 76px;
+  color: var(--muted);
+  font: 11px/1.2 "IBM Plex Mono", monospace;
+  text-align: right;
 }
 textarea {
   width: 100%;

@@ -116,6 +116,32 @@ function log(text) {
   els.log.textContent = text;
 }
 
+function formatPlaybackTime(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`;
+}
+
+function syncReaderPlayer() {
+  const duration = Number(els.player.duration);
+  const hasAudio = Boolean(els.player.src) && Number.isFinite(duration) && duration > 0;
+  const current = hasAudio ? Math.max(0, Math.min(duration, Number(els.player.currentTime) || 0)) : 0;
+  els.readerPlayerToggleBtn.disabled = !hasAudio;
+  els.readerPlayerSeek.disabled = !hasAudio;
+  els.readerPlayerSeek.max = String(hasAudio ? duration : 0);
+  els.readerPlayerSeek.value = String(current);
+  els.readerPlayerToggleBtn.textContent = els.player.paused ? '▶ Reproducir' : '❚❚ Pausar';
+  els.readerPlayerTime.textContent = `${formatPlaybackTime(current)} / ${formatPlaybackTime(duration)}`;
+}
+
+function toggleReaderPlayer() {
+  if (!els.player.src) return;
+  if (els.player.paused) {
+    els.player.play().catch(() => log('No pude iniciar la reproducción.'));
+  } else {
+    els.player.pause();
+  }
+}
+
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1850,7 +1876,17 @@ els.chatInput.addEventListener('keydown', event => {
     sendChat();
   }
 });
+els.readerPlayerToggleBtn.addEventListener('click', toggleReaderPlayer);
+els.readerPlayerSeek.addEventListener('input', () => {
+  if (Number.isFinite(Number(els.player.duration))) {
+    els.player.currentTime = Number(els.readerPlayerSeek.value || 0);
+  }
+});
+for (const eventName of ['loadedmetadata', 'durationchange', 'timeupdate', 'play', 'pause', 'ended', 'emptied']) {
+  els.player.addEventListener(eventName, syncReaderPlayer);
+}
 els.player.addEventListener('ended', readNextWhenAudioEnds);
+syncReaderPlayer();
 syncAudioExportInputs();
 els.dialoguePlayer.addEventListener('ended', () => {
   dialogue.speaking = false;
