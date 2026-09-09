@@ -732,6 +732,8 @@ html[data-skin="neon"] .chunk.empty {
   display: grid;
   gap: 6px;
   background: var(--panel);
+  min-width: 0;
+  overflow: hidden;
 }
 .row {
   display: flex;
@@ -845,7 +847,11 @@ audio {
   min-height: 34px;
 }
 .slim-audio {
-  width: min(100%, 1320px);
+  /* WebKitGTK rendered min(100%, ...) against the grid instead of its main
+     column, so the native player crossed into the right sidebar. */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 18px;
   height: 18px;
   margin: 0;
