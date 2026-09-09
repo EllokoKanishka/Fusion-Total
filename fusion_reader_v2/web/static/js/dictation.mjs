@@ -55,6 +55,10 @@ export function microphoneFailureMessage(error) {
   return detail ? `No pude abrir el micrófono: ${detail}.` : 'No pude abrir el micrófono.';
 }
 
+export function shouldRetryWithBasicMicrophone(error) {
+  return cleanText(error && error.name) === 'OverconstrainedError';
+}
+
 export function createWakeCommandGate({ now = () => Date.now(), ttlMs = WAKE_COMMAND_WINDOW_MS } = {}) {
   let armedUntil = 0;
   return {
@@ -1129,9 +1133,18 @@ export function createDictationController({
       return;
     }
     try {
-      stream = await windowRef.navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-      });
+      let compatibilityCapture = false;
+      try {
+        stream = await windowRef.navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+        });
+      } catch (error) {
+        if (!shouldRetryWithBasicMicrophone(error)) throw error;
+        // WebKitGTK/PipeWire can expose a mic without supporting every advanced
+        // browser constraint.  Capture first; the analyser already adapts to it.
+        stream = await windowRef.navigator.mediaDevices.getUserMedia({ audio: true });
+        compatibilityCapture = true;
+      }
       const AudioContext = windowRef.AudioContext || windowRef.webkitAudioContext;
       audioContext = new AudioContext();
       analyser = audioContext.createAnalyser();
@@ -1140,7 +1153,9 @@ export function createDictationController({
       active = true;
       elements.dictationMicBtn.textContent = 'Detener dictado';
       elements.dictationMicBtn.classList.add('recording');
-      addActivity('Micrófono abierto. Las pausas separan los tramos.');
+      addActivity(compatibilityCapture
+        ? 'Micrófono abierto en modo compatible. Las pausas separan los tramos.'
+        : 'Micrófono abierto. Las pausas separan los tramos.');
       startRecorderCycle();
     } catch (error) {
       const message = microphoneFailureMessage(error);

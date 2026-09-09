@@ -61,7 +61,7 @@ test('dictation keeps continuous speech chunks short enough for responsive trans
 });
 
 test('dictation reports actionable microphone failures', async () => {
-  const { microphoneFailureMessage } = await import(moduleUrl);
+  const { microphoneFailureMessage, shouldRetryWithBasicMicrophone } = await import(moduleUrl);
   assert.equal(
     microphoneFailureMessage({ name: 'NotAllowedError' }),
     'El escritorio no autorizó el micrófono.'
@@ -70,6 +70,8 @@ test('dictation reports actionable microphone failures', async () => {
     microphoneFailureMessage({ name: 'NotFoundError' }),
     'No encontré un micrófono disponible.'
   );
+  assert.equal(shouldRetryWithBasicMicrophone({ name: 'OverconstrainedError' }), true);
+  assert.equal(shouldRetryWithBasicMicrophone({ name: 'NotAllowedError' }), false);
 });
 
 test('delete from removes an anchored tail and tolerates punctuation differences', async () => {
