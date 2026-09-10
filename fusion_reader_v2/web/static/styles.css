@@ -867,9 +867,9 @@ button:disabled {
   position: absolute;
   z-index: 1;
   left: 50%;
-  bottom: 27px;
-  width: min(250px, calc(100% - 18px));
-  padding: 12px 13px 10px;
+  bottom: 36px;
+  width: min(148px, calc(100% - 42px));
+  padding: 7px 8px 6px;
   border: 2px solid var(--accent);
   border-radius: 14px 14px 14px 4px;
   background: linear-gradient(145deg, #fff4c9, #d8c574);
@@ -896,15 +896,15 @@ button:disabled {
 @keyframes panda-dialog-pop { from { opacity: 0; transform: scale(.82) translateY(12px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes panda-dialog-spark { 0% { opacity: 0; transform: scale(.1); } 35% { opacity: .9; } 100% { opacity: 0; transform: scale(3.7); } }
 }
-.panda-dialog-kicker { margin: 0 0 3px; color: #6c5818; font: 700 9px/1.2 "IBM Plex Mono", monospace; letter-spacing: .12em; }
-.panda-dialog-hand-sign h2 { margin: 0; color: #342b12; font-size: 15px; line-height: 1.18; }
-.panda-dialog-hand-sign > p:not(.panda-dialog-kicker) { margin: 5px 0 0; color: #594c28; font-size: 12px; line-height: 1.3; }
+.panda-dialog-kicker { margin: 0 0 2px; color: #6c5818; font: 700 7px/1.15 "IBM Plex Mono", monospace; letter-spacing: .1em; }
+.panda-dialog-hand-sign h2 { margin: 0; color: #342b12; font-size: 11px; line-height: 1.15; }
+.panda-dialog-hand-sign > p:not(.panda-dialog-kicker) { margin: 3px 0 0; color: #594c28; font-size: 9px; line-height: 1.2; }
 .panda-dialog-form { display: none; }
 .panda-dialog-field { display: grid; gap: 5px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .panda-dialog-field[hidden] { display: none; }
 .panda-dialog-field input { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-deep); color: var(--text); padding: 7px 9px; }
-.panda-dialog-actions { display: flex; justify-content: center; gap: 8px; margin-top: 9px; }
-.panda-dialog-actions .compact-btn { min-width: 62px; }
+.panda-dialog-actions { display: flex; justify-content: center; gap: 5px; margin-top: 5px; }
+.panda-dialog-actions .compact-btn { min-width: 44px; min-height: 22px; padding: 3px 7px; font-size: 10px; }
 .panda-dialog-actions:has(#pandaDialogCancel:empty) #pandaDialogCancel { display: none; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-card,
 .panda-dialog-overlay[data-mode="notice"] .panda-dialog-card {
