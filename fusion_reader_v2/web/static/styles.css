@@ -895,7 +895,6 @@ button:disabled {
 .panda-dialog-overlay[data-open="true"] .panda-dialog-spark-two { animation-delay: .08s; }
 @keyframes panda-dialog-pop { from { opacity: 0; transform: scale(.82) translateY(12px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes panda-dialog-spark { 0% { opacity: 0; transform: scale(.1); } 35% { opacity: .9; } 100% { opacity: 0; transform: scale(3.7); } }
-}
 .panda-dialog-kicker { margin: 0 0 2px; color: #6c5818; font: 700 7px/1.15 "IBM Plex Mono", monospace; letter-spacing: .1em; }
 .panda-dialog-hand-sign h2 { margin: 0; color: #342b12; font-size: 11px; line-height: 1.15; }
 .panda-dialog-hand-sign > p:not(.panda-dialog-kicker) { margin: 3px 0 0; color: #594c28; font-size: 9px; line-height: 1.2; }
