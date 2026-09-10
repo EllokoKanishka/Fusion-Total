@@ -315,6 +315,24 @@
       </details>
       <audio id="dictationPlayer" class="dictation-player" controls></audio>
     </section>
+    <section id="pandaDialog" class="panda-dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="pandaDialogTitle" hidden>
+      <div class="panda-dialog-card">
+        <img class="panda-dialog-mascot" src="/static/panda-fusion-emblem.webp" alt="Panda Fusión con un cartel">
+        <div class="panda-dialog-sign">
+          <p class="panda-dialog-kicker">PANDA FUSIÓN</p>
+          <h2 id="pandaDialogTitle">Panda Fusión</h2>
+          <p id="pandaDialogMessage"></p>
+          <label id="pandaDialogFieldWrap" class="panda-dialog-field" hidden>
+            <span id="pandaDialogFieldLabel"></span>
+            <input id="pandaDialogField" type="text" maxlength="240">
+          </label>
+          <div class="panda-dialog-actions">
+            <button id="pandaDialogCancel" class="compact-btn" type="button">Cancelar</button>
+            <button id="pandaDialogAccept" class="primary compact-btn" type="button">Aceptar</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script type="module" src="/static/app.js"></script>

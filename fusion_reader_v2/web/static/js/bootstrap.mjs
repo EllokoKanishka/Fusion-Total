@@ -8,6 +8,7 @@ import { createAudioExportController } from './audio_export.mjs';
 import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
 import { createMediaController } from './media.mjs';
 import { createDictationController } from './dictation.mjs';
+import { createPandaDialog } from './panda_dialog.mjs';
 
 const SKIN_STORAGE_KEY = 'pandafusion.skin.v1';
 const SKINS = new Set(['classic', 'neon']);
@@ -38,6 +39,7 @@ function initializeSkin() {
 }
 
 const els = collectElements();
+const pandaDialog = createPandaDialog();
 initializeSkin();
 let status = null;
 let lastRenderedDocId = '';
@@ -66,7 +68,7 @@ const startAudioExport = audioExport.start;
 const cancelAudioExport = audioExport.cancel;
 const notesController = createNotesController({
   api, elements: els, beginBusyLease, busyControls, getStatus: () => status,
-  renderMainStatus: data => renderStatus(data), log
+  renderMainStatus: data => renderStatus(data), log, dialog: pandaDialog
 });
 const refreshNotes = notesController.refresh;
 const saveCurrentNote = notesController.save;
@@ -79,7 +81,8 @@ const dictationController = createDictationController({
   api,
   elements: els,
   refreshMainStatus: data => renderStatus(data),
-  log
+  log,
+  dialog: pandaDialog
 });
 
 function beginBusyLease() {
@@ -756,7 +759,12 @@ function renderLaboratoryMode(modeInfo) {
 }
 
 async function clearDocument() {
-  if (!confirm('¿Limpiar el documento activo?')) return;
+  if (!await pandaDialog.confirm({
+    title: '¿Limpiar el documento activo?',
+    message: 'El texto y el audio cargados se descartarán.',
+    acceptLabel: 'Sí, limpiar',
+    danger: true
+  })) return;
   const releaseBusy = beginBusyLease();
   try {
     resetAudioLifecycle('Documento y audio anteriores descartados.');
@@ -765,7 +773,7 @@ async function clearDocument() {
     renderStatus(data);
     addChatMessage('system', 'Documento activo eliminado.');
   } catch (err) {
-    alert('Error al limpiar documento: ' + err.message);
+    await pandaDialog.notice({ title: 'No pude limpiar el documento', message: err.message, acceptLabel: 'Entendido' });
   } finally {
     releaseBusy();
   }

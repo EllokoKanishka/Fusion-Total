@@ -388,7 +388,8 @@ export function createDictationController({
   documentRoot = document,
   windowRef = window,
   fetchFn = fetch,
-  storage = window.localStorage
+  storage = window.localStorage,
+  dialog = null
 }) {
   const editor = elements.dictationEditor;
   const undoStack = [];
@@ -522,7 +523,10 @@ export function createDictationController({
 
   async function installAssistantModel() {
     const label = cleanText(elements.dictationAssistantSelect.selectedOptions?.[0]?.textContent) || 'el modelo local';
-    if (!windowRef.confirm(`¿Descargar e instalar ${label}? La descarga se hace una sola vez y puede ocupar varios GB.`)) return;
+    const approved = dialog
+      ? await dialog.confirm({ title: `¿Instalar ${label}?`, message: 'La descarga se realiza una vez y puede ocupar varios GB.', acceptLabel: 'Descargar e instalar' })
+      : windowRef.confirm(`¿Descargar e instalar ${label}? La descarga se hace una sola vez y puede ocupar varios GB.`);
+    if (!approved) return;
     elements.dictationAssistantInstallBtn.disabled = true;
     elements.dictationAssistantInstallBtn.textContent = 'Preparando…';
     try {
@@ -718,8 +722,11 @@ export function createDictationController({
     addActivity(`Borrador recuperado: ${next.title || 'sin título'}.`);
   }
 
-  function createNewSession() {
-    if (editor.value.trim() && !windowRef.confirm('¿Abrir un borrador nuevo? El actual queda guardado en el historial.')) return;
+  async function createNewSession() {
+    const approved = !editor.value.trim() || (dialog
+      ? await dialog.confirm({ title: '¿Abrir un borrador nuevo?', message: 'El actual queda guardado en el historial.', acceptLabel: 'Abrir borrador' })
+      : windowRef.confirm('¿Abrir un borrador nuevo? El actual queda guardado en el historial.'));
+    if (!approved) return;
     flushManualHistory();
     persistNow();
     const id = newSessionId();
@@ -1277,9 +1284,12 @@ export function createDictationController({
   elements.dictationUseReaderBtn.addEventListener('click', mountInReader);
   elements.dictationDownloadBtn.addEventListener('click', downloadText);
   elements.dictationDownloadPdfBtn.addEventListener('click', downloadPdf);
-  elements.dictationNewBtn.addEventListener('click', createNewSession);
-  elements.dictationClearBtn.addEventListener('click', () => {
-    if (editor.value && !windowRef.confirm('¿Limpiar el borrador de dictado? Podrás deshacerlo mientras esta pestaña siga abierta.')) return;
+  elements.dictationNewBtn.addEventListener('click', () => { createNewSession(); });
+  elements.dictationClearBtn.addEventListener('click', async () => {
+    const approved = !editor.value || (dialog
+      ? await dialog.confirm({ title: '¿Limpiar el borrador?', message: 'Podrás deshacerlo mientras esta pestaña siga abierta.', acceptLabel: 'Sí, limpiar', danger: true })
+      : windowRef.confirm('¿Limpiar el borrador de dictado? Podrás deshacerlo mientras esta pestaña siga abierta.'));
+    if (!approved) return;
     mutate({ kind: 'clear' });
   });
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);

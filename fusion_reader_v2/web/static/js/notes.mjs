@@ -15,7 +15,7 @@ export function compactNoteLabel(note) {
   return (selected.length ? selected : words.slice(0, 3)).join(' ');
 }
 
-export function createNotesController({ api, elements, beginBusyLease, busyControls, getStatus, renderMainStatus, log, documentRoot = document, prompt = window.prompt, confirm = window.confirm }) {
+export function createNotesController({ api, elements, beginBusyLease, busyControls, getStatus, renderMainStatus, log, documentRoot = document, prompt = window.prompt, confirm = window.confirm, dialog = null }) {
   let state = { docId: '', current: 0, items: [] };
   function reference(note) {
     if (String(note && note.source_kind || '').toLowerCase() === 'laboratory') {
@@ -117,7 +117,9 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
   }
 
   async function rename(note) {
-    const value = prompt('Nombre corto de la nota', compactNoteLabel(note));
+    const value = dialog
+      ? await dialog.prompt({ title: 'Nombre corto de la nota', value: compactNoteLabel(note), acceptLabel: 'Guardar' })
+      : prompt('Nombre corto de la nota', compactNoteLabel(note));
     if (value === null) return;
     const label = value.trim(); if (!label) { log('El nombre de la nota no puede quedar vacío.'); return; }
     try { const data = await api('/api/notes/rename', { note_id: note.note_id, doc_id: note.doc_id, label }); render(data.items || []); log('Nombre de nota actualizado.'); }
@@ -125,14 +127,19 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
   }
 
   async function edit(note) {
-    const value = prompt('Editar nota', note.text || ''); if (value === null) return;
+    const value = dialog
+      ? await dialog.prompt({ title: 'Editar nota', value: note.text || '', acceptLabel: 'Guardar' })
+      : prompt('Editar nota', note.text || ''); if (value === null) return;
     const text = value.trim(); if (!text) { log('La nota no puede quedar vacía.'); return; }
     try { const data = await api('/api/notes/update', { note_id: note.note_id, doc_id: note.doc_id, text }); render(data.items || []); log('Nota actualizada.'); }
     catch (error) { log(`No pude editar la nota: ${error.message}`); }
   }
 
   async function remove(note) {
-    if (!confirm('Borrar esta nota?')) return;
+    const approved = dialog
+      ? await dialog.confirm({ title: '¿Borrar esta nota?', message: 'No se podrá recuperar.', acceptLabel: 'Sí, borrar', danger: true })
+      : confirm('Borrar esta nota?');
+    if (!approved) return;
     try { const data = await api('/api/notes/delete', { note_id: note.note_id, doc_id: note.doc_id }); render(data.items || []); log('Nota borrada.'); }
     catch (error) { log(`No pude borrar la nota: ${error.message}`); }
   }
