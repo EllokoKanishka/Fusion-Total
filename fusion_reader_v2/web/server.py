@@ -38,6 +38,7 @@ STATIC_ROOT = Path(__file__).resolve().parent / "static"
 STATIC_CONTENT_TYPES = {
     "styles.css": "text/css; charset=utf-8",
     "panda-fusion-emblem.webp": "image/webp",
+    "panda-princess-dialog.png": "image/png",
     "app.js": "text/javascript; charset=utf-8",
     "busy_controls.js": "text/javascript; charset=utf-8",
     "js/bootstrap.mjs": "text/javascript; charset=utf-8",
