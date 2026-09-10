@@ -854,8 +854,8 @@ button:disabled {
   width: 250px;
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle, var(--accent-soft), transparent 67%);
-  filter: blur(2px);
+  background: radial-gradient(circle, rgba(239, 214, 137, .24), transparent 58%);
+  filter: none;
 }
 .panda-dialog-mascot {
   width: 190px;
@@ -872,8 +872,8 @@ button:disabled {
   padding: 7px 8px 6px;
   border: 2px solid var(--accent);
   border-radius: 14px 14px 14px 4px;
-  background: linear-gradient(145deg, #fff4c9, #d8c574);
-  box-shadow: 0 0 0 4px rgba(239, 214, 137, .12), 0 12px 22px rgba(0, 0, 0, .38);
+  background: linear-gradient(145deg, #fff9db, #e7cf83);
+  box-shadow: 0 0 0 3px rgba(239, 214, 137, .18), 0 9px 16px rgba(0, 0, 0, .34);
   color: var(--text);
   text-align: center;
   transform: translateX(-50%) rotate(-2deg);
@@ -895,15 +895,17 @@ button:disabled {
 .panda-dialog-overlay[data-open="true"] .panda-dialog-spark-two { animation-delay: .08s; }
 @keyframes panda-dialog-pop { from { opacity: 0; transform: scale(.82) translateY(12px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes panda-dialog-spark { 0% { opacity: 0; transform: scale(.1); } 35% { opacity: .9; } 100% { opacity: 0; transform: scale(3.7); } }
-.panda-dialog-kicker { margin: 0 0 2px; color: #6c5818; font: 700 7px/1.15 "IBM Plex Mono", monospace; letter-spacing: .1em; }
-.panda-dialog-hand-sign h2 { margin: 0; color: #342b12; font-size: 11px; line-height: 1.15; }
-.panda-dialog-hand-sign > p:not(.panda-dialog-kicker) { margin: 3px 0 0; color: #594c28; font-size: 9px; line-height: 1.2; }
+.panda-dialog-kicker { margin: 0 0 2px; color: #a61959; font: 700 7px/1.15 "IBM Plex Mono", monospace; letter-spacing: .1em; text-shadow: 0 1px 0 rgba(255, 255, 255, .65); }
+.panda-dialog-hand-sign h2 { margin: 0; color: #3b164c; font-size: 11px; line-height: 1.15; text-shadow: 0 1px 0 rgba(255, 255, 255, .7); }
+.panda-dialog-hand-sign > p:not(.panda-dialog-kicker) { margin: 3px 0 0; color: #203f47; font-size: 9px; font-weight: 600; line-height: 1.2; }
 .panda-dialog-form { display: none; }
 .panda-dialog-field { display: grid; gap: 5px; margin-top: 12px; color: var(--muted); font-size: 12px; }
 .panda-dialog-field[hidden] { display: none; }
 .panda-dialog-field input { width: 100%; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-deep); color: var(--text); padding: 7px 9px; }
 .panda-dialog-actions { display: flex; justify-content: center; gap: 5px; margin-top: 5px; }
 .panda-dialog-actions .compact-btn { min-width: 44px; min-height: 22px; padding: 3px 7px; font-size: 10px; }
+.panda-dialog-hand-sign #pandaDialogCancel { background: #124d57; border-color: #072f37; color: #fff; }
+.panda-dialog-hand-sign #pandaDialogAccept { background: #c32d71; border-color: #7f1644; color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, .32); }
 .panda-dialog-actions:has(#pandaDialogCancel:empty) #pandaDialogCancel { display: none; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-card,
 .panda-dialog-overlay[data-mode="notice"] .panda-dialog-card {
