@@ -51,6 +51,7 @@ STATIC_CONTENT_TYPES = {
     "js/audio_export.mjs": "text/javascript; charset=utf-8",
     "js/notes.mjs": "text/javascript; charset=utf-8",
     "js/media.mjs": "text/javascript; charset=utf-8",
+    "js/panda_dialog.mjs": "text/javascript; charset=utf-8",
 }
 PORT = 8010
 UPLOAD_TEMP_SUFFIXES = {
