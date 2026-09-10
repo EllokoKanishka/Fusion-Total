@@ -13,6 +13,8 @@ const dialog = fs.readFileSync(path.join(root, 'js', 'panda_dialog.mjs'), 'utf8'
 test('Panda dialog replaces browser-native confirmations across reader workspaces', () => {
   assert.match(html, /id="pandaDialog"/);
   assert.match(html, /panda-fusion-emblem\.webp/);
+  assert.match(html, /panda-princess-dialog\.png/);
+  assert.match(html, /panda-dialog-hand-sign/);
   assert.match(dialog, /export function createPandaDialog/);
   assert.match(bootstrap, /createPandaDialog\(\)/);
   assert.match(bootstrap, /pandaDialog\.confirm/);
