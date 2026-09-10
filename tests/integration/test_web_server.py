@@ -148,6 +148,7 @@ class WebServerIntegrationTests(unittest.TestCase):
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
                 ("/static/js/dictation.mjs", b"createDictationController"),
+                ("/static/js/panda_dialog.mjs", b"createPandaDialog"),
                 ("/health/live", b'"status": "live"'),
                 ("/health/ready", b'"reader_ready": true'),
             ):
