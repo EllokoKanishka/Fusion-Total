@@ -121,6 +121,26 @@ _LONG_HALLUCINATED_TRANSCRIPT_PATTERNS = [
 ]
 
 
+# Frases que Whisper suele completar sobre silencio o ruido de fondo.  Se
+# eliminan sólo cuando aparecen como cola de un tramo; no corrigen el dictado.
+_HALLUCINATED_SUFFIX_PATTERNS = [
+    re.compile(
+        r"\b(?:este es )?el canal de subt[ií]tulos en espa[nñ]ol de la iglesia de jesucristo de los santos de los [uú]ltimos d[ií]as\b",
+        re.IGNORECASE,
+    ),
+]
+
+
+def strip_hallucinated_suffix(text: str) -> str:
+    """Remove a known Whisper hallucination appended after actual dictation."""
+    raw = str(text or "").strip()
+    for pattern in _HALLUCINATED_SUFFIX_PATTERNS:
+        match = pattern.search(raw)
+        if match:
+            return raw[: match.start()].rstrip(" ,;:-")
+    return raw
+
+
 def _normalize_transcript_for_filter(text: str) -> str:
     normalized = unicodedata.normalize("NFD", str(text or "").lower())
     normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
@@ -293,11 +313,14 @@ class WhisperCliSTTProvider(STTProvider):
                 )
             transcript, detected_language, segments = self._read_transcript_metadata(out_dir, source)
         transcript = self._clean_text(transcript)
+        original_transcript = transcript
+        transcript = strip_hallucinated_suffix(transcript)
         if not transcript:
             return TranscriptResult(
                 False,
+                text=original_transcript,
                 provider=self.name,
-                detail="empty_transcript",
+                detail="hallucinated_transcript" if original_transcript else "empty_transcript",
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
         if is_hallucinated_transcript(transcript):
@@ -568,13 +591,16 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 },
             )
         transcript = str(data.get("text") or "").strip()
+        original_transcript = transcript
+        transcript = strip_hallucinated_suffix(transcript)
         timings = {key: data.get(key) for key in ("convert_ms", "decode_ms", "duration_ms", "beam_size") if key in data}
         duration_ms = int(data.get("duration_ms") or ((time.perf_counter() - started) * 1000))
         if not transcript:
             return TranscriptResult(
                 False,
+                text=original_transcript,
                 provider=str(data.get("provider") or self.name),
-                detail="empty_transcript",
+                detail="hallucinated_transcript" if original_transcript else "empty_transcript",
                 duration_ms=duration_ms,
                 timings=timings,
             )
