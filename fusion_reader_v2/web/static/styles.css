@@ -843,7 +843,7 @@ button:disabled {
 .panda-dialog-mascot-wrap {
   position: relative;
   display: grid;
-  min-height: 300px;
+  min-height: 380px;
   place-items: center;
   isolation: isolate;
 }
@@ -858,7 +858,7 @@ button:disabled {
   filter: none;
 }
 .panda-dialog-mascot {
-  width: 190px;
+  width: 380px;
   height: auto;
   object-fit: contain;
   filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .42));
