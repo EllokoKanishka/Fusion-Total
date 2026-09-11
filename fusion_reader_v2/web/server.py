@@ -40,6 +40,7 @@ STATIC_CONTENT_TYPES = {
     "panda-fusion-emblem.webp": "image/webp",
     "panda-princess-dialog.png": "image/png",
     "panda-princess-dialog-hd.webp": "image/webp",
+    "panda-princess-hands.webp": "image/webp",
     "app.js": "text/javascript; charset=utf-8",
     "busy_controls.js": "text/javascript; charset=utf-8",
     "js/bootstrap.mjs": "text/javascript; charset=utf-8",
