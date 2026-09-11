@@ -251,7 +251,7 @@ exit 0
         installer = (self.repo_root / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
         desktop_launcher = (self.repo_root / "scripts" / "start_pandafusion_desktop.sh").read_text(encoding="utf-8")
 
-        self.assertIn('exec "$ROOT/scripts/start_pandafusion_desktop.sh"', installer)
+        self.assertIn('exec bash "$ROOT/scripts/start_pandafusion_desktop.sh"', installer)
         self.assertIn('Name=Panda Fusión', installer)
         self.assertIn('Icon=$ROOT/desktop/src-tauri/icons/icon.png', installer)
         self.assertIn('panda-fusion.desktop', installer)

@@ -59,7 +59,7 @@ cat << EOF > "$LAUNCHER_PATH"
 set -euo pipefail
 
 # Abrir la carcasa nativa; el script inicia Fusion si hace falta.
-exec "$ROOT/scripts/start_pandafusion_desktop.sh" "\$@"
+exec bash "$ROOT/scripts/start_pandafusion_desktop.sh" "\$@"
 EOF
 
 chmod +x "$LAUNCHER_PATH"
