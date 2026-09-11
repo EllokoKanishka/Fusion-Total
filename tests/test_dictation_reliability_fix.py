@@ -125,13 +125,17 @@ class DictationReliabilityFixTests(unittest.TestCase):
         self.assertEqual(app.dictation_proofread("x" * 12_001)["error"], "dictation_proofread_too_large")
         self.assertEqual(app.dictation_proofread("   ")["error"], "empty_dictation_proofread")
 
-    def test_fusionctl_start_path_ensures_tts_instead_of_only_selecting_a_dead_url(self) -> None:
+    def test_fusionctl_start_path_ensures_gpu_services_instead_of_only_selecting_dead_urls(self) -> None:
         script = open("scripts/start_fusion_reader_v2.sh", encoding="utf-8").read()
         self.assertIn("start_reader_neural_tts_gpu_5090.sh", script)
         self.assertIn("start_reader_neural_tts.sh", script)
         self.assertIn("wait_until_tts_ready", script)
         self.assertIn("ensure_fusion_tts_url", script)
         self.assertIn("Fusion arrancará sin TTS operativo", script)
+        self.assertIn("start_fusion_reader_v2_stt.sh", script)
+        self.assertIn("ensure_fusion_gpu_stt", script)
+        self.assertIn("wait_until_stt_ready", script)
+        self.assertIn("Whisper large-v3-turbo en CUDA/float16", script)
 
 
 if __name__ == "__main__":

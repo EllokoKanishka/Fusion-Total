@@ -11,17 +11,22 @@ GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 GPU_TTS_URL="http://127.0.0.1:${GPU_TTS_PORT}"
 CPU_TTS_URL="http://127.0.0.1:${CPU_TTS_PORT}"
+STT_PORT="${FUSION_READER_STT_PORT:-8021}"
+STT_URL="http://127.0.0.1:${STT_PORT}/health"
 RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
 LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}}"
 OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 LOG_FILE="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 GPU_TTS_LOG_FILE="$LOG_DIR/alltalk_gpu_5090.log"
 CPU_TTS_LOG_FILE="$LOG_DIR/alltalk_cpu.log"
+STT_LOG_FILE="${FUSION_READER_STT_LOG_FILE:-$LOG_DIR/stt_server.log}"
 PID_FILE="${FUSION_READER_PID_FILE:-$RUNTIME_DIR/fusion_reader_v2.pid}"
 STARTUP_WAIT_SECONDS="${FUSION_READER_STARTUP_WAIT_SECONDS:-40}"
 TTS_GPU_START_WAIT_SECONDS="${FUSION_READER_TTS_GPU_START_WAIT_SECONDS:-${FUSION_READER_GPU_TTS_WAIT_SECONDS:-90}}"
 TTS_CPU_START_WAIT_SECONDS="${FUSION_READER_TTS_CPU_START_WAIT_SECONDS:-60}"
+STT_GPU_START_WAIT_SECONDS="${FUSION_READER_STT_GPU_START_WAIT_SECONDS:-120}"
 TTS_CHILD_PID=""
+STT_CHILD_PID=""
 
 if ! PYTHON_BIN="$(find_python)"; then
   echo "[ERROR] No se encontró ningún intérprete de Python válido con las dependencias requeridas (reportlab, python-docx, Pillow)." >&2
@@ -126,6 +131,46 @@ wait_until_tts_ready() {
   return 1
 }
 
+fusion_stt_ready() {
+  curl -fsS --max-time 2 "$STT_URL" >/dev/null 2>&1
+}
+
+wait_until_stt_ready() {
+  local child_pid="${1:-}"
+  local deadline
+  deadline=$(( $(date +%s) + STT_GPU_START_WAIT_SECONDS ))
+  while (( $(date +%s) < deadline )); do
+    if fusion_stt_ready; then
+      return 0
+    fi
+    if [[ -n "$child_pid" ]] && ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+ensure_fusion_gpu_stt() {
+  if fusion_stt_ready; then
+    log_msg "Fusion STT GPU listo en ${STT_URL}."
+    return 0
+  fi
+
+  log_msg "Fusion STT GPU no está activo; iniciando Whisper large-v3-turbo en CUDA/float16."
+  nohup "$ROOT/scripts/start_fusion_reader_v2_stt.sh" >>"$STT_LOG_FILE" 2>&1 &
+  STT_CHILD_PID="$!"
+  if wait_until_stt_ready "$STT_CHILD_PID"; then
+    log_msg "Fusion STT GPU listo en ${STT_URL}."
+    return 0
+  fi
+
+  log_msg "ERROR: Fusion STT GPU no respondió en ${STT_GPU_START_WAIT_SECONDS}s. Revisá ${STT_LOG_FILE}."
+  tail -20 "$STT_LOG_FILE" 2>/dev/null || true
+  return 1
+}
+
 start_fusion_gpu_tts() {
   nohup "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" >>"$GPU_TTS_LOG_FILE" 2>&1 &
   TTS_CHILD_PID="$!"
@@ -201,6 +246,13 @@ ensure_fusion_tts_url() {
 
 ensure_fusion_tts_url || true
 
+# The default STT provider is the dedicated Faster-Whisper server.  Start it
+# from the same entry point that fusionctl uses so the UI never falls back to
+# the CLI merely because the desktop launcher was bypassed.
+if ! ensure_fusion_gpu_stt; then
+  exit 1
+fi
+
 current_commit="$(current_commit)"
 existing_pid="$(listening_pid || true)"
 
@@ -253,6 +305,7 @@ log_msg "==== Fusion Reader v2 startup ===="
 log_msg "Commit: $(current_commit)"
 log_msg "API/UI port: ${PORT}"
 log_msg "TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
+log_msg "STT GPU URL: ${STT_URL}"
 log_msg "STT command: ${FUSION_READER_STT_COMMAND:-whisper}"
 log_msg "Chat model: ${FUSION_READER_CHAT_MODEL}"
 log_msg "Reasoning mode env: ${FUSION_READER_REASONING_MODE}"
