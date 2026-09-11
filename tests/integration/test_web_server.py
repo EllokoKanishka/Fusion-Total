@@ -146,7 +146,6 @@ class WebServerIntegrationTests(unittest.TestCase):
                 ("/static/styles.css", b"--accent"),
                 ("/static/panda-fusion-emblem.webp", b"RIFF"),
                 ("/static/panda-princess-dialog-hd.webp", b"RIFF"),
-                ("/static/panda-princess-hands.webp", b"RIFF"),
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
                 ("/static/js/dictation.mjs", b"createDictationController"),

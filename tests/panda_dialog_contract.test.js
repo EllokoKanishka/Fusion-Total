@@ -14,7 +14,6 @@ test('Panda dialog replaces browser-native confirmations across reader workspace
   assert.match(html, /id="pandaDialog"/);
   assert.match(html, /panda-fusion-emblem\.webp/);
   assert.match(html, /panda-princess-dialog-hd\.webp/);
-  assert.match(html, /panda-princess-hands\.webp/);
   assert.match(html, /panda-dialog-hand-sign/);
   assert.match(html, /id="pandaDialogAccept"/);
   assert.match(dialog, /const mode = acceptsText \? 'prompt' : \(cancelLabel \? 'confirm' : 'notice'\)/);

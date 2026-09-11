@@ -868,8 +868,8 @@ button:disabled {
   position: absolute;
   z-index: 1;
   left: 50%;
-  /* The tablet sits at the paw line, not at the panda's waist. */
-  top: 44%;
+  /* Align live dialog content with the tablet held by the panda. */
+  top: 47%;
   bottom: auto;
   width: min(148px, calc(100% - 42px));
   padding: 7px 8px 6px;
@@ -880,16 +880,6 @@ button:disabled {
   color: var(--text);
   text-align: center;
   transform: translateX(-50%) rotate(-2deg);
-}
-.panda-dialog-hands {
-  position: absolute;
-  z-index: 2;
-  top: calc(44% - 18px);
-  left: 50%;
-  width: min(340px, 82vw);
-  height: auto;
-  pointer-events: none;
-  transform: translateX(-50%);
 }
 .panda-dialog-spark {
   position: absolute;
@@ -934,8 +924,6 @@ button:disabled {
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-mascot { width: 122px; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-hand-sign,
 .panda-dialog-overlay[data-mode="notice"] .panda-dialog-hand-sign { top: auto; bottom: 5px; width: 190px; }
-.panda-dialog-overlay[data-mode="prompt"] .panda-dialog-hands,
-.panda-dialog-overlay[data-mode="notice"] .panda-dialog-hands { display: none; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-form { display: block; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-card { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 14px; }
 .panda-dialog-overlay[data-mode="prompt"] .panda-dialog-hand-sign { text-align: left; }
