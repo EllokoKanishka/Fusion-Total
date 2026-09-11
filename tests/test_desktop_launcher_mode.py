@@ -11,6 +11,9 @@ class DesktopLauncherModeTests(unittest.TestCase):
         self.assertIn('exec "$browser" --app="$server_url"', script)
         self.assertIn("google-chrome google-chrome-stable chromium chromium-browser", script)
         self.assertIn("PANDA_FUSION_NATIVE_EXPERIMENTAL", script)
+        self.assertIn("ensure_stt_ready", script)
+        self.assertIn("start_fusion_reader_v2_stt.sh", script)
+        self.assertIn("STT de Panda Fusión listo.", script)
         self.assertIn("La AppImage nativa queda disponible sólo bajo opt-in experimental.", script)
 
 

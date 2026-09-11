@@ -8,15 +8,19 @@ load_env_safe
 
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
+STT_PORT="${FUSION_READER_STT_PORT:-8021}"
 GPU_TTS_URL="http://127.0.0.1:${GPU_TTS_PORT}"
 CPU_TTS_URL="http://127.0.0.1:${CPU_TTS_PORT}"
+STT_URL="http://127.0.0.1:${STT_PORT}/health"
 RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
 LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}}"
 OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 GPU_LOG="$LOG_DIR/alltalk_gpu_5090.log"
 CPU_LOG="$LOG_DIR/alltalk_cpu.log"
+STT_LOG="$LOG_DIR/stt_server.log"
 SERVER_LOG="${FUSION_READER_LOG_FILE:-$LOG_DIR/fusion_reader_v2_server.log}"
 TTS_WAIT_SECONDS="${FUSION_READER_TTS_STARTUP_WAIT_SECONDS:-120}"
+STT_WAIT_SECONDS="${FUSION_READER_STT_STARTUP_WAIT_SECONDS:-120}"
 TTS_CHILD_PID=""
 
 mkdir -p "$LOG_DIR"
@@ -104,10 +108,41 @@ select_tts() {
   return 1
 }
 
+stt_ready() {
+  curl -fsS --max-time 2 "$STT_URL" >/dev/null 2>&1
+}
+
+start_stt() {
+  if stt_ready; then
+    echo "[INFO] Fusion STT listo en $STT_URL" >>"$SERVER_LOG"
+    return 0
+  fi
+
+  "$ROOT/scripts/start_fusion_reader_v2_stt.sh" >>"$STT_LOG" 2>&1 &
+  local child_pid="$!"
+  local deadline=$(( $(date +%s) + STT_WAIT_SECONDS ))
+  while (( $(date +%s) < deadline )); do
+    if stt_ready; then
+      echo "[INFO] Fusion STT iniciado en $STT_URL" >>"$SERVER_LOG"
+      return 0
+    fi
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      wait "$child_pid" 2>/dev/null || true
+      echo "[WARN] Fusion STT terminó antes de quedar listo; revisá $STT_LOG" >>"$SERVER_LOG"
+      return 1
+    fi
+    sleep 1
+  done
+  echo "[WARN] Fusion STT no quedó listo dentro de ${STT_WAIT_SECONDS}s; revisá $STT_LOG" >>"$SERVER_LOG"
+  return 1
+}
+
 if ! select_tts; then
   export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"
   echo "[WARN] Fusion arrancará sin TTS; revisá $GPU_LOG y $CPU_LOG" >>"$SERVER_LOG"
 fi
+
+start_stt || true
 
 if [[ -n "${FUSION_READER_PYTHON:-}" && -x "${FUSION_READER_PYTHON}" ]]; then
   PYTHON_BIN="$FUSION_READER_PYTHON"

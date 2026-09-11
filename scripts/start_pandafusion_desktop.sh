@@ -4,9 +4,17 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 desktop_root="$project_root/desktop"
 appimage_dir="$desktop_root/src-tauri/target/release/bundle/appimage"
-server_url="${PANDA_FUSION_URL:-http://127.0.0.1:8010/}"
 
 export PATH="$HOME/.local/bin:$HOME/Miniforge3/bin:$PATH"
+
+source "$project_root/scripts/lib/env_helper.sh"
+load_env_safe
+
+server_url="${PANDA_FUSION_URL:-http://127.0.0.1:8010/}"
+stt_port="${FUSION_READER_STT_PORT:-8021}"
+stt_url="http://127.0.0.1:${stt_port}/health"
+runtime_dir="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$project_root/runtime/fusion_reader_v2}}"
+stt_log_file="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$runtime_dir/logs}}/stt_server.log"
 
 # La carcasa Tauri/WebKitGTK todavía no ofrece getUserMedia estable en Linux:
 # puede perder el micrófono y renderizar una superficie gris al redimensionar.
@@ -55,7 +63,31 @@ ensure_server_ready() {
   return 1
 }
 
+ensure_stt_ready() {
+  if curl --fail --silent --max-time 2 "$stt_url" >/dev/null 2>&1; then
+    echo "STT de Panda Fusión activo en http://127.0.0.1:${stt_port}."
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$stt_log_file")"
+  echo "Iniciando STT de Panda Fusión..."
+  nohup "$project_root/scripts/start_fusion_reader_v2_stt.sh" >>"$stt_log_file" 2>&1 &
+
+  local deadline=$(( $(date +%s) + 120 ))
+  while (( $(date +%s) < deadline )); do
+    if curl --fail --silent --max-time 2 "$stt_url" >/dev/null 2>&1; then
+      echo "STT de Panda Fusión listo."
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "ERROR: El STT no respondió. Revisá $stt_log_file" >&2
+  return 1
+}
+
 ensure_server_ready
+ensure_stt_ready
 
 # El acceso principal abre el motor compatible en modo app, no una pestaña.
 if [[ "${PANDA_FUSION_NATIVE_EXPERIMENTAL:-0}" != "1" ]]; then

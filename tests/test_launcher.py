@@ -243,6 +243,8 @@ exit 0
         )
         self.assertIn('export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"', entrypoint)
         self.assertIn('export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"', entrypoint)
+        self.assertIn("start_fusion_reader_v2_stt.sh", entrypoint)
+        self.assertIn("start_stt || true", entrypoint)
         self.assertIn("-m scripts.fusion_reader_v2_server", entrypoint)
 
     def test_desktop_launcher_uses_native_shell_and_panda_icon(self):
