@@ -145,7 +145,7 @@ class WebServerIntegrationTests(unittest.TestCase):
                 ("/", "Panda Fusión".encode("utf-8")),
                 ("/static/styles.css", b"--accent"),
                 ("/static/panda-fusion-emblem.webp", b"RIFF"),
-                ("/static/panda-princess-dialog.png", b"\x89PNG\r\n\x1a\n"),
+                ("/static/panda-princess-dialog-hd.webp", b"RIFF"),
                 ("/static/app.js", b"bootstrap.mjs"),
                 ("/static/js/bootstrap.mjs", b"readCurrent"),
                 ("/static/js/dictation.mjs", b"createDictationController"),
@@ -156,8 +156,8 @@ class WebServerIntegrationTests(unittest.TestCase):
                 with self.subTest(path=path), urllib.request.urlopen(base + path, timeout=3.0) as response:
                     body = response.read()
                     self.assertEqual(response.status, 200)
-                    if path.endswith(".png"):
-                        self.assertTrue(body.startswith(marker), "La mascota debe entregarse como PNG válido")
+                    if path.endswith(".webp"):
+                        self.assertTrue(body.startswith(marker), "La mascota debe entregarse como WebP válido")
                     else:
                         self.assertIn(marker, body)
                     self.assertTrue(response.headers.get("X-Request-ID"))

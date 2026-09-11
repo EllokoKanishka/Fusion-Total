@@ -843,7 +843,7 @@ button:disabled {
 .panda-dialog-mascot-wrap {
   position: relative;
   display: grid;
-  min-height: 380px;
+  min-height: 620px;
   place-items: center;
   isolation: isolate;
 }
@@ -858,8 +858,9 @@ button:disabled {
   filter: none;
 }
 .panda-dialog-mascot {
-  width: 380px;
-  height: auto;
+  width: auto;
+  height: min(500px, 58vh);
+  max-width: min(520px, 86vw);
   object-fit: contain;
   filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .42));
 }
@@ -867,7 +868,8 @@ button:disabled {
   position: absolute;
   z-index: 1;
   left: 50%;
-  bottom: 36px;
+  top: 50%;
+  bottom: auto;
   width: min(148px, calc(100% - 42px));
   padding: 7px 8px 6px;
   border: 2px solid var(--accent);
