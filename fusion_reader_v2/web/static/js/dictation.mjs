@@ -34,7 +34,9 @@ export function splitLucyUtterance(value) {
       else if (closing[char]) quote = closing[char];
     }
     const tail = text.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/u, '');
-    if (!quote && (!tail || imperative.test(tail))) return { prefix: text.slice(0, match.index).trim(), command: text.slice(match.index) };
+    const prefix = text.slice(0, match.index).trim();
+    const addressedAfterSentence = /[.?!…]$/u.test(prefix) && /^\s*,/u.test(text.slice(match.index + match[0].length));
+    if (!quote && (!tail || imperative.test(tail) || addressedAfterSentence)) return { prefix, command: text.slice(match.index) };
   }
   return null;
 }
@@ -271,6 +273,32 @@ function deleteSentence(editor, scope) {
   return { changed: true, message: 'Frase borrada.' };
 }
 
+function applyExactEdits(editor, edits) {
+  const source = editor.value;
+  if (!Array.isArray(edits) || !edits.length || edits.length > 12) {
+    return { changed: false, message: 'No encontré un cambio válido.' };
+  }
+  const chunks = [];
+  let position = 0;
+  let caret = editor.selectionEnd;
+  for (const edit of edits) {
+    const { start, end, before, after } = edit || {};
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < position || end <= start ||
+        end > source.length || typeof before !== 'string' || typeof after !== 'string' ||
+        before === after || source.slice(start, end) !== before) {
+      return { changed: false, message: 'No pude ubicar todos los cambios. No cambié el texto.' };
+    }
+    chunks.push(source.slice(position, start), after);
+    position = end;
+    if (end <= editor.selectionEnd) caret += after.length - before.length;
+    else if (start < editor.selectionEnd) caret += start - editor.selectionEnd + after.length;
+  }
+  chunks.push(source.slice(position));
+  replaceRange(editor, chunks.join(''), 0, source.length);
+  editor.selectionStart = editor.selectionEnd = caret;
+  return { changed: true, changes: edits.length, message: 'Cambios aplicados.' };
+}
+
 export function applyEditorInstruction(editor, instruction) {
   const item = instruction && typeof instruction === 'object' ? instruction : {};
   const kind = String(item.kind || 'noop');
@@ -279,6 +307,7 @@ export function applyEditorInstruction(editor, instruction) {
     replaceRange(editor, text, editor.selectionStart, editor.selectionEnd);
     return { changed: Boolean(text), message: kind === 'dictate' ? 'Texto agregado.' : 'Inserción aplicada.' };
   }
+  if (kind === 'edit') return applyExactEdits(editor, item.edits);
   if (kind === 'replace_many') {
     const pairs = item.replacements;
     if (!Array.isArray(pairs) || pairs.length < 2 || pairs.length > 8) return { changed: false, message: 'No reconocí una orden de cambios válida.' };
@@ -475,10 +504,13 @@ export function dictationAssistantContext(editor, maxChars = DEFAULT_ASSISTANT_C
   let start = Math.max(0, selectionStart - Math.floor(limit / 2));
   let end = Math.min(value.length, start + limit);
   start = Math.max(0, end - limit);
+  const lowSurrogate = index => value.charCodeAt(index) >= 0xDC00 && value.charCodeAt(index) <= 0xDFFF;
+  if (lowSurrogate(start)) start += 1;
+  if (lowSurrogate(end)) end -= 1;
   return {
     draft: value.slice(start, end),
-    selection_start: selectionStart - start,
-    selection_end: Math.min(selectionEnd, end) - start,
+    selection_start: Math.max(0, selectionStart - start),
+    selection_end: Math.max(0, Math.min(selectionEnd, end) - start),
     context_start: start
   };
 }
@@ -528,6 +560,7 @@ export function createDictationController({
   let listenSequence = 0;
   let uploadOwner = null;
   let lastVoiceCommand = null;
+  let pendingClarification = null;
   let cancelPlayback = null;
   let dirty = false;
   let storageReadFailed = false;
@@ -693,6 +726,7 @@ export function createDictationController({
   }
 
   function clearWakeCommand() {
+    pendingClarification = null;
     wakeGate.clear();
     windowRef.clearTimeout(wakeExpiryTimer);
     wakeExpiryTimer = 0;
@@ -703,6 +737,7 @@ export function createDictationController({
     wakeExpiryTimer = windowRef.setTimeout(() => {
       if (!wakeGate.isArmed()) {
         wakeExpiryTimer = 0;
+        pendingClarification = null;
         addActivity('La espera de la orden venció; volvé a decir “Lucy”.');
         if (active && !processing && !speaking) setStatus('Escuchando… hacé una pausa y aplico el tramo.', 'listening');
       }
@@ -718,7 +753,6 @@ export function createDictationController({
   async function prepareAssistantForWake() {
     const value = String(elements.dictationAssistantSelect.value || 'rules');
     if (!['local', 'local14b'].includes(value)) return true;
-    setStatus('Preparando el modelo local…', 'processing');
     try {
       const data = await api('/api/dictation/assistant/warm', {});
       const load = Number(data.load_duration_ms || 0);
@@ -728,7 +762,7 @@ export function createDictationController({
       return true;
     } catch (error) {
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
-      addActivity(`No armé la orden: ${detail}`);
+      addActivity(`El modelo local no se pudo preparar: ${detail}`);
       await refreshAssistantStatus();
       return false;
     }
@@ -1086,24 +1120,56 @@ export function createDictationController({
     }
   }
 
-  async function requestAssistant(transcript, token = beginRequest()) {
+  async function requestAssistant(transcript, token = beginRequest(), prior = null) {
     if (discardStale(token)) return;
-    const context = dictationAssistantContext(editor);
+    const { context_start, ...context } = dictationAssistantContext(editor);
     setStatus('Lucy está interpretando la orden…', 'processing');
     try {
-      const data = await api('/api/dictation/assist', { text: transcript, ...context });
+      const text = prior
+        ? `Orden que estaba pendiente: ${prior.command}\nLucy preguntó: ${prior.question}\nEl usuario aclaró: ${transcript}`
+        : transcript;
+      const data = await api('/api/dictation/assist', { text, ...context });
       if (discardStale(token)) return;
       const model = data.assistant_model || data.assistant_provider || 'asistente';
       addActivity(
         `Lucy interpretó la orden con ${model}: total ${data.assistant_ms || 0} ms · carga ${data.assistant_load_ms || 0} ms.`
       );
-      return applyInstruction(data.instruction, '', false, true, token);
+      const instruction = data.instruction;
+      if (instruction?.kind === 'clarify') {
+        return await clarifyCommand(instruction.text, token, text);
+      }
+      if (instruction?.kind === 'edit' && Array.isArray(instruction.edits)) {
+        instruction.edits = instruction.edits.map(edit => {
+          if (!edit || !Number.isSafeInteger(edit.start) || !Number.isSafeInteger(edit.end) ||
+              edit.start < 0 || edit.end > context.draft.length) return null;
+          return { ...edit, start: edit.start + context_start, end: edit.end + context_start };
+        });
+      }
+      return await applyInstruction(instruction, '', false, true, token);
     } catch (error) {
       if (!ownsRequest(token)) return;
       addActivity(assistantFailureActivity(error));
-      return finishCommand({ changed: false, message: 'No pude aplicar la orden. No cambié el texto.' }, { kind: 'noop' }, true, token);
+      const detail = error.data?.technical_detail || '';
+      if (detail.startsWith('assistant_edit_anchor_') || detail === 'assistant_edit_bad_join') {
+        return await clarifyCommand('¿Qué parte del texto querés cambiar? Decime unas palabras más.', token, transcript);
+      }
+      const message = detail.startsWith('openclaw_')
+        ? 'OpenAI no respondió bien. Podés usar el asistente local.'
+        : 'No pude aplicar la orden. No cambié el texto.';
+      return await finishCommand({ changed: false, message }, { kind: 'noop' }, true, token);
     } finally {
       if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+    }
+  }
+
+  async function clarifyCommand(question, token, command = '') {
+    if (discardStale(token)) return;
+    const message = cleanText(question) || '¿Qué parte querés cambiar?';
+    addActivity(message);
+    await speakText(message, 'confirmación', () => ownsRequest(token));
+    if (currentDraft(token) && active) {
+      pendingClarification = command ? { command: command.slice(-1200), question: message, epoch: token.epoch, revision: token.revision } : null;
+      armWakeCommand();
     }
   }
 
@@ -1128,6 +1194,7 @@ export function createDictationController({
       addActivity(`Lucy resolvió la orden con reglas instantáneas (${item.kind}).`);
     }
     const invoked = allowAssistant || assistantAttempted || hasLucyInvocation(transcript);
+    if (item.kind === 'clarify') return clarifyCommand(item.text, token);
     if (item.kind === 'undo') return finishCommand(undo(), item, invoked, token);
     if (item.kind === 'redo') return finishCommand(redo(), item, invoked, token);
     if (item.kind === 'stop_listening') {
@@ -1150,6 +1217,11 @@ export function createDictationController({
       editor.selectionEnd = selection.end;
       return speakText(selection.text, item.scope || 'selección');
     }
+    // A literal deletion can leave the surrounding grammar broken even when its
+    // target matches. Let the selected editor consider the whole sentence.
+    if (item.kind === 'delete' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
+      return requestAssistant(transcript, token);
+    }
     if (item.kind === 'noop' && item.scope !== 'ambiguous_replacement' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
@@ -1164,7 +1236,7 @@ export function createDictationController({
       editor.selectionStart = editor.selectionEnd = editor.value.length;
     }
     if (!result.changed && allowAssistant && !assistantAttempted &&
-        ['replace', 'delete', 'delete_from'].includes(String(item.kind || '')) &&
+        ['replace', 'delete_from'].includes(String(item.kind || '')) &&
         elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
@@ -1177,10 +1249,10 @@ export function createDictationController({
     elements.dictationCommandInput.value = '';
     const token = beginRequest();
     try {
-      const data = await api('/api/dictation/interpret', {
-        text,
-        commands_enabled: elements.dictationCommandsToggle.checked
-      });
+      const payload = elements.dictationCommandsToggle.checked
+        ? invokedInterpretationPayload(text)
+        : { text, commands_enabled: false };
+      const data = await api('/api/dictation/interpret', payload);
       await applyInstruction(data.instruction, data.transcript, true, false, token);
     } catch (error) {
       addActivity(`No pude interpretar la orden: ${error.message}.`);
@@ -1272,9 +1344,10 @@ export function createDictationController({
       }
       if (elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
         if (reservedWakeCommand) wakeGate.claim();
+        pendingClarification = null;
         addActivity(`Oí: “${transcript}”`);
-        if (!await prepareAssistantForWake() || discardStale(token)) return;
         armWakeCommand();
+        void prepareAssistantForWake();
         log(`Dictado: ${transcript || 'sin texto'} (${data.stt_provider || 'STT'}). Esperando orden.`);
         return;
       }
@@ -1287,8 +1360,8 @@ export function createDictationController({
         uploadOwner = token;
         appliedTranscript = split.command;
         if (isBareLucyInvocation(appliedTranscript)) {
-          if (!await prepareAssistantForWake() || discardStale(token)) return;
           armWakeCommand();
+          void prepareAssistantForWake();
           return;
         }
         const interpreted = await api('/api/dictation/interpret', invokedInterpretationPayload(appliedTranscript));
@@ -1296,7 +1369,14 @@ export function createDictationController({
         instruction = interpreted.instruction;
       }
       const claimedWakeCommand = reservedWakeCommand && wakeGate.claim();
-      if (claimedWakeCommand) {
+      const prior = pendingClarification;
+      pendingClarification = null;
+      if (claimedWakeCommand && prior && prior.epoch === token.epoch && prior.revision === token.revision &&
+          !hasLucyInvocation(appliedTranscript) && elements.dictationAssistantSelect.value !== 'rules') {
+        await requestAssistant(appliedTranscript, token, prior);
+        return;
+      }
+      if (claimedWakeCommand && !split?.prefix) {
         const payload = invokedInterpretationPayload(appliedTranscript);
         appliedTranscript = payload.text;
         const interpreted = await api('/api/dictation/interpret', payload);

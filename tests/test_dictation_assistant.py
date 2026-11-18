@@ -156,12 +156,62 @@ class DictationAssistantTests(unittest.TestCase):
         oversized = json.dumps({"kind": "insert", "text": "x" * 12_001})
         self.assertEqual(DictationAssistant._parse_instruction(oversized)[1], "assistant_instruction_too_large")
 
+    def test_edits_use_exact_anchors_and_browser_offsets(self) -> None:
+        response = json.dumps(
+            {
+                "kind": "edit",
+                "edits": [
+                    {"before": "analisis", "after": "análisis"},
+                    {"before": "filosofia", "after": "filosofía"},
+                ],
+            }
+        )
+        provider = NullChatProvider(response)
+        assistant = DictationAssistant({"local": provider}, selected="local")
+        result = assistant.interpret("Lucy, poné las tildes", draft="😀 filosofia, analisis.")
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            [(e.start, e.end, e.after) for e in result.instruction.edits], [(3, 12, "filosofía"), (14, 22, "análisis")]
+        )
+
+    def test_ambiguous_and_overlapping_anchors_are_rejected_atomically(self) -> None:
+        def parse(draft, pairs, start=0, end=0):
+            raw = json.dumps({"kind": "edit", "edits": [{"before": a, "after": b} for a, b in pairs]})
+            return DictationAssistant._parse_instruction(raw, draft, start, end)
+
+        self.assertEqual(parse("azul azul", [("azul", "verde")]), (None, "assistant_edit_anchor_ambiguous"))
+        self.assertEqual(parse("rojo azul", [("rojo", "gris"), ("verde", "")]), (None, "assistant_edit_anchor_missing"))
+        self.assertEqual(parse("rojo azul", [("rojo", "gris"), ("rojo azul", "")]), (None, "assistant_edit_overlap"))
+        selected, detail = parse("azul azul", [("azul", "verde")], 5, 9)
+        self.assertEqual(detail, "")
+        self.assertEqual(selected.edits[0].start, 5)
+
+    def test_reviews_invalid_join_once_before_applying(self) -> None:
+        from fusion_reader_v2.conversation import ChatResult
+
+        class ReviewingProvider(NullChatProvider):
+            def chat(self, messages, **_kwargs):
+                if len(messages) == 2:
+                    return ChatResult(True, answer='{"kind":"edit","edits":[{"before":" azul","after":""}]}')
+                return ChatResult(True, answer='{"kind":"edit","edits":[{"before":" y azul","after":""}]}')
+
+        assistant = DictationAssistant({"local": ReviewingProvider("")}, selected="local")
+        result = assistant.interpret("Sacá el segundo color", draft="Era verde y azul.")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.instruction.edits[0].before, " y azul")
+
+    def test_cloud_dictation_uses_dialogue_model_unless_overridden(self) -> None:
+        selected = {"FUSION_READER_OPENAI_CHAT_MODEL": "openai/modelo-elegido"}
+        self.assertEqual(create_settings(environ=selected).providers.openai_dictation_model, "openai/modelo-elegido")
+        selected["FUSION_READER_OPENAI_DICTATION_MODEL"] = "openai/otro"
+        self.assertEqual(create_settings(environ=selected).providers.openai_dictation_model, "openai/otro")
+
     def test_context_is_capped_before_it_reaches_the_provider(self) -> None:
         provider = NullChatProvider('{"kind":"noop","text":"","target":"","scope":"","number":0,"all_matches":false}')
         assistant = DictationAssistant({"local": provider}, selected="local", max_context_chars=1000)
         assistant.interpret("Lucy, revisá esto", draft="x" * 5000)
-        prompt = "\n".join(item["content"] for item in provider.calls[-1][0])
-        self.assertLess(len(prompt), 3000)
+        context = json.loads(provider.calls[-1][0][-1]["content"])
+        self.assertEqual(len(context["borrador"]), 1000)
 
     def test_selected_assistant_survives_reader_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

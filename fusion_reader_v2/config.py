@@ -369,7 +369,11 @@ def create_settings(
             dictation_14b_model=env.get("FUSION_READER_DICTATION_14B_MODEL", "qwen3:14b-q8_0").strip(),
             dictation_timeout_seconds=_floating(env, "FUSION_READER_DICTATION_TIMEOUT", 60.0, minimum=1.0),
             openai_chat_model=env.get("FUSION_READER_OPENAI_CHAT_MODEL", "openai/gpt-5.6-sol").strip(),
-            openai_dictation_model=env.get("FUSION_READER_OPENAI_DICTATION_MODEL", "openai/gpt-5-nano").strip(),
+            openai_dictation_model=(
+                env.get("FUSION_READER_OPENAI_DICTATION_MODEL")
+                or env.get("FUSION_READER_OPENAI_CHAT_MODEL")
+                or "openai/gpt-5.6-sol"
+            ).strip(),
             openai_dictation_timeout_seconds=_floating(
                 env, "FUSION_READER_OPENAI_DICTATION_TIMEOUT", 90.0, minimum=10.0
             ),

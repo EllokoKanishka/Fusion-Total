@@ -592,3 +592,93 @@ test('voice removes the sentence and confirms locally even if the selected model
   assert.equal(f.elements.dictationEditor.value, 'La casa es azul. La pradera es verde.');
   f.controller.dispose();
 });
+
+test('natural edits use the excerpt offset and undo all changes together', async () => {
+  const prefix = 'Antes. '.repeat(1800);
+  const original = prefix + 'La filosofia y el analisis.';
+  const f = await fixture({ api: async (route, body) => {
+    if (route === '/api/dictation/interpret') return { instruction: { kind: 'noop' } };
+    if (route === '/api/dictation/assist') {
+      assert.ok(body.draft.length < original.length);
+      assert.equal('context_start' in body, false);
+      const patch = (before, after) => {
+        const start = body.draft.indexOf(before);
+        return { start, end: start + before.length, before, after };
+      };
+      return { instruction: { kind: 'edit', edits: [patch('filosofia', 'filosofía'), patch('analisis', 'análisis')] } };
+    }
+    return {};
+  } });
+  await f.edit(original);
+  f.elements.dictationAssistantSelect.value = 'local14b';
+  f.elements.dictationCommandInput.value = 'Lucy, corregí las tildes de esos dos sustantivos';
+  await f.elements.dictationCommandBtn.emit('click');
+  assert.equal(f.elements.dictationEditor.value, prefix + 'La filosofía y el análisis.');
+  await f.elements.dictationUndoBtn.emit('click');
+  assert.equal(f.elements.dictationEditor.value, original);
+  f.controller.dispose();
+});
+
+test('the model can ask a question and use the unprefixed answer with the original request', async () => {
+  const original = 'La casa es verde. La pradera es azul.';
+  const replies = ['Lucy, sacá esa frase', 'la de la pradera'];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: replies.shift(), instruction: { kind: 'noop' } }) }),
+    api: async (route, body) => {
+      if (route === '/api/dictation/assist') {
+        if (!body.text.includes('El usuario aclaró')) {
+          return { instruction: { kind: 'clarify', text: '¿Cuál de las dos frases?' } };
+        }
+        assert.match(body.text, /sacá esa frase/);
+        assert.match(body.text, /la de la pradera/);
+        return { instruction: { kind: 'edit', edits: [
+          { start: 17, end: original.length, before: ' La pradera es azul.', after: '' }
+        ] } };
+      }
+      return { audio_url: '/confirmation.wav' };
+    },
+  });
+  f.elements.dictationAssistantSelect.value = 'openai';
+  await f.edit(original);
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, original);
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde.');
+  f.controller.dispose();
+});
+
+test('an invalid second patch leaves the first one unapplied', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const editor = new Element();
+  editor.value = 'Una casa. Una pradera.';
+  const result = applyEditorInstruction(editor, { kind: 'edit', edits: [
+    { start: 4, end: 8, before: 'casa', after: 'torre' },
+    { start: 14, end: 21, before: 'ventana', after: 'río' }
+  ] });
+  assert.equal(result.changed, false);
+  assert.equal(editor.value, 'Una casa. Una pradera.');
+});
+
+test('a deletion with a literal match still uses the selected editor to repair the surrounding grammar', async () => {
+  const original = 'La casa es verde y la pradera es azul. El caballo nada.';
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({
+      transcript: 'Lucy, borrá la pradera es azul',
+      instruction: { kind: 'delete', target: 'la pradera es azul' },
+    }) }),
+    api: async (route) => route === '/api/dictation/assist'
+      ? { instruction: { kind: 'edit', edits: [{ start: 16, end: 37, before: ' y la pradera es azul', after: '' }] } }
+      : {},
+  });
+  f.elements.dictationAssistantSelect.value = 'openai';
+  await f.edit(original);
+  await f.startRecording();
+  await f.finishRecording();
+  await tick();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde. El caballo nada.');
+  f.controller.dispose();
+});

@@ -93,7 +93,13 @@ Dictation routes:
 - `POST /api/dictation/assistant/warm`: preloads the selected local model with a
   bounded keep-alive before the browser exposes the armed listening state;
 - `POST /api/dictation/assist`: accepts one explicit command plus a bounded
-  draft excerpt and selection offsets, and returns one validated instruction;
+  draft excerpt and selection offsets, and returns one validated instruction.
+  An `edit` instruction contains up to 12 exact replacements. The server
+  resolves each anchor against the excerpt (and uses a unique match within the
+  selection to disambiguate), rejects overlapping ranges and returns UTF-16
+  offsets relative to that excerpt. The browser rechecks the draft and every
+  replacement before applying them as one undoable change. `clarify` returns
+  a short question instead of making an edit;
 - instruction kinds are additive and currently include `dictate`, `insert`,
   `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
   `delete_last_words`, `delete_sentence`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.

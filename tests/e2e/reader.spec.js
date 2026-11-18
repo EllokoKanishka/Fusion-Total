@@ -100,6 +100,17 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.locator('#pandaDialogAccept').click();
   await expect(page.locator('#dictationAssistantStatus')).toContainText('local · se prepara al decir Lucy');
   await expect(page.locator('#dictationAssistantInstallBtn')).toBeHidden();
+  await page.locator('#dictationEditor').fill('La filosofia es una práctica.');
+  const semanticConfirmation = page.waitForRequest(request =>
+    new URL(request.url()).pathname === '/api/dictation/speak' &&
+    request.postDataJSON().text === 'Listo. Apliqué el cambio.');
+  await page.locator('#dictationCommandInput').fill('Lucy, agregale la tilde a filosofia');
+  await page.locator('#dictationCommandBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La filosofía es una práctica.');
+  await semanticConfirmation;
+  await expect.poll(() => page.locator('#dictationPlayer').evaluate(player => player.ended)).toBe(true);
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La filosofia es una práctica.');
   await page.locator('#dictationEditor').fill('Una tarde en Buenos Aires. Lo sé.');
   await page.locator('#dictationCommandInput').fill('borrá Bonos Aires Loces');
   const assistantBefore = requestCounts.get('/api/dictation/assist') || 0;

@@ -5,6 +5,16 @@ from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
+class DictationEdit:
+    """An exact replacement, with UTF-16 offsets relative to the model's excerpt."""
+
+    start: int
+    end: int
+    before: str
+    after: str
+
+
+@dataclass(frozen=True)
 class DictationInstruction:
     """A bounded editor operation derived from one dictated utterance."""
 
@@ -15,6 +25,7 @@ class DictationInstruction:
     number: int = 0
     all_matches: bool = False
     replacements: tuple[tuple[str, str], ...] = ()
+    edits: tuple[DictationEdit, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)

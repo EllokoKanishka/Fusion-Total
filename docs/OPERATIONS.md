@@ -203,17 +203,18 @@ ollama pull qwen3:4b
 ollama pull qwen3:14b-q8_0
 ```
 
-Al decir `Lucy` sola con el asistente local elegido, Panda Fusión hace una
-precarga verificable y mantiene el modelo residente durante diez minutos. El
-cartel azul aparece sólo después de esa confirmación. La consola muestra tiempo
-de carga y tiempo total; `modelo preparado` no significa meramente instalado.
+Al decir `Lucy` sola, Panda vuelve a escuchar la orden mientras prepara el
+modelo local en segundo plano. Si falla la precarga, la captura sigue
+disponible. La voz de confirmación se reproduce después de procesar la orden.
 
-OpenAI usa `openai/gpt-5-nano` mediante el mismo agente aislado
-`fusion-dialogue`, pero con sesión nueva y prompt editorial. Sólo viajan la
-orden y una ventana máxima de 12.000 caracteres alrededor del cursor; audio,
-libros completos y el historial del diálogo no viajan. El adaptador entrega el
-esquema JSON al agente y PandaFusion valida la respuesta de forma cerrada antes
-de editar; OpenClaw CLI no expone el parámetro nativo de Structured Outputs.
+El dictado en OpenAI usa el modelo cloud del diálogo por defecto y admite
+`FUSION_READER_OPENAI_DICTATION_MODEL` para elegir otro. Pasa por el agente
+aislado `fusion-dialogue` con una sesión nueva. El modelo recibe la orden
+y hasta 12.000 caracteres alrededor del cursor o selección. Propone cambios
+a fragmentos exactos. Panda valida las posiciones y aplica todos en un solo
+paso reversible. Si el modelo pide precisión, Lucy hace una pregunta breve y
+escucha la respuesta. OpenClaw recibe el esquema en el prompt y Panda verifica
+la respuesta en su propio código.
 La voz permanece local. Si el asistente falla, la orden queda en `noop` y el
 texto no cambia.
 

@@ -37,3 +37,15 @@ Chrome usó un MediaStream de tono propio y MediaRecorder real, transcripción d
 3. Agregada tolerancia a puntos y comas que la transcripción puede introducir entre pares, además del rechazo de una orden que termina en «y». Al editar desde el final del borrador, el cursor vuelve al final para seguir dictando.
 4. Terminado. Se reinició Panda y su API devolvió las dos sustituciones para la orden exacta y las variantes con punto o coma. El servidor entrega la interfaz actualizada. Pasaron 881 pruebas Python 3.12, 97 de JavaScript y 2 de Chrome. Las pruebas de seguimiento simulan la transcripción y el audio de respuesta.
 5. El servicio de usuario usaba rutas que systemd no resolvía. Ahora el lanzador compartido lee la configuración y entra en la carpeta del proyecto. Arranque real del servicio y cuatro pruebas del instalador aprobados.
+
+
+## Edición por lenguaje natural
+
+1. Terminado. El proveedor cloud seleccionado usaba `gpt-5-nano`, que devolvía un error de OpenClaw. El contrato de dictado pedía elegir una sola operación fija.
+2. Terminado. El asistente propone ediciones de fragmentos exactos y puede pedir una aclaración. Panda valida los fragmentos dentro del contexto, comprueba el borrador al recibir la respuesta y aplica el conjunto con un solo Deshacer. Los borrados por referencia pasan por el asistente elegido para conservar la gramática de la oración. La captura de la orden ya puede continuar mientras se prepara un modelo local.
+3. Terminado. Pruebas con siete órdenes de muestra: OpenAI `gpt-5.6-sol` obtuvo siete resultados aceptables y Qwen3 14B Q8 obtuvo cuatro. Se consideraron equivalentes las comillas tipográficas y angulares. Qwen falló en el borrado de una cláusula, el reordenamiento y la delimitación de una cita. 886 pruebas Python 3.12, 103 JavaScript y dos recorridos de Chrome aprobados en local. La captura de voz en las pruebas fue simulada.
+4. Terminado. El modelo de dictado en OpenAI hereda el del diálogo salvo configuración explícita. Panda se reinició y su API confirmó el borrado de la pradera, el cambio de puntuación y el agregado de una tilde con OpenAI real. Se habilitó Ollama propio en un puerto libre de esta instalación (11436); su modelo local quedó visible en el catálogo. La interfaz abierta requiere recarga para tomar el JavaScript nuevo.
+
+El modelo recibe el pedido y una ventana de hasta 12.000 caracteres. Podés seleccionar otro tramo si lo que querés editar queda lejos del cursor. Para órdenes ambiguas, Lucy pide precisión y conserva el pedido original mientras escucha la respuesta. Las pruebas cubren variaciones de edición; el acierto de una orden nueva depende de que la transcripción y el modelo la interpreten correctamente.
+
+Referencia técnica de salida con esquema para el modelo local: [Ollama Structured Outputs](https://docs.ollama.com/capabilities/structured-outputs).

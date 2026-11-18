@@ -260,7 +260,7 @@ usa principalmente biblioteca estándar:
 - `FUSION_READER_DICTATION_TIMEOUT`
   - timeout del clasificador local; default 60 segundos
 - `FUSION_READER_OPENAI_DICTATION_MODEL`
-  - modelo de nube para órdenes editoriales; default `openai/gpt-5-nano`
+  - modelo de nube para órdenes editoriales; si se omite, usa el modelo OpenAI del diálogo
 - `FUSION_READER_OPENAI_DICTATION_TIMEOUT`
   - timeout del clasificador mediante OpenClaw; default 90 segundos
 - `FUSION_READER_BOHEMIA_CHAT_MODEL`

@@ -18,6 +18,16 @@ class InstallableNullChatProvider(NullChatProvider):
         super().__init__(answer)
         self.installed = False
 
+    def chat(self, messages, model="", think=None, num_predict=None):
+        if messages and "agregale la tilde a filosofia" in messages[-1]["content"]:
+            from fusion_reader_v2.conversation import ChatResult
+
+            return ChatResult(
+                True,
+                answer='{"kind":"edit","edits":[{"before":"filosofia","after":"filosofía"}]}',
+            )
+        return super().chat(messages, model=model, think=think, num_predict=num_predict)
+
     def health(self) -> dict:
         return {
             "ok": True,
