@@ -63,6 +63,31 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     documents.import_document_bytes("bad.bin", b"\x00\x01")
 
+    def test_optional_dictionary_failure_falls_through_and_filters_hunspell_metadata(self) -> None:
+        from io import StringIO
+
+        documents._spanish_wordlist.cache_clear()
+        try:
+            with (
+                mock.patch.object(Path, "exists", return_value=True),
+                mock.patch.object(
+                    Path,
+                    "open",
+                    side_effect=[
+                        OSError("unreadable dictionary"),
+                        StringIO("5\n\nluz/AB\n1234\nfilosofia/S\npensar\n"),
+                    ],
+                ) as opened,
+            ):
+                self.assertEqual(documents._spanish_wordlist(), {"filosofia", "pensar"})
+                self.assertEqual(opened.call_count, 2)
+            documents._spanish_wordlist.cache_clear()
+            with mock.patch.object(Path, "exists", return_value=False), mock.patch.object(Path, "open") as opened:
+                self.assertEqual(documents._spanish_wordlist(), set())
+                opened.assert_not_called()
+        finally:
+            documents._spanish_wordlist.cache_clear()
+
     def test_byte_import_uses_a_caller_independent_temporary_path(self) -> None:
         observed: list[Path] = []
 
