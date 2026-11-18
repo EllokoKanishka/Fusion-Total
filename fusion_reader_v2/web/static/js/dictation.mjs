@@ -4,6 +4,9 @@ const WAKE_COMMAND_WINDOW_MS = 20000;
 const MAX_DICTATION_UTTERANCE_MS = 10000;
 const END_OF_UTTERANCE_SILENCE_MS = 1000;
 const MIN_CAPTURE_BYTES = 256;
+const REQUEST_TIMEOUT_MS = 120000;
+const CONFIRMATION_REQUEST_TIMEOUT_MS = 20000;
+const CONFIRMATION_PLAYBACK_TIMEOUT_MS = 20000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 const SESSION_SCHEMA_VERSION = 2;
 const MAX_SAVED_SESSIONS = 30;
@@ -17,7 +20,7 @@ function cleanText(value) {
 const LUCY = String.raw`l[uú][cs](?:y|[ií])`;
 const WAKE_START = new RegExp(String.raw`^[¡¿]*(?:(?:che|hola|oye|bueno)[ ,.:]+)?${LUCY}(?![\p{L}\p{N}_])`, 'iu');
 const WAKE_MARK = /^[\s,.:;!?_\-…]+/u;
-const REQUEST_START = /^(?:(?:quiero|necesito) que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
+const REQUEST_START = /^(?:esc[uú]chame[ ,.:]+)?(?:(?:quiero|necesito) que |lo que te pido es que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|mejor[aáe]|reescrib[iíe]|pul[ií]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|hagas|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
 
 function isAddressed(tail) {
   return /^[\s]*[,.:;!?…]/u.test(tail) || REQUEST_START.test(tail.trimStart());
@@ -79,7 +82,7 @@ export function commandConfirmation(instruction, result) {
   if (instruction.kind === 'replace' && String(instruction.target).length <= 40 && String(instruction.text).length <= 40) {
     return `Listo. Cambié ${instruction.target} por ${instruction.text}.`;
   }
-  const summary = { undo: 'Deshice el último cambio.', redo: 'Rehice el cambio.', delete: 'Borré el texto indicado.', delete_sentence: 'Borré la frase.', clear: 'Limpié el borrador.', proofread: 'Corregí el tramo.' };
+  const summary = { undo: 'Deshice el último cambio.', redo: 'Rehice el cambio.', delete: 'Borré el texto indicado.', delete_sentence: 'Borré la frase.', clear: 'Limpié el borrador.', proofread: 'Corregí el tramo.', revise_prose: 'Revisé la prosa.' };
   return `Listo. ${summary[instruction.kind] || 'Apliqué el cambio.'}`;
 }
 
@@ -589,6 +592,7 @@ export function createDictationController({
   let lastVoiceCommand = null;
   let pendingClarification = null;
   let cancelPlayback = null;
+  let speechRequest = null;
   let dirty = false;
   let storageReadFailed = false;
   let disposed = false;
@@ -1040,9 +1044,29 @@ export function createDictationController({
     return { changed: true };
   }
 
+  async function requestWithDeadline(run, timeout = REQUEST_TIMEOUT_MS, controller = new AbortController()) {
+    const { signal } = controller;
+    if (signal.aborted) throw signal.reason;
+    let timer;
+    let onAbort;
+    const cancelled = new Promise((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      timer = windowRef.setTimeout(() => controller.abort(new Error('La respuesta tardó demasiado')), timeout);
+    });
+    try {
+      return await Promise.race([run(signal), cancelled]);
+    } finally {
+      windowRef.clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   function stopSpeech(resumeRecording = true) {
     speechSequence += 1;
     speaking = false;
+    speechRequest?.abort();
+    speechRequest = null;
     if (cancelPlayback) cancelPlayback();
     try { elements.dictationPlayer.pause(); } catch (_) {}
     elements.dictationPlayer.removeAttribute('src');
@@ -1059,21 +1083,30 @@ export function createDictationController({
     player.currentTime = target;
   }
 
-  async function playAudioUrl(url, sequence) {
+  async function playAudioUrl(url, sequence, timeout) {
     if (!url || sequence !== speechSequence) return;
     elements.dictationPlayer.src = url;
     await new Promise((resolve, reject) => {
+      let timer;
       const cleanup = () => {
+        windowRef.clearTimeout(timer);
         elements.dictationPlayer.removeEventListener('ended', onEnded);
         elements.dictationPlayer.removeEventListener('error', onError);
+        elements.dictationPlayer.removeEventListener('pause', onPause);
         if (cancelPlayback === onCancel) cancelPlayback = null;
       };
       const onCancel = () => { cleanup(); resolve(); };
       const onEnded = () => { cleanup(); resolve(); };
-      const onError = () => { cleanup(); reject(new Error('audio_playback_failed')); };
+      const onError = () => { cleanup(); reject(new Error('El audio se interrumpió')); };
+      const onPause = () => elements.dictationPlayer.ended ? onEnded() : onError();
+      elements.dictationPlayer.addEventListener('pause', onPause, { once: true });
       elements.dictationPlayer.addEventListener('ended', onEnded, { once: true });
       elements.dictationPlayer.addEventListener('error', onError, { once: true });
       cancelPlayback = onCancel;
+      timer = windowRef.setTimeout(() => {
+        cleanup();
+        reject(new Error('El audio no terminó a tiempo'));
+      }, timeout);
       elements.dictationPlayer.play().catch(error => { cleanup(); reject(error); });
     });
   }
@@ -1086,22 +1119,32 @@ export function createDictationController({
     speaking = true;
     speechSequence += 1;
     const sequence = speechSequence;
-    setStatus(label === 'confirmación' ? 'Confirmando el cambio…' : `Leyendo ${label}: 1 de ${parts.length}…`, 'speaking');
+    const confirmation = label === 'confirmación';
+    const controller = new AbortController();
+    speechRequest = controller;
+    setStatus(confirmation ? 'Confirmando el cambio…' : `Leyendo ${label}: 1 de ${parts.length}…`, 'speaking');
     try {
       for (let index = 0; index < parts.length && sequence === speechSequence; index += 1) {
         setStatus(label === 'confirmación' ? 'Confirmando el cambio…' : `Leyendo ${label}: ${index + 1} de ${parts.length}…`, 'speaking');
-        const data = await api('/api/dictation/speak', { text: parts[index] });
+        const data = await requestWithDeadline(
+          signal => api('/api/dictation/speak', { text: parts[index] }, { signal }),
+          confirmation ? CONFIRMATION_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS,
+          controller
+        );
         if (!isCurrent() || sequence !== speechSequence) return;
         if (!data.audio_url) throw new Error('La voz no devolvió un audio reproducible.');
-        await playAudioUrl(data.audio_url, sequence);
+        await playAudioUrl(data.audio_url, sequence, confirmation ? CONFIRMATION_PLAYBACK_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
       }
       if (sequence === speechSequence) addActivity(`Lectura terminada (${label}).`);
     } catch (error) {
       if (sequence !== speechSequence) return;
+      elements.dictationPlayer.pause();
+      elements.dictationPlayer.removeAttribute('src');
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
       addActivity(label === 'confirmación' ? `No pude reproducir la confirmación: ${detail}. El resultado del cambio está en el editor.` : `No pude leer: ${detail}.`);
     } finally {
       if (sequence === speechSequence) {
+        speechRequest = null;
         speaking = false;
         setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
         if (active && !processing) startRecorderCycle();
@@ -1119,9 +1162,12 @@ export function createDictationController({
     flushManualHistory();
     const before = snapshot(editor);
     const source = before.value.slice(selection.start, selection.end);
-    setStatus('Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
+    const prose = instruction.kind === 'revise_prose';
+    setStatus(prose ? 'Lucy está revisando la prosa…' : 'Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
     try {
-      const data = await api('/api/dictation/proofread', { text: source });
+      const data = await requestWithDeadline(signal => api('/api/dictation/proofread', {
+        text: source, ...(prose ? { mode: 'prose' } : {})
+      }, { signal }));
       if (discardStale(token)) return;
       if (data.ok === false) throw new Error(data.detail || data.error || 'proofread_failed');
       const revised = String(data.text ?? source);
@@ -1136,16 +1182,17 @@ export function createDictationController({
       const changed = Number(data.changed_parts || 0);
       const rejected = Number(data.rejected_parts || 0);
       addActivity(
-        `Corrección conservadora terminada con ${data.model || 'Qwen 14B'}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
+        `${prose ? 'Revisión de prosa' : 'Corrección conservadora'} con ${data.model || (prose ? 'el asistente' : 'Qwen 14B')}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
         `${rejected ? ` · ${rejected} propuesta${rejected === 1 ? '' : 's'} rechazada${rejected === 1 ? '' : 's'} por seguridad` : ''}` +
         ` · ${Number(data.duration_ms || 0)} ms.`
       );
-      return { changed: revised !== source, message: '' };
+      return { changed: revised !== source, message: revised === source ? 'El tramo quedó igual.' : '' };
     } catch (error) {
       if (!ownsRequest(token)) return;
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
       const technical = error && error.data && error.data.technical_detail ? ` (${error.data.technical_detail})` : '';
       addActivity(`No pude corregir el tramo: ${detail}${technical}. No cambié el texto.`);
+      return { changed: false, message: detail };
     } finally {
       if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
@@ -1161,7 +1208,7 @@ export function createDictationController({
         : prior
           ? `Orden que estaba pendiente: ${prior.command}\nLucy preguntó: ${prior.question}\nEl usuario aclaró: ${transcript}`
           : transcript;
-      const data = await api('/api/dictation/assist', { text, ...context });
+      const data = await requestWithDeadline(signal => api('/api/dictation/assist', { text, ...context }, { signal }));
       if (discardStale(token)) return;
       const model = data.assistant_model || data.assistant_provider || 'asistente';
       addActivity(
@@ -1186,9 +1233,9 @@ export function createDictationController({
       if (detail.startsWith('assistant_edit_anchor_') || detail === 'assistant_edit_bad_join') {
         return await clarifyCommand('¿Qué parte del texto querés cambiar? Decime unas palabras más.', token, transcript);
       }
-      const message = detail.startsWith('openclaw_')
-        ? 'OpenAI no respondió bien. Podés usar el asistente local.'
-        : 'No pude aplicar la orden. No cambié el texto.';
+      let message = 'No pude aplicar la orden. No cambié el texto.';
+      if (detail === 'openclaw_rate_limit' && error.data?.detail) message = error.data.detail;
+      else if (detail.startsWith('openclaw_')) message = 'OpenAI no respondió bien. Podés usar el asistente local.';
       return await finishCommand({ changed: false, message }, { kind: 'noop' }, true, token);
     } finally {
       if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
@@ -1231,7 +1278,7 @@ export function createDictationController({
       addActivity('Dictado detenido por voz.');
       return stopListening();
     }
-    if (item.kind === 'proofread') {
+    if (item.kind === 'proofread' || item.kind === 'revise_prose') {
       return finishCommand(await requestProofread(item, transcript, token), item, invoked, token);
     }
     if (item.kind === 'read') {
@@ -1282,7 +1329,7 @@ export function createDictationController({
       const payload = elements.dictationCommandsToggle.checked
         ? invokedInterpretationPayload(text)
         : { text, commands_enabled: false };
-      const data = await api('/api/dictation/interpret', payload);
+      const data = await requestWithDeadline(signal => api('/api/dictation/interpret', payload, { signal }));
       await applyInstruction(data.instruction, data.transcript, true, false, token);
     } catch (error) {
       addActivity(`No pude interpretar la orden: ${error.message}.`);
@@ -1350,12 +1397,15 @@ export function createDictationController({
         filename: mime.includes('ogg') ? 'dictation.ogg' : 'dictation.webm',
         commands: elements.dictationCommandsToggle.checked ? '1' : '0'
       });
-      const response = await fetchFn(`/api/dictation/transcribe?${params.toString()}`, {
-        method: 'POST',
-        headers: { 'Content-Type': mime || 'audio/webm' },
-        body: blob
+      const { response, data } = await requestWithDeadline(async signal => {
+        const response = await fetchFn(`/api/dictation/transcribe?${params.toString()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': mime || 'audio/webm' },
+          body: blob,
+          signal
+        });
+        return { response, data: await response.json() };
       });
-      const data = await response.json();
       if (discardStale(token)) return;
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
@@ -1407,7 +1457,7 @@ export function createDictationController({
           void prepareAssistantForWake();
           return;
         }
-        const interpreted = await api('/api/dictation/interpret', invokedInterpretationPayload(appliedTranscript));
+        const interpreted = await requestWithDeadline(signal => api('/api/dictation/interpret', invokedInterpretationPayload(appliedTranscript), { signal }));
         if (discardStale(token)) return;
         instruction = interpreted.instruction;
       }
@@ -1422,7 +1472,7 @@ export function createDictationController({
       if (claimedWakeCommand && !split?.prefix) {
         const payload = invokedInterpretationPayload(appliedTranscript);
         appliedTranscript = payload.text;
-        const interpreted = await api('/api/dictation/interpret', payload);
+        const interpreted = await requestWithDeadline(signal => api('/api/dictation/interpret', payload, { signal }));
         if (discardStale(token)) return;
         instruction = interpreted.instruction;
       }

@@ -803,3 +803,86 @@ test('an immediate spoken refinement keeps the prior instruction and does not ap
   assert.equal(f.elements.dictationEditor.value, 'Vuelvo por la mañana.');
   f.controller.dispose();
 });
+
+test('after a rejected prose review, a stalled confirmation releases the mic and Lucy accepts a new order', async () => {
+  const packets = [
+    { transcript: 'Lucy, mejorá la prosa', instruction: { kind: 'revise_prose', scope: 'all' } },
+    { transcript: 'Lucy.', instruction: { kind: 'noop' } },
+    { transcript: 'cambiá original por claro', instruction: { kind: 'dictate' } }
+  ];
+  const spoken = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => packets.shift() }),
+    api: async (route, body) => {
+      if (route === '/api/dictation/proofread') {
+        assert.deepEqual(body, { text: 'Texto original', mode: 'prose' });
+        throw new Error('No pude terminar la revisión de prosa');
+      }
+      if (route === '/api/dictation/interpret') return { instruction: { kind: 'replace', target: 'original', text: 'claro' } };
+      if (route === '/api/dictation/speak') {
+        spoken.push(body.text);
+        return { audio_url: '/confirmation.wav' };
+      }
+      return {};
+    }
+  });
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  assert.notEqual(f.recorders.at(-1).state, 'recording');
+  const playbackTimeout = [...f.timers.values()].find(timer => timer.ms === 20000);
+  assert.ok(playbackTimeout);
+  playbackTimeout.fn();
+  await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording');
+
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationStatus.dataset.mode, 'armed');
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'Texto claro');
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording');
+  assert.equal(spoken.length, 2);
+  f.controller.dispose();
+});
+
+test('stopping a confirmation while its synthesis is pending resumes capture and suppresses late audio', async () => {
+  const pending = deferred();
+  const f = await fixture({
+    api: async () => pending.promise,
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({ transcript: 'Lucy cambia original por claro', instruction: { kind: 'replace', target: 'original', text: 'claro' } })
+    })
+  });
+  await f.startRecording();
+  await f.finishRecording();
+  assert.notEqual(f.recorders.at(-1).state, 'recording');
+  f.controller.stopSpeech();
+  await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording');
+  pending.resolve({ audio_url: '/stale.wav' });
+  await tick();
+  assert.equal(f.elements.dictationPlayer.playCalls || 0, 0);
+  f.controller.dispose();
+});
+
+test('prose revision applies the selected range in a single undo step', async () => {
+  const f = await fixture({ api: async (route, body) => {
+    if (route === '/api/dictation/proofread') {
+      assert.deepEqual(body, { text: 'original', mode: 'prose' });
+      return { ok: true, text: 'revisado', changed_parts: 1, model: 'fixture' };
+    }
+    return {};
+  } });
+  f.elements.dictationEditor.selectionStart = 6;
+  f.elements.dictationEditor.selectionEnd = 14;
+  await f.controller.applyInstruction({ kind: 'revise_prose', scope: 'selection' }, 'Lucy, mejorá la prosa de la selección', true);
+  assert.equal(f.elements.dictationEditor.value, 'Texto revisado');
+  f.controller.undo();
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  f.controller.dispose();
+});

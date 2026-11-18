@@ -431,7 +431,7 @@ class OpenClawChatProvider(ChatProvider):
             return "openclaw_version_mismatch"
         if "gateway is running" in message:
             return "openclaw_runtime_conflict"
-        if "429" in message or "rate limit" in message or "quota" in message:
+        if any(marker in message for marker in ("429", "rate limit", "rate_limit", "usage limit", "quota")):
             return "openclaw_rate_limit"
         if any(s in message for s in ("econnreset", "econnrefused", "fetch failed", "network error", "enotfound")):
             return "openclaw_network_error"
@@ -523,7 +523,7 @@ class OpenClawChatProvider(ChatProvider):
         ).strip()
         stop_reason = str(result.get("stopReason") or "").strip().lower()
         if stop_reason == "error":
-            return "", model, "openclaw_agent_error"
+            return "", model, OpenClawChatProvider._error_detail(clean)
         if not answer:
             return "", model, "empty_answer"
         return answer, model, ""

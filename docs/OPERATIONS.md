@@ -382,7 +382,17 @@ Aclaración:
 
 `fusionctl start` and `fusionctl restart` now ensure Panda's own TTS before starting the web server, matching the desktop/systemd lifecycle. The preferred service remains owner-validated GPU AllTalk on `7853`, with CPU `7851` fallback. If both fail, the UI may still start but the warning is explicit in the server log.
 
-The Dictation workspace treats `Lucy, corregí/revisá/arreglá ...` as a bounded proofreading operation. It uses the installed Qwen3 14B Q8 corrector with thinking off and deterministic sampling, preserves paragraph boundaries, and keeps the original text whenever the conservative guard rejects a rewrite.
+The Dictation workspace treats spelling, punctuation and transcription fixes as bounded proofreading. It uses the installed Qwen3 14B Q8 corrector with thinking off and deterministic sampling, preserves paragraph boundaries, and keeps the original text whenever the conservative guard rejects a rewrite.
+
+Si pedís mejorar la prosa o hacer el texto más legible, Lucy usa el asistente
+seleccionado y revisa el borrador o la selección solicitada. La revisión admite
+hasta 12.000 caracteres por pedido. Divide los tramos largos y sólo aplica el
+resultado cuando todos pasaron las comprobaciones de cifras, citas y negaciones.
+La revisión se puede deshacer en un solo paso.
+
+Si la confirmación se interrumpe o tarda demasiado, Panda vuelve a escuchar.
+El botón para detener la lectura también libera una confirmación que todavía
+está esperando su audio.
 
 ### Dedicated Panda Ollama and resource checks (9.8)
 

@@ -25,6 +25,57 @@ class DictationAssistantTests(unittest.TestCase):
         self.assertEqual(provider.calls, [])
         self.assertTrue(assistant.status()["ready"])
 
+    def test_prose_revision_uses_the_selected_model_and_preserves_paragraphs(self) -> None:
+        original = "La casa era blanco blanco.\n\nNo había 3 plantas junto a la mesa de «Ana»."
+        revised = "La casa era blanca.\n\nJunto a la mesa de «Ana» no había 3 plantas."
+        cloud = NullChatProvider(json.dumps({"text": revised}, ensure_ascii=False))
+        local = NullChatProvider("{}")
+        assistant = DictationAssistant({"openai": cloud, "local": local}, selected="openai")
+
+        outcome = assistant.revise_prose(original)
+
+        self.assertTrue(outcome["ok"])
+        self.assertEqual(outcome["text"], revised)
+        self.assertEqual(outcome["changed_parts"], 1)
+        self.assertEqual(local.calls, [])
+        self.assertEqual(len(cloud.calls), 1)
+
+    def test_prose_revision_rejects_changed_facts_and_respects_rules_mode(self) -> None:
+        original = "En el patio había 17 plantas."
+        provider = NullChatProvider(json.dumps({"text": "En el patio había 20 plantas."}))
+        assistant = DictationAssistant({"local": provider})
+        self.assertFalse(assistant.revise_prose(original)["ok"])
+        self.assertEqual(provider.calls, [])
+
+        assistant.select("local")
+        outcome = assistant.revise_prose(original)
+        self.assertFalse(outcome["ok"])
+        self.assertEqual(outcome["technical_detail"], "protected_numbers_changed")
+        self.assertNotIn("text", outcome)
+
+    def test_prose_revision_splits_long_requests_at_text_boundaries(self) -> None:
+        from fusion_reader_v2.conversation import ChatResult
+
+        class RevisingProvider(NullChatProvider):
+            def __init__(self):
+                super().__init__("")
+                self.fragments = []
+
+            def chat(self, messages, **kwargs):
+                fragment = json.loads(messages[-1]["content"])["fragmento"]
+                self.fragments.append(fragment)
+                return ChatResult(True, answer=json.dumps({"text": fragment.replace("blanca blanca", "blanca")}))
+
+        text = ("La casa era blanca blanca. En el patio había plantas. " * 65).strip() + "\n\nOtro párrafo."
+        provider = RevisingProvider()
+        assistant = DictationAssistant({"local": provider}, selected="local")
+        outcome = assistant.revise_prose(text)
+
+        self.assertTrue(outcome["ok"])
+        self.assertGreater(len(provider.fragments), 1)
+        self.assertTrue(all(len(fragment) <= 2_400 for fragment in provider.fragments))
+        self.assertEqual(outcome["text"], text.replace("blanca blanca", "blanca"))
+
     def test_local_model_returns_one_bounded_delete_from_operation(self) -> None:
         provider = NullChatProvider(
             json.dumps(

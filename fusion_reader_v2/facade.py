@@ -2335,6 +2335,8 @@ class FusionReaderV2:
             return "El modelo ligero local todavía no está instalado."
         if clean in {"openclaw_unavailable", "openclaw_disabled"}:
             return "El asistente OpenAI no está disponible mediante OpenClaw."
+        if clean == "openclaw_rate_limit":
+            return "OpenAI alcanzó el límite de uso. Podés elegir un asistente local para continuar."
         if clean in {"openclaw_timeout"} or "timed out" in clean.lower():
             return "El asistente tardó demasiado y no cambié el texto."
         if clean.startswith("assistant_"):
@@ -2363,7 +2365,7 @@ class FusionReaderV2:
             "stt_ms": 0,
         }
 
-    def dictation_proofread(self, text: str) -> dict:
+    def dictation_proofread(self, text: str, *, prose: bool = False) -> dict:
         original = str(text or "")
         if not original.strip():
             return {"ok": False, "error": "empty_dictation_proofread", "detail": "El tramo está vacío."}
@@ -2374,6 +2376,11 @@ class FusionReaderV2:
                 "detail": "Seleccioná un tramo de hasta 12.000 caracteres para corregirlo con seguridad.",
                 "max_characters": 12_000,
             }
+        if prose:
+            result = self.dictation_assistant.revise_prose(original)
+            if result.get("technical_detail") == "openclaw_rate_limit":
+                result["detail"] = self._human_dictation_assistant_error("openclaw_rate_limit")
+            return result
         health = dict(self._dictation_corrector.health() or {})
         if not health.get("ok"):
             return {

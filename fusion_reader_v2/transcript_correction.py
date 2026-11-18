@@ -93,6 +93,10 @@ def validate_conservative_correction(original: str, candidate: str) -> tuple[boo
     if similarity < threshold:
         return False, "rewrite_risk"
 
+    return validate_protected_content(source, revised)
+
+
+def validate_protected_content(source: str, revised: str, *, allow_reordering: bool = False) -> tuple[bool, str]:
     def words(value: str) -> list[str]:
         return re.findall(r"[^\W\d_]+", unicodedata.normalize("NFC", value).casefold())
 
@@ -122,7 +126,13 @@ def validate_conservative_correction(original: str, candidate: str) -> tuple[boo
             if token in negations
         ]
 
-    if negative_context(source) != negative_context(revised):
+    original_negations = negative_context(source)
+    revised_negations = negative_context(revised)
+    if allow_reordering:
+        negations_preserved = [item[1] for item in original_negations] == [item[1] for item in revised_negations]
+    else:
+        negations_preserved = original_negations == revised_negations
+    if not negations_preserved:
         return False, "protected_negation_changed"
 
     number_words = set(

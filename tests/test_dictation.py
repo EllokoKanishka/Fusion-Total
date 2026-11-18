@@ -78,6 +78,24 @@ class DictationInstructionTests(unittest.TestCase):
             with self.subTest(utterance=utterance):
                 self.assertEqual(interpret_dictation_transcript(utterance, require_wake_word=True).kind, expected)
 
+    def test_lucy_distinguishes_general_prose_revision_from_spelling_correction(self):
+        for utterance, scope in (
+            ("Lucy, escuchame, lo que te pido es que hagas una revisión del texto y lo hagas más legible.", "all"),
+            ("Lucy hacé más clara la redacción de este tramo", "selection"),
+            ("Lucy, mejorá la prosa del último párrafo", "last_paragraph"),
+            ("Lucy, corregí el estilo", "all"),
+        ):
+            with self.subTest(utterance=utterance):
+                result = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((result.kind, result.scope), ("revise_prose", scope))
+        self.assertEqual(interpret_dictation_transcript("Lucy, corregí todo el texto").kind, "proofread")
+        self.assertEqual(interpret_dictation_transcript("Lucy, borrá prosas más legibles").kind, "delete")
+        for utterance in (
+            "Lucy, corregí la palabra «prosa»",
+            "Lucy, corregí el texto sin cambiar el estilo",
+        ):
+            self.assertNotEqual(interpret_dictation_transcript(utterance, require_wake_word=True).kind, "revise_prose")
+
     def test_lucy_can_stop_dictation_with_natural_spanish(self):
         for utterance in ("Lucy, pará acá", "Lucy, paramos acá", "Lucy, detener el dictado"):
             with self.subTest(utterance=utterance):

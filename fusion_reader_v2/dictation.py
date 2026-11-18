@@ -99,6 +99,44 @@ def _positive_count(value: str) -> int:
     return max(0, min(number, 10_000))
 
 
+_PROSE_REQUEST = re.compile(
+    r"^(?:(?:esc[uú]chame|por\s+favor)\b[ ,.:]*)?"
+    r"(?:(?:lo\s+que\s+te\s+pido\s+es\s+que|(?:quiero|necesito|te\s+pido)\s+que|"
+    r"pod[eé]s|podr[ií]as|que)\s+)?"
+    r"(?:revis(?:[aáe]|ar|es)|correg[ií]|corregir|corrig(?:e|as)|corrijas|"
+    r"mejor(?:[aáe]|ar|es)|reescrib(?:[iíea]|ir|as)|pul[ií]|pulir|"
+    r"hac[eé]|hacer|hagas|dej(?:[aáe]|ar|es))\b",
+    flags=re.IGNORECASE,
+)
+_PROSE_GOAL = re.compile(
+    r"\b(?:prosa|redacci[oó]n|estilo|legibilidad|fluidez|m[aá]s\s+(?:legible|claro|clara|fluido|fluida))\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _prose_instruction(command: str) -> DictationInstruction | None:
+    if not _PROSE_REQUEST.match(command):
+        return None
+    goal = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", command)
+    goal = re.sub(
+        r"\b(?:sin|no)\s+(?:cambi(?:ar|es)|alter(?:ar|es)|modific(?:ar|ues)|toc(?:ar|ques))"
+        r"\s+(?:(?:la|el|su)\s+)?(?:prosa|redacci[oó]n|estilo)",
+        " ",
+        goal,
+        flags=re.IGNORECASE,
+    )
+    if not _PROSE_GOAL.search(goal):
+        return None
+    scope = "all"
+    if re.search(r"\b(?:la\s+selecci[oó]n|lo\s+seleccionado|este\s+(?:fragmento|tramo))\b", command, re.I):
+        scope = "selection"
+    elif re.search(r"\b(?:[uú]ltimo|final)\s+p[aá]rrafo\b", command, re.I):
+        scope = "last_paragraph"
+    elif re.search(r"\b(?:este\s+p[aá]rrafo|p[aá]rrafo\s+actual)\b", command, re.I):
+        scope = "current_paragraph"
+    return DictationInstruction("revise_prose", scope=scope)
+
+
 def _proofread_instruction(command: str) -> DictationInstruction | None:
     match = re.fullmatch(
         r"(?:correg[ií]|corrige|corregir|revis[aá]|revisa|revisar|arregl[aá]|arregla|arreglar)\s*(.*)",
@@ -350,7 +388,7 @@ def interpret_dictation_transcript(
         if number:
             return DictationInstruction("delete_last_words", number=number)
 
-    proofread = _proofread_instruction(command)
+    proofread = _prose_instruction(command) or _proofread_instruction(command)
     if proofread is not None:
         return proofread
 

@@ -394,6 +394,24 @@ class WebServerIntegrationTests(unittest.TestCase):
                     self.assertEqual(payload["error"], error)
                     self.assertTrue(payload["request_id"])
 
+    def test_dictation_revises_prose_through_the_selected_assistant(self) -> None:
+        original = "La casa era blanco blanco.\n\nEl patio tenía 3 plantas."
+        revised = "La casa era blanca.\n\nEn el patio había 3 plantas."
+        assistant = DictationAssistant({"local": NullChatProvider(json.dumps({"text": revised}))}, selected="local")
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), dictation_assistant=assistant)
+            base = f"http://127.0.0.1:{server.server_port}"
+            _, instruction = self._request(
+                base,
+                "/api/dictation/interpret",
+                {"text": "Lucy, revisá el texto para hacerlo más legible", "require_wake_word": True},
+            )
+            self.assertEqual(instruction["instruction"]["kind"], "revise_prose")
+            status, result = self._request(base, "/api/dictation/proofread", {"mode": "prose", "text": original})
+            self.assertEqual(status, 200)
+            self.assertEqual(result["text"], revised)
+            self.assertEqual(result["changed_parts"], 1)
+
     def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

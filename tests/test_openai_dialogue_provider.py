@@ -253,6 +253,15 @@ class OpenAIProviderTests(unittest.TestCase):
                 for raw in (json.dumps(envelope), "[warning]\n" + json.dumps(envelope), message):
                     self.assertEqual(OpenClawChatProvider._extract_answer(raw)[2], detail)
 
+    def test_agent_stop_error_preserves_subscription_rate_limit(self) -> None:
+        for message in (
+            "You've reached your Codex subscription usage limit.",
+            "Provider openai is in cooldown (rate_limit)",
+        ):
+            with self.subTest(message=message):
+                envelope = {"result": {"stopReason": "error", "payloads": [], "error": {"message": message}}}
+                self.assertEqual(OpenClawChatProvider._extract_answer(json.dumps(envelope))[2], "openclaw_rate_limit")
+
     def test_health_tracks_failure_and_recovers_on_success_without_local_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             command = Path(tmp) / "openclaw"
