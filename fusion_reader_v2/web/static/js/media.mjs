@@ -28,25 +28,14 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
   async function downloadArtifact(element) {
     const url = element && element.dataset.downloadUrl;
     if (!url) return;
-    const response = await fetch(url);
-    if (!response.ok) {
-      let payload = {};
-      try {
-        payload = await response.json();
-      } catch (_error) {
-        // The server may return an empty or non-JSON error response.
-      }
-      throw new Error(payload.detail || payload.error || 'media_download_failed');
-    }
-    const blob = await response.blob();
-    const objectUrl = window.URL.createObjectURL(blob);
+    // Let the browser stream Content-Disposition downloads to disk.
+    // Fetching a Blob duplicates large WAVs in the page's memory.
     const anchor = document.createElement('a');
-    anchor.href = objectUrl;
+    anchor.href = url;
     anchor.download = element.dataset.downloadFilename || 'fusion-reader-media';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    window.URL.revokeObjectURL(objectUrl);
   }
 
   function bindDownload(element) {
@@ -153,9 +142,13 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
   }
 
   function selectedSttContext() {
+    const promptValue = String(elements.mediaSttPromptInput && elements.mediaSttPromptInput.value || '');
+    const hotwordsValue = String(elements.mediaSttHotwordsInput && elements.mediaSttHotwordsInput.value || '');
     return {
-      prompt: boundedContext(elements.mediaSttPromptInput && elements.mediaSttPromptInput.value, 1200),
-      hotwords: boundedContext(elements.mediaSttHotwordsInput && elements.mediaSttHotwordsInput.value, 2400)
+      promptValue,
+      hotwordsValue,
+      prompt: boundedContext(promptValue, 1200),
+      hotwords: boundedContext(hotwordsValue, 2400)
     };
   }
 
@@ -168,6 +161,7 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
     }
     clearPoll();
     pollingJobId = '';
+    const sttContext = selectedSttContext();
     const controller = new AbortController();
     uploadController = controller;
     pollFailures = 0;
@@ -194,7 +188,6 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
         throw new Error(capability.detail || capability.error || 'media_preflight_failed');
       }
       const requestParams = new URLSearchParams(params);
-      const sttContext = selectedSttContext();
       if (sttContext.prompt) requestParams.set('stt_prompt', sttContext.prompt);
       if (sttContext.hotwords) requestParams.set('stt_hotwords', sttContext.hotwords);
       const endpoint = requestParams.size ? `${endpoints[operation]}?${requestParams.toString()}` : endpoints[operation];
@@ -203,6 +196,11 @@ export function createMediaController({ elements, log, refreshMainStatus, pollDe
       controller.signal.throwIfAborted();
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'media_upload_failed');
       pollingJobId = String(data.job_id || '');
+      if (!pollingJobId) throw new Error('media_upload_missing_job');
+      // These hints belong to this file. Preserve them on failed/cancelled
+      // uploads, and don't erase a new value installed while awaiting upload.
+      if (elements.mediaSttPromptInput && String(elements.mediaSttPromptInput.value || '') === sttContext.promptValue) elements.mediaSttPromptInput.value = '';
+      if (elements.mediaSttHotwordsInput && String(elements.mediaSttHotwordsInput.value || '') === sttContext.hotwordsValue) elements.mediaSttHotwordsInput.value = '';
       render(data);
       log(`${file.name}: procesamiento multimedia iniciado.`);
     } catch (error) {

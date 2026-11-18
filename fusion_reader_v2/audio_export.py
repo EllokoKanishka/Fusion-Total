@@ -121,7 +121,10 @@ def unique_audio_download_target(filename: str, root: Path | str | None = None) 
     downloads_dir = Path(root) if root is not None else find_downloads_dir()
     downloads_dir = downloads_dir.expanduser()
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    candidate = downloads_dir / Path(filename).name
+    name = Path(filename).name
+    if name in {"", ".", ".."}:
+        name = "audio.wav"
+    candidate = downloads_dir / name
     if not candidate.exists():
         return candidate
     stem = candidate.stem
@@ -141,12 +144,15 @@ def _concat_wav_with_wave(inputs: list[Path], output: Path) -> str:
         output.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(output), "wb") as target:
             target.setparams(params)
-            target.writeframes(first.readframes(first.getnframes()))
+            while frames := first.readframes(65536):
+                target.writeframes(frames)
             for item in inputs[1:]:
                 with wave.open(str(item), "rb") as source:
-                    if source.getparams() != params:
+                    current = source.getparams()
+                    if current[:3] + current[4:] != params[:3] + params[4:]:
                         raise ValueError("wav_params_mismatch")
-                    target.writeframes(source.readframes(source.getnframes()))
+                    while frames := source.readframes(65536):
+                        target.writeframes(frames)
     return "wave"
 
 

@@ -29,6 +29,7 @@ class FakeWhisperModel:
         condition_on_previous_text=True,
         initial_prompt=None,
         hotwords=None,
+        word_timestamps=False,
     ):
         self.calls.append(
             {
@@ -39,13 +40,24 @@ class FakeWhisperModel:
                 "condition_on_previous_text": condition_on_previous_text,
                 "initial_prompt": initial_prompt,
                 "hotwords": hotwords,
+                "word_timestamps": word_timestamps,
             }
         )
-        segments = [SimpleNamespace(text="Hari Seldon llegó a Trantor.", start=0.0, end=2.0)]
+        words = [SimpleNamespace(word="Hari", start=0.1, end=0.4)] if word_timestamps else None
+        segments = [SimpleNamespace(text="Hari Seldon llegó a Trantor.", start=0.0, end=2.0, words=words)]
         return segments, SimpleNamespace(language="es")
 
 
 class STTQualityProfileTests(unittest.TestCase):
+    def test_word_times_are_opt_in_and_preserve_real_model_times(self) -> None:
+        server, model, _factory = self._load_server()
+        _, _, metadata = server["transcribe_wav"](Path("test.wav"), "es", word_timestamps=True)
+        self.assertTrue(model.calls[-1]["word_timestamps"])
+        self.assertEqual(metadata["segments"][0]["words"], [{"word": "Hari", "start": 0.1, "end": 0.4}])
+        _, _, metadata = server["transcribe_wav"](Path("test.wav"), "es")
+        self.assertFalse(model.calls[-1]["word_timestamps"])
+        self.assertNotIn("words", metadata["segments"][0])
+
     def _load_server(self, env: dict[str, str] | None = None):
         model = FakeWhisperModel()
         factory = mock.Mock(return_value=model)

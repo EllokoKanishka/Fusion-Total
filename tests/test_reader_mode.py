@@ -21,6 +21,13 @@ from app.reader import ReaderSessionStore  # noqa: E402
 
 class TestReaderSessionStore(unittest.TestCase):
     def setUp(self) -> None:
+        from unittest.mock import patch
+
+        health_patch = patch(
+            "app.voice.AllTalkTTSProvider.health", return_value={"ok": False, "provider": "isolated_legacy"}
+        )
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
         self.store = ReaderSessionStore(
@@ -194,6 +201,13 @@ class TestReaderSessionStore(unittest.TestCase):
 
 class TestReaderHttpEndpoints(unittest.TestCase):
     def setUp(self) -> None:
+        from unittest.mock import patch
+
+        health_patch = patch(
+            "app.voice.AllTalkTTSProvider.health", return_value={"ok": False, "provider": "isolated_legacy"}
+        )
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
         self._tmp = tempfile.TemporaryDirectory()
         base = Path(self._tmp.name)
         self._state_path = base / "reading_sessions.json"

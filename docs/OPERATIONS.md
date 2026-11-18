@@ -37,6 +37,15 @@ http://127.0.0.1:8010/
 
 ## Ventana de escritorio
 
+Al cerrar la última ventana o pestaña de Panda, el servidor espera cuatro segundos
+para distinguir un cierre de una recarga. Después termina los trabajos del lector,
+descarga de Ollama los modelos locales usados por Panda y detiene su AllTalk GPU
+7853 y su Whisper dedicado. No detiene el daemon Ollama, Lucy 7854 ni la voz CPU
+compartida 7851. Cada ventana registra una presencia; si el navegador se bloquea,
+la presencia caduca después de tres minutos sin heartbeat. Al abrir el acceso de
+escritorio se vuelven a iniciar los servicios. Tras instalar este cambio, recargar
+una vez las ventanas ya abiertas para que registren su presencia.
+
 Panda Fusión puede abrirse sin Chrome mediante la carcasa Tauri versionada en
 `desktop/`. No sustituye el backend: primero debe estar activo `fusionctl start`
 y la ventana carga exclusivamente `http://127.0.0.1:8010`.
@@ -263,6 +272,11 @@ y los tiempos de los segmentos válidos.
 launcher/server (default `8021`); al personalizarlos deben señalar el mismo
 servicio. El Python del server sigue la cadena `FUSION_READER_STT_ENV` →
 `FUSION_READER_GPU_ENV` → default histórico.
+El servidor conserva el perfil CUDA/CPU automático cuando no se fija un modelo.
+`FUSION_READER_STT_SERVER_MODEL` selecciona sólo el modelo del servidor y tiene
+prioridad sobre `FUSION_READER_STT_MODEL` explícito. El default `small` del cliente
+CLI no se exporta al servidor. `fusionctl` usa `.venv/bin/python` del proyecto
+cuando existe, salvo `FUSION_READER_PYTHON` explícito.
 
 `./scripts/smoke_fusion_reader_v2.sh` y `/api/status` permiten verificar el
 provider sin iniciar ni cargar modelos pesados.
@@ -274,10 +288,12 @@ provider sin iniciar ni cargar modelos pesados.
 
 ## Si Ollama está caído
 
-1. revisar `curl -s http://127.0.0.1:11434/api/tags`
+1. revisar el endpoint efectivo de `/api/status`; el Ollama dedicado de Panda
+   usa por defecto `http://127.0.0.1:11435`, separado del compartido `11434`
 2. revisar `GET /api/dialogue/status` y confirmar `services.chat.ready=false`
 3. si `Dialogar` devuelve texto humano de error, no tocar `Leer`
-4. relanzar Ollama y reintentar una pregunta corta
+4. relanzar Panda para recuperar su proceso dedicado y reintentar una pregunta corta;
+   no reiniciar ni descargar modelos del Ollama compartido
 
 ## Si OpenAI mediante OpenClaw no responde
 
@@ -364,3 +380,51 @@ Aclaración:
 `fusionctl start` and `fusionctl restart` now ensure Panda's own TTS before starting the web server, matching the desktop/systemd lifecycle. The preferred service remains owner-validated GPU AllTalk on `7853`, with CPU `7851` fallback. If both fail, the UI may still start but the warning is explicit in the server log.
 
 The Dictation workspace treats `Lucy, corregí/revisá/arreglá ...` as a bounded proofreading operation. It uses the installed Qwen3 14B Q8 corrector with thinking off and deterministic sampling, preserves paragraph boundaries, and keeps the original text whenever the conservative guard rejects a rewrite.
+
+### Dedicated Panda Ollama and resource checks (9.8)
+
+Diego chose a dedicated engine. At the next desktop server start, Panda will
+attempt to start its own Ollama child on `127.0.0.1:11435`. It reuses existing
+models; no copy, pull, global service restart or change of the shared port 11434
+is performed. If 11435 is occupied, Panda refuses to adopt that listener and
+reports local AI unavailable. Resolve the conflict deliberately; do not point
+Panda at an unverified service as a fallback.
+
+Configuration:
+
+- `FUSION_READER_OLLAMA_MODE=dedicated` (default) or explicit `shared`.
+- `FUSION_READER_PRIVATE_OLLAMA_PORT=11435`, distinct from application services.
+- `FUSION_READER_OLLAMA_MODELS_DIR`: existing readable model store. Installed
+  weights can be shared read-only; future installs need suitable write access.
+- `FUSION_READER_GPU_RESERVE_MIB=4096`, large/small admission working-set estimates
+  18000/6000 MiB. These are policy estimates, not measured model peaks.
+- `FUSION_READER_STT_REQUEST_TIMEOUT_SECONDS`: server-side maximum; defaults to
+  `FUSION_READER_MEDIA_TIMEOUT_SECONDS` or 7200 seconds for long work.
+
+Inspect `/api/status` -> `resources` for private-child identity, consumers,
+last admission and cached GPU budget. `configured`, `resident` and successfully
+executed inference remain different observations; a listening private child does
+not prove a model fits entirely on GPU. Broader CLI/configuration consistency and
+physical neural/VRAM calibration are separate consolidation checks.
+
+Normal closing stops the child that Panda created and leaves shared Ollama alone.
+Legacy/shared model residency from previous sessions can remain until its own
+service releases it. Neither this migration nor the shutdown report claims that
+all VRAM on the machine is empty. Forced process death is not a substitute for
+normal shutdown. CPU 7851 stays a shared fallback; Lucy 7854 is outside Panda.
+
+## Consolidación 9.9: arranque y configuración
+
+STT none/cli no inicia un servidor; auto/server puede degradar sin impedir la lectura. Systemd y fusionctl comparten la política de arranque, con ejecución en primer plano para systemd. El escritorio respeta FUSION_READER_V2_PORT; el proceso nativo experimental deriva el mismo puerto. El instalador conserva las claves ajenas de .env y crea primero un backup con permisos restringidos. No ejecutar el instalador para actualizar una sesión existente por rutina.
+
+La salud local distingue catálogo instalado de residencia observada. Una precarga cacheada no se considera vigente si el modelo fue desalojado. Un catálogo vacío significa modelo ausente. Los plazos admiten sólo valores finitos; el presupuesto global de fusionctl incluye los presupuestos secuenciales y margen del servidor privado. Diálogo y dictado cloud comparten agente, auth-dir y modo de ejecución configurados; investigación hereda PATH para poder resolver Node.
+
+## Consolidación 9.10: estado y exportación
+
+El estado reutiliza los chunks del documento activo y deduplica salud dentro de cada respuesta, sin reutilizar salud entre solicitudes. El resumen de caché tiene hasta cinco segundos de antigüedad y se invalida al escribir/podar; inspect manual permanece fresco. No hay poda automática. PDF textual se extrae por lotes preservando separadores de página y cancelación; el texto pasa por archivo temporal propio para evitar el límite de captura de logs. WAV compatibles se concatenan por formato, admitiendo longitudes diferentes y copiando por bloques. Las descargas multimedia usan el flujo nativo del navegador; los errores de descarga se muestran en el navegador.
+
+## Wheel y herramientas históricas (9.12)
+
+La wheel incluye los recursos shell operativos. `fusionctl start --no-engines` abre API/UI sin iniciar TTS/STT; los proveedores pueden permanecer degradados. Usar `FUSION_READER_FOREGROUND=1` cuando un supervisor deba poseer el proceso. Fuera del checkout, los defaults de estado/biblioteca usan datos del usuario bajo XDG_DATA_HOME/panda-fusion. Motores neurales y modelos son instalaciones separadas; la wheel no incluye pesos ni entornos GPU.
+
+model_router.sh queda retirado: no cambia el modelo global ni hace fallback silencioso. El backend histórico requiere FUSION_READER_ENABLE_LEGACY_BACKEND=1 y sólo escucha loopback, respetando --port. Los stubs de app y del prototipo no constituyen STT/catálogo real y no son el camino activo; se conservan como compatibilidad.

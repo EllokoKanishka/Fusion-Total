@@ -7,7 +7,7 @@ ALLTALK_DIR="${DIRECT_CHAT_ALLTALK_DIR:-${HOME}/Archivo_proyectos/Taverna/Tavern
 GPU_ENV="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}"
 ALLTALK_HOST="${FUSION_READER_GPU_TTS_HOST:-127.0.0.1}"
 ALLTALK_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
-OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$ROOT/runtime/fusion_reader_v2/tts_owner.json}"
+OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}/tts_owner.json}"
 OWNER_NAME="fusion_reader_v2"
 
 source "$ROOT/scripts/fusion_reader_gpu_guard.sh"

@@ -29,7 +29,10 @@ def cached_audio_path(context: WebContext, url_path: str) -> Path | None:
 def unique_download_target(context: WebContext, filename: str) -> Path:
     downloads_dir = context.settings.paths.downloads
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    candidate = downloads_dir / filename
+    name = Path(filename).name
+    if name in {"", ".", ".."}:
+        name = "documento.docx"
+    candidate = downloads_dir / name
     if not candidate.exists():
         return candidate
     stem = candidate.stem

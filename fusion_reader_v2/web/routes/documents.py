@@ -53,7 +53,14 @@ def resolve_library_path(context: WebContext, book_id: str) -> Path:
     raise FileNotFoundError("book_not_found")
 
 
-def load_imported_document(context: WebContext, imported, role: str = "main") -> dict:
+def load_imported_document(
+    context: WebContext, imported, role: str = "main", *, import_token: dict | None = None, job_id: str = ""
+) -> dict:
+    with context.import_publication(import_token, job_id):
+        return _load_imported_document(context, imported, role)
+
+
+def _load_imported_document(context: WebContext, imported, role: str) -> dict:
     context.converted_root.mkdir(parents=True, exist_ok=True)
     target = context.converted_root / f"{imported.doc_id}.txt"
     target.write_text(imported.text, encoding="utf-8")

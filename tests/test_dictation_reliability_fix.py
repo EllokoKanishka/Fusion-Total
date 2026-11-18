@@ -135,7 +135,7 @@ class DictationReliabilityFixTests(unittest.TestCase):
         self.assertIn("start_fusion_reader_v2_stt.sh", script)
         self.assertIn("ensure_fusion_gpu_stt", script)
         self.assertIn("wait_until_stt_ready", script)
-        self.assertIn("Whisper large-v3-turbo en CUDA/float16", script)
+        self.assertIn('FUSION_READER_STT_DEVICE="${FUSION_READER_STT_DEVICE:-cpu}"', script)
 
 
 if __name__ == "__main__":

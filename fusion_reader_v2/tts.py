@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import environment_value
+from .network import is_local_endpoint_host
 from .owned_subprocess import run_owned
 
 
@@ -71,6 +72,7 @@ class AudioArtifact:
     cached: bool = False
     source_url: str = ""
     duration_ms: int = 0
+    owned_temporary: bool = False
 
 
 class TTSProvider:
@@ -103,7 +105,11 @@ class NullTTSProvider(TTSProvider):
         path = Path(name)
         path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
         return AudioArtifact(
-            True, path=path, provider=self.name, duration_ms=int((time.perf_counter() - started) * 1000)
+            True,
+            path=path,
+            owned_temporary=True,
+            provider=self.name,
+            duration_ms=int((time.perf_counter() - started) * 1000),
         )
 
 
@@ -131,7 +137,7 @@ class AllTalkProvider(TTSProvider):
     def _local_port(self, url: str | None = None) -> int | None:
         target = url or getattr(self, "base_url", "")
         parsed = urllib.parse.urlparse(target)
-        if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        if not is_local_endpoint_host(str(parsed.hostname) if parsed.hostname is not None else None):
             return None
         try:
             return int(parsed.port or (443 if parsed.scheme == "https" else 80))
@@ -209,6 +215,11 @@ class AllTalkProvider(TTSProvider):
         return listener_pid
 
     def _owner_guard(self, url: str | None = None) -> tuple[bool, str]:
+        parsed_port = urllib.parse.urlparse(url or self.base_url).port
+        if parsed_port == 7854:
+            return False, "tts_foreign_doctora_lucy_port:7854"
+        if parsed_port == 7852:
+            return False, "tts_historic_unassigned_port:7852"
         port = self._local_port(url)
         gpu_port = _configured_gpu_tts_port()
         if port == _configured_lucy_tts_port():
@@ -369,10 +380,15 @@ class AllTalkProvider(TTSProvider):
             fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_alltalk_", suffix=".wav")
             os.close(fd)
             path = Path(name)
-            path.write_bytes(audio)
+            try:
+                path.write_bytes(audio)
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
             return AudioArtifact(
                 True,
                 path=path,
+                owned_temporary=True,
                 provider=self.name,
                 source_url=audio_url,
                 duration_ms=int((time.perf_counter() - started) * 1000),
@@ -390,11 +406,13 @@ class AllTalkProvider(TTSProvider):
             )
 
     def _audio_url(self, audio_ref: str) -> str:
+        if urllib.parse.urlparse(audio_ref).port in {7852, 7854}:
+            raise ValueError("tts_reserved_audio_endpoint")
         if not audio_ref.startswith("http"):
             return f"{self.base_url}/{audio_ref.lstrip('/')}"
         parsed_ref = urllib.parse.urlparse(audio_ref)
         parsed_base = urllib.parse.urlparse(self.base_url)
-        if parsed_ref.hostname in {"127.0.0.1", "localhost"} and parsed_base.hostname in {"127.0.0.1", "localhost"}:
+        if is_local_endpoint_host(parsed_ref.hostname) and is_local_endpoint_host(parsed_base.hostname):
             return urllib.parse.urlunparse(
                 (
                     parsed_base.scheme,
@@ -423,6 +441,8 @@ class AudioCache:
         self.max_bytes = max(1, int(max_bytes if max_bytes is not None else 8 * 1024 * 1024 * 1024))
         self.max_age_days = max(0, int(max_age_days if max_age_days is not None else 30))
         self._lock = threading.RLock()
+        self._summary_cache: dict | None = None
+        self._summary_at = 0.0
         if create_root:
             self.root.mkdir(parents=True, exist_ok=True)
 
@@ -468,10 +488,13 @@ class AudioCache:
                 if not self._valid_wav(temporary):
                     return artifact
                 os.replace(temporary, target)
+                self._summary_cache = None
                 temporary = None
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
+        if artifact.owned_temporary and artifact.path.resolve() != target.resolve():
+            artifact.path.unlink(missing_ok=True)
         return AudioArtifact(
             True,
             path=target,
@@ -480,6 +503,14 @@ class AudioCache:
             source_url=artifact.source_url,
             duration_ms=artifact.duration_ms,
         )
+
+    def summary(self, *, max_age: float = 5.0) -> dict:
+        with self._lock:
+            now = time.monotonic()
+            if self._summary_cache is None or now - self._summary_at >= max_age:
+                self._summary_cache = self.inspect()
+                self._summary_at = now
+            return {**self._summary_cache, "summary_age_seconds": max(0.0, now - self._summary_at)}
 
     def inspect(self, *, now: float | None = None) -> dict:
         if not self.root.exists():
@@ -523,6 +554,7 @@ class AudioCache:
             removed_items = 0
             removed_bytes = 0
             if apply:
+                self._summary_cache = None
                 for path, size, _mtime in selected:
                     try:
                         path.unlink()

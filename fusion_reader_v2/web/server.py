@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -18,17 +18,18 @@ from fusion_reader_v2.config import Settings, create_settings, environment_value
 from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.owned_subprocess import run_owned
-from fusion_reader_v2.web.errors import error_response
+from fusion_reader_v2.web.errors import APIError, error_response
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.routes.documents import (
     library_items,
     load_imported_document,
     resolve_library_path as resolve_library_path,
 )
-from fusion_reader_v2.web.jobs import import_job_worker, new_import_job
+from fusion_reader_v2.web.jobs import start_import_job
 from fusion_reader_v2.web.downloads import (
     audio_url_for,
     cached_audio_path,
+    stream_file,
     unique_download_target as unique_download_target,
 )
 from fusion_reader_v2.web.routing import create_router
@@ -43,11 +44,14 @@ STATIC_CONTENT_TYPES = {
     "app.js": "text/javascript; charset=utf-8",
     "busy_controls.js": "text/javascript; charset=utf-8",
     "js/bootstrap.mjs": "text/javascript; charset=utf-8",
+    "js/reading_highlight.mjs": "text/javascript; charset=utf-8",
+    "js/desktop_lifetime.mjs": "text/javascript; charset=utf-8",
     "js/api.mjs": "text/javascript; charset=utf-8",
     "js/audio.mjs": "text/javascript; charset=utf-8",
     "js/busy.mjs": "text/javascript; charset=utf-8",
     "js/dialogue.mjs": "text/javascript; charset=utf-8",
     "js/dictation.mjs": "text/javascript; charset=utf-8",
+    "js/lab_focus.mjs": "text/javascript; charset=utf-8",
     "js/ui.mjs": "text/javascript; charset=utf-8",
     "js/preparation.mjs": "text/javascript; charset=utf-8",
     "js/audio_export.mjs": "text/javascript; charset=utf-8",
@@ -120,14 +124,42 @@ class FusionHTTPServer(ThreadingHTTPServer):
     context: WebContext
 
     def server_close(self) -> None:
-        super().server_close()
-        if hasattr(self, "context"):
-            outcome = self.context.shutdown_jobs(timeout=10.0)
-            if not outcome["ok"]:
-                raise RuntimeError(f"web_shutdown_timeout:{','.join(outcome['alive_threads'])}")
-            app_outcome = self.context.app.shutdown_background_work(timeout=10.0)
-            if isinstance(app_outcome, dict) and not app_outcome.get("ok", True):
-                raise RuntimeError("app_shutdown_timeout")
+        errors = []
+
+        def phase(label, action):
+            try:
+                outcome = action()
+                if isinstance(outcome, dict) and not outcome.get("ok", True):
+                    errors.append(f"{label}:{outcome.get('alive_threads') or outcome.get('errors') or 'timeout'}")
+            except Exception as exc:
+                errors.append(f"{label}:{type(exc).__name__}:{exc}")
+
+        context = getattr(self, "context", None)
+        if context is not None:
+            phase("cancel_jobs", context.request_shutdown_jobs)
+            lifecycle = getattr(context.app, "_lifecycle_service", None)
+            if lifecycle is not None:
+                phase("cancel_app", lifecycle.begin_shutdown)
+            resources = getattr(context.app, "resource_controller", None)
+            if resources is not None:
+                phase("cancel_owned_resources", resources.begin_shutdown)
+        # Bypass ThreadingMixIn's unbounded join; cancel first, close the listener,
+        # then wait for owned workers and report any still alive.
+        phase("http_socket", lambda: HTTPServer.server_close(self))
+        if context is not None:
+            phase("web_shutdown_timeout", lambda: context.shutdown_jobs(timeout=10.0))
+            phase("app_shutdown_timeout", lambda: context.app.shutdown_background_work(timeout=10.0))
+        deadline = time.monotonic() + 10.0
+        threads = getattr(self, "_threads", [])
+        if isinstance(threads, list):
+            for thread in list(threads):
+                if thread is threading.current_thread():
+                    continue
+                thread.join(max(0.0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    errors.append(f"http_pending:{thread.name}")
+        if errors:
+            raise RuntimeError(";".join(errors))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -173,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
             "connect-src 'self'; img-src 'self' data:",
         )
         self.end_headers()
+        if self.command == "HEAD":
+            return
         try:
             self.wfile.write(raw)
         except (BrokenPipeError, ConnectionResetError):
@@ -194,8 +228,52 @@ class Handler(BaseHTTPRequestHandler):
             out["audio_url"] = audio_url_for(self.context, str(out.get("audio") or ""))
         self._json(status, out)
 
+    def _check_local_request(self) -> None:
+        hosts = self.headers.get_all("Host", [])
+        if len(hosts) != 1:
+            raise APIError("invalid_host", "Se requiere un único Host local.", 403)
+        try:
+            host = urlparse("//" + hosts[0])
+            allowed = {"127.0.0.1", "localhost", "::1"}
+            port = getattr(self.server, "server_address")[1]
+            if (
+                host.hostname not in allowed
+                or host.username is not None
+                or host.password is not None
+                or host.path
+                or host.query
+                or host.fragment
+                or host.port not in {None, port}
+            ):
+                raise ValueError("host")
+            origins = self.headers.get_all("Origin", [])
+            if len(origins) > 1:
+                raise ValueError("origin")
+            if origins:
+                origin = urlparse(origins[0])
+                if (
+                    origin.scheme != "http"
+                    or origin.hostname not in allowed
+                    or origin.username is not None
+                    or origin.password is not None
+                    or origin.path not in {"", "/"}
+                    or origin.query
+                    or origin.fragment
+                    or (origin.port or 80) != port
+                ):
+                    raise ValueError("origin")
+        except ValueError as exc:
+            raise APIError("untrusted_local_request", "Host u Origin no corresponde al lector local.", 403) from exc
+        if self.command == "POST":
+            lengths = self.headers.get_all("Content-Length", [])
+            if len(lengths) > 1 or self.headers.get("Transfer-Encoding") or (lengths and int(lengths[0]) < 0):
+                raise ValueError("invalid_body_framing")
+
     def _payload(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
+        content_type = (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            raise ValueError("application_json_required")
         if length <= 0:
             return {}
         limit = self.settings.limits.upload_max_bytes
@@ -327,6 +405,18 @@ class Handler(BaseHTTPRequestHandler):
             raise
 
     def do_GET(self) -> None:
+        try:
+            self._check_local_request()
+            self._get()
+        except Exception as exc:
+            self._request_error(exc)
+
+    def _request_error(self, exc: Exception) -> None:
+        get_logger().warning("request failed error=%s", type(exc).__name__, extra={"request_id": self.request_id})
+        status, payload = error_response(exc, self.request_id)
+        self._json(status, payload)
+
+    def _get(self) -> None:
         path = urlparse(self.path).path
         if ROUTER.resolve("GET", path) is None:
             self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
@@ -354,6 +444,13 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "error": "not_found"})
 
     def do_HEAD(self) -> None:
+        try:
+            self._check_local_request()
+            self._head()
+        except Exception as exc:
+            self._request_error(exc)
+
+    def _head(self) -> None:
         path = urlparse(self.path).path
         if ROUTER.resolve("HEAD", path) is None:
             self.send_response(404)
@@ -393,15 +490,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Content-Length", str(audio_path.stat().st_size))
-            self.end_headers()
+            stream_file(self, audio_path, content_type="audio/wav", filename=None, range_header="", head_only=True)
             return
         self.send_response(404)
         self.end_headers()
 
     def do_POST(self) -> None:
+        try:
+            self._check_local_request()
+        except Exception as exc:
+            self._request_error(exc)
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         if ROUTER.resolve("POST", path) is None:
@@ -415,20 +514,9 @@ class Handler(BaseHTTPRequestHandler):
                 filename = str((params.get("filename") or ["documento"])[0])
                 mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
                 role = str((params.get("role") or ["main"])[0])
+                token = self.context.prepare_import(role)
                 tmp_path = self._read_body_to_temp(filename)
-                import_job = new_import_job(
-                    self.context,
-                    filename,
-                    mime,
-                    tmp_path,
-                    tmp_path.stat().st_size,
-                    role=role,
-                )
-                self.context.start_thread(
-                    target=import_job_worker,
-                    args=(self.context, str(import_job["job_id"]), filename, tmp_path, mime, role),
-                    name=f"fusion-import-{import_job['job_id']}",
-                )
+                import_job = start_import_job(self.context, filename, mime, tmp_path, role, import_token=token)
                 self._json(202, import_job)
                 return
             if path == "/api/import-file":
@@ -436,12 +524,14 @@ class Handler(BaseHTTPRequestHandler):
                 filename = str((params.get("filename") or ["documento"])[0])
                 mime = str((params.get("mime") or [self.headers.get("Content-Type", "") or ""])[0])
                 role = str((params.get("role") or ["main"])[0])
+                token = self.context.prepare_import(role)
                 tmp_path = self._read_body_to_temp(filename)
                 try:
+                    self.context.reserve_import(role, token)
                     imported = import_document_path(filename, tmp_path, mime=mime)
                 finally:
                     tmp_path.unlink(missing_ok=True)
-                self._json(200, load_imported_document(self.context, imported, role=role))
+                self._json(200, load_imported_document(self.context, imported, role=role, import_token=token))
                 return
             if path == "/api/dialogue/turn" and "application/json" not in (self.headers.get("Content-Type", "") or ""):
                 content_type = self.headers.get("Content-Type", "") or ""
@@ -473,16 +563,19 @@ class Handler(BaseHTTPRequestHandler):
                     tmp_path.unlink(missing_ok=True)
                 return
             payload = self._payload()
+            if path == "/api/runtime/client":
+                lifetime = getattr(self.server, "desktop_lifetime", None)
+                self._json(
+                    200,
+                    lifetime.update(str(payload.get("client") or ""), leaving=payload.get("leaving") is True)
+                    if lifetime
+                    else {"ok": True, "state": "unmanaged"},
+                )
+                return
             if ROUTER.dispatch_post(self, path, payload):
                 return
         except Exception as exc:
-            get_logger().warning(
-                "request failed error=%s",
-                type(exc).__name__,
-                extra={"request_id": self.request_id},
-            )
-            status, payload = error_response(exc, self.request_id)
-            self._json(status, payload)
+            self._request_error(exc)
             return
         self._json(404, {"ok": False, "error": "not_found"})
 
@@ -507,24 +600,75 @@ def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTP
     return server
 
 
+def _close_application(server, app, lifetime, release_resources) -> None:
+    errors = []
+    for label, action in (
+        ("lifetime", lifetime.stop if lifetime else lambda: None),
+        ("server", server.server_close if server else lambda: None),
+        ("app", lambda: app.shutdown_background_work(timeout=10.0)),
+        ("resources", release_resources),
+    ):
+        try:
+            action()
+        except Exception as exc:
+            errors.append(f"{label}:{type(exc).__name__}:{exc}")
+    if errors:
+        raise RuntimeError("shutdown_failed:" + ";".join(errors))
+
+
 def main() -> None:
     from fusion_reader_v2.composition import create_fusion_reader
+    from fusion_reader_v2.desktop_lifetime import DesktopLifetime, release_gpu_resources
 
-    settings = create_settings()
+    from fusion_reader_v2.managed_ollama import ManagedOllama
+    from fusion_reader_v2.resources import ResourceController, dedicated_settings
+
+    configured = create_settings()
+    settings = dedicated_settings(configured)
+    daemon = (
+        ManagedOllama(
+            models_dir=settings.resources.models_dir,
+            port=settings.resources.private_ollama_port,
+            reserve_mib=settings.resources.reserve_mib,
+        )
+        if settings.resources.ollama_mode == "dedicated"
+        else None
+    )
     app = create_fusion_reader(settings)
-    server = create_http_server(app, settings)
+    controller = ResourceController(settings, daemon)
+    controller.bind(app)
+    server = lifetime = None
+    stopping = threading.Event()
 
-    def request_shutdown(_signum, _frame) -> None:
-        threading.Thread(target=server.shutdown, name="fusion-http-shutdown").start()
+    def request_shutdown(_signum, _frame):
+        stopping.set()
+        if server is not None:
+            threading.Thread(target=server.shutdown, name="fusion-http-shutdown").start()
+        elif daemon is not None:
+            daemon.cancel.set()
 
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
-    print(f"Fusion Reader v2 API listening on http://{settings.security.bind_host}:{settings.ports.api}")
     try:
+        if daemon is not None:
+            get_logger().info("Panda owned Ollama: %s", daemon.start())
+        if stopping.is_set():
+            return
+        server = create_http_server(app, settings)
+        lifetime = DesktopLifetime(server.shutdown)
+        setattr(server, "desktop_lifetime", lifetime)
+        lifetime.start()
+        print(f"Fusion Reader v2 API listening on http://{settings.security.bind_host}:{settings.ports.api}")
         server.serve_forever()
     finally:
-        server.server_close()
-        app.shutdown_background_work(timeout=10.0)
+        _close_application(
+            server,
+            app,
+            lifetime,
+            lambda: get_logger().info(
+                "Desktop GPU cleanup: %s", release_gpu_resources(app, settings, release_services=server is not None)
+            ),
+        )
 
 
 __all__ = [

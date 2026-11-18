@@ -615,7 +615,7 @@ Párrafo normal.
                 self.assertEqual(pdf._extract_pages_text(source), ["uno", "dos"])
             with (
                 mock.patch.object(pdf, "_page_count", return_value=3),
-                mock.patch.object(pdf, "_pdftotext_page", side_effect=lambda _p, page: str(page)),
+                mock.patch.object(pdf, "_pdftotext_page", return_value="1\f2\f3\f"),
             ):
                 self.assertEqual(pdf._extract_pages_text(source, limit=2), ["1", "2"])
 
@@ -646,7 +646,11 @@ Párrafo normal.
             ok_text = subprocess.CompletedProcess([], 0, stdout="texto", stderr="")
             with (
                 mock.patch.object(pdf.shutil, "which", return_value="pdftotext"),
-                mock.patch.object(pdf, "run_owned", return_value=ok_text) as run,
+                mock.patch.object(
+                    pdf,
+                    "run_owned",
+                    side_effect=lambda argv, **kwargs: (Path(argv[-1]).write_text("texto"), ok_text)[1],
+                ) as run,
             ):
                 self.assertEqual(pdf._pdftotext_page(source, None), "texto")
                 self.assertNotIn("-f", run.call_args.args[0])

@@ -54,7 +54,8 @@ class OpenAIProviderTests(unittest.TestCase):
             self.assertEqual(result.answer, "Respuesta desde OpenAI.")
             self.assertEqual(result.model, "gpt-5.6-sol")
             command_line = run.call_args.args[0]
-            self.assertIn("--local", command_line)
+            self.assertNotIn("--local", command_line)
+            self.assertNotIn("--deliver", command_line)
             self.assertEqual(command_line[command_line.index("--agent") + 1], "fusion-dialogue")
             session_id = command_line[command_line.index("--session-id") + 1]
             self.assertRegex(session_id, r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -104,7 +105,7 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(result.model, "gpt-5.6-sol")
         command_line = run.call_args.args[0]
         self.assertEqual(command_line[1:4], ["infer", "model", "run"])
-        self.assertNotIn("--agent", command_line)
+        self.assertEqual(command_line[command_line.index("--agent") + 1], "fusion-dialogue")
         self.assertNotIn("--session-id", command_line)
         self.assertIn("<USER>\nRespondé rápido\n</USER>", command_line[command_line.index("--prompt") + 1])
         self.assertEqual(run.call_args.kwargs["env"]["OPENCLAW_AGENT_DIR"], str(agent_dir))
@@ -236,6 +237,55 @@ class OpenAIProviderTests(unittest.TestCase):
         self.assertEqual(answer, "")
         self.assertEqual(model, "gpt-5.6-sol")
         self.assertEqual(detail, "openclaw_infer_error")
+
+    def test_cli_auth_config_and_schema_errors_are_reported_without_secret_output(self) -> None:
+        cases = [
+            ("OAuth token refresh failed (HTTP 401; code=refresh_token_reused)", "openclaw_auth_required"),
+            ("OpenClaw config is invalid", "openclaw_config_invalid"),
+            ("database uses newer schema version 15", "openclaw_version_mismatch"),
+            ("A Gateway is running for this state directory", "openclaw_runtime_conflict"),
+            ("rate limit 429", "openclaw_rate_limit"),
+            ("fetch failed: ECONNRESET", "openclaw_network_error"),
+        ]
+        for message, detail in cases:
+            with self.subTest(detail=detail):
+                envelope = {"ok": False, "error": {"type": "cli_error", "message": message}}
+                for raw in (json.dumps(envelope), "[warning]\n" + json.dumps(envelope), message):
+                    self.assertEqual(OpenClawChatProvider._extract_answer(raw)[2], detail)
+
+    def test_health_tracks_failure_and_recovers_on_success_without_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            command = Path(tmp) / "openclaw"
+            command.touch()
+            provider = OpenClawChatProvider(command=str(command))
+            failed = subprocess.CompletedProcess(
+                [], 1, json.dumps({"ok": False, "error": {"message": "refresh_token_reused"}}), ""
+            )
+            succeeded = subprocess.CompletedProcess([], 0, json.dumps({"payloads": [{"text": "OK"}]}), "")
+            with mock.patch("fusion_reader_v2.conversation.run_owned", side_effect=[failed, succeeded]) as run:
+                self.assertFalse(provider.chat([{"role": "user", "content": "Test"}]).ok)
+                self.assertFalse(provider.health()["ok"])
+                self.assertEqual(provider.health()["detail"], "openclaw_auth_required")
+                self.assertTrue(provider.chat([{"role": "user", "content": "Test"}]).ok)
+                self.assertTrue(provider.health()["connection_verified"])
+                self.assertEqual(run.call_count, 2)
+
+    def test_binary_resolution_prefers_maintained_install_and_respects_override(self) -> None:
+        from fusion_reader_v2.config import resolve_openclaw_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            old = home / ".openclaw/bin/openclaw"
+            current = home / ".npm-global/bin/openclaw"
+            for path in (old, current):
+                path.parent.mkdir(parents=True)
+                path.touch()
+            env = {"HOME": tmp, "PATH": str(old.parent)}
+            self.assertEqual(resolve_openclaw_command(env), str(current))
+            self.assertEqual(create_settings(environ=env).providers.openclaw_command, str(current))
+            self.assertEqual(
+                resolve_openclaw_command({**env, "FUSION_READER_OPENCLAW_BIN": "/custom/openclaw"}), "/custom/openclaw"
+            )
 
     def test_openclaw_provider_rejects_unknown_execution_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid_openclaw_execution_mode"):
@@ -397,6 +447,26 @@ class OpenAIProviderTests(unittest.TestCase):
             dialogue = updated["agents"]["list"][2]
             self.assertEqual(dialogue["tools"]["profile"], "minimal")
             self.assertIn("exec", dialogue["tools"]["deny"])
+
+    def test_setup_supports_current_agent_entries_without_touching_other_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "openclaw.json"
+            original = {
+                "gateway": {"port": 18789},
+                "agents": {
+                    "entries": {
+                        "main": {"model": "local/model"},
+                        "fusion-dialogue": {"model": "openai/gpt-5.6-sol"},
+                    }
+                },
+            }
+            config.write_text(json.dumps(original))
+            backup = setup_fusion_openai_dialogue.restrict_agent(config)
+            updated = json.loads(config.read_text())
+            self.assertEqual(json.loads(backup.read_text()), original)
+            self.assertEqual(updated["gateway"], original["gateway"])
+            self.assertEqual(updated["agents"]["entries"]["main"], original["agents"]["entries"]["main"])
+            self.assertEqual(updated["agents"]["entries"]["fusion-dialogue"]["tools"]["profile"], "minimal")
 
 
 if __name__ == "__main__":

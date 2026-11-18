@@ -35,8 +35,13 @@ DENIED_TOOLS = [
 
 
 def openclaw_binary() -> str:
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from fusion_reader_v2.config import resolve_openclaw_command
+
     configured = str(os.environ.get("FUSION_READER_OPENCLAW_BIN") or "").strip()
-    candidates = [configured, str(Path.home() / ".openclaw" / "bin" / "openclaw"), "openclaw"]
+    candidates = [configured, resolve_openclaw_command(), "openclaw"]
     for candidate in candidates:
         if not candidate:
             continue
@@ -63,6 +68,9 @@ def agent_items(payload: object) -> list[dict]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
+        entries = payload.get("entries")
+        if isinstance(entries, dict):
+            return [{**value, "id": key} for key, value in entries.items() if isinstance(value, dict)]
         for key in ("agents", "items", "result"):
             value = payload.get(key)
             if isinstance(value, list):
@@ -92,9 +100,15 @@ def restrict_agent(config_path: Path) -> Path:
     if not isinstance(agents, dict):
         raise RuntimeError("openclaw_config_has_no_agents")
     items = agents.get("list")
-    if not isinstance(items, list):
-        raise RuntimeError("openclaw_config_has_no_agent_list")
-    selected = next((item for item in items if isinstance(item, dict) and str(item.get("id") or "") == AGENT_ID), None)
+    if isinstance(items, list):
+        selected = next(
+            (item for item in items if isinstance(item, dict) and str(item.get("id") or "") == AGENT_ID), None
+        )
+    else:
+        entries = agents.get("entries")
+        selected = entries.get(AGENT_ID) if isinstance(entries, dict) else None
+        if not isinstance(selected, dict):
+            raise RuntimeError("openclaw_config_has_no_fusion_agent")
     if selected is None:
         raise RuntimeError("fusion_dialogue_agent_missing_after_creation")
     tools = selected.get("tools") if isinstance(selected.get("tools"), dict) else {}

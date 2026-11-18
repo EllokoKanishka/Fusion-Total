@@ -141,42 +141,50 @@ function occurrenceRanges(value, target) {
   const loweredNeedle = needle.toLocaleLowerCase('es');
   const ranges = [];
   const isWordCharacter = value => Boolean(value) && /[\p{L}\p{M}\p{N}_]/u.test(value);
-  const startsWithWord = isWordCharacter(loweredNeedle[0]);
-  const endsWithWord = isWordCharacter(loweredNeedle[loweredNeedle.length - 1]);
+  const before = (text, index) => [...text.slice(Math.max(0, index - 2), index)].at(-1) || '';
+  const after = (text, index) => index < text.length ? String.fromCodePoint(text.codePointAt(index)) : '';
+  const startsWithWord = isWordCharacter([...loweredNeedle][0]);
+  const endsWithWord = isWordCharacter([...loweredNeedle].at(-1));
   let offset = 0;
-  while (offset <= lowered.length - loweredNeedle.length) {
+  while (lowered.length === source.length && loweredNeedle.length === needle.length && offset <= lowered.length - loweredNeedle.length) {
     const index = lowered.indexOf(loweredNeedle, offset);
     if (index < 0) break;
     const end = index + loweredNeedle.length;
-    const leftBounded = !startsWithWord || !isWordCharacter(source[index - 1]);
-    const rightBounded = !endsWithWord || !isWordCharacter(source[end]);
+    const leftBounded = !startsWithWord || !isWordCharacter(before(source, index));
+    const rightBounded = !endsWithWord || !isWordCharacter(after(source, end));
     if (leftBounded && rightBounded) ranges.push([index, index + needle.length]);
     offset = index + Math.max(1, loweredNeedle.length);
   }
   if (ranges.length) return ranges;
   const normalizeWithMap = input => {
     let text = '';
-    const map = [];
-    for (let index = 0; index < input.length; index += 1) {
-      const normalized = input[index].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+    const starts = [], ends = [];
+    let index = 0;
+    for (const original of input) {
+      const end = index + original.length;
+      const normalized = original.toLocaleLowerCase('es').normalize('NFD').replace(/\p{M}/gu, '');
+      if (!normalized && ends.length) ends[ends.length - 1] = end;
       for (const char of normalized) {
-        if (!/[a-z0-9ñ]/i.test(char)) continue;
-        text += char;
-        map.push(index);
+        const mapped = /[\p{L}\p{N}_]/u.test(char) ? char : ' ';
+        if (mapped === ' ' && text.endsWith(' ')) { ends[ends.length - 1] = end; continue; }
+        text += mapped;
+        for (let unit = 0; unit < mapped.length; unit++) { starts.push(index); ends.push(end); }
       }
+      index = end;
     }
-    return { text, map };
+    return { text, starts, ends };
   };
   const normalizedSource = normalizeWithMap(source);
-  const normalizedNeedle = normalizeWithMap(needle).text;
-  if (normalizedNeedle.length < 3) return [];
+  const normalizedNeedle = normalizeWithMap(needle).text.trim();
+  if (!normalizedNeedle) return [];
   let normalizedOffset = 0;
   while (normalizedOffset <= normalizedSource.text.length - normalizedNeedle.length) {
     const index = normalizedSource.text.indexOf(normalizedNeedle, normalizedOffset);
     if (index < 0) break;
-    const start = normalizedSource.map[index];
-    const end = normalizedSource.map[index + normalizedNeedle.length - 1] + 1;
-    ranges.push([start, end]);
+    const endIndex = index + normalizedNeedle.length;
+    const leftBounded = !isWordCharacter(before(normalizedSource.text, index));
+    const rightBounded = !isWordCharacter(after(normalizedSource.text, endIndex));
+    if (leftBounded && rightBounded) ranges.push([normalizedSource.starts[index], normalizedSource.ends[endIndex - 1]]);
     normalizedOffset = index + normalizedNeedle.length;
   }
   return ranges;
@@ -207,7 +215,7 @@ export function applyEditorInstruction(editor, instruction) {
   if (kind === 'delete_from') {
     const ranges = occurrenceRanges(editor.value, item.target);
     if (!ranges.length) return { changed: false, message: `No encontré “${item.target || ''}”.` };
-    const range = preferredRange(ranges, Number(editor.selectionStart || editor.value.length));
+    const range = preferredRange(ranges, Number(editor.selectionStart ?? editor.value.length));
     replaceRange(editor, '', range[0], editor.value.length);
     return { changed: true, message: `Texto borrado desde “${item.target}” hasta el final.` };
   }
@@ -233,7 +241,7 @@ export function applyEditorInstruction(editor, instruction) {
       for (const range of [...ranges].reverse()) replaceRange(editor, replacement, range[0], range[1]);
       return { changed: true, message: `${ranges.length} coincidencia${ranges.length === 1 ? '' : 's'} modificada${ranges.length === 1 ? '' : 's'}.` };
     }
-    const range = preferredRange(ranges, Number(editor.selectionStart || editor.value.length));
+    const range = preferredRange(ranges, Number(editor.selectionStart ?? editor.value.length));
     replaceRange(editor, replacement, range[0], range[1]);
     return { changed: true, message: kind === 'replace' ? 'Corrección aplicada.' : 'Texto borrado.' };
   }
@@ -388,7 +396,7 @@ export function createDictationController({
   documentRoot = document,
   windowRef = window,
   fetchFn = fetch,
-  storage = window.localStorage,
+  storage,
   dialog = null
 }) {
   const editor = elements.dictationEditor;
@@ -406,9 +414,20 @@ export function createDictationController({
   let recorder = null;
   let monitorId = 0;
   let active = false;
+  let starting = false;
   let processing = false;
   let speaking = false;
-  let discardRecording = false;
+  let recordingCycle = null;
+  let draftRevision = 0;
+  let workEpoch = 0;
+  let requestSequence = 0;
+  let listenSequence = 0;
+  let uploadOwner = null;
+  let cancelPlayback = null;
+  let dirty = false;
+  let storageReadFailed = false;
+  let disposed = false;
+  try { if (storage === undefined) storage = windowRef.localStorage; } catch (_) { storageReadFailed = true; }
   let speechSequence = 0;
   let recorderStartedAt = 0;
   let voiceDetected = false;
@@ -416,8 +435,36 @@ export function createDictationController({
   let speechMs = 0;
   let lastTick = 0;
   let noiseFloor = 0.012;
-  let chunks = [];
   const wakeGate = createWakeCommandGate({ now: () => Date.now() });
+
+  function captureDraft() {
+    return { ...snapshot(editor), sessionId: sessionStore.activeId, revision: draftRevision, epoch: workEpoch, request: requestSequence };
+  }
+
+  function currentDraft(token) {
+    return Boolean(token) && !disposed && token.epoch === workEpoch && token.sessionId === sessionStore.activeId &&
+      token.revision === draftRevision && token.value === editor.value &&
+      token.selectionStart === editor.selectionStart && token.selectionEnd === editor.selectionEnd &&
+      (token.request === undefined || token.request === requestSequence);
+  }
+
+  function beginRequest(base = captureDraft()) {
+    return currentDraft(base) ? { ...base, request: ++requestSequence } : null;
+  }
+
+  function ownsRequest(token) { return token && !disposed && token.epoch === workEpoch && token.request === requestSequence; }
+
+  function discardStale(token) {
+    if (currentDraft(token)) return false;
+    addActivity('Descarté una respuesta anterior porque cambió el borrador, la selección o la sesión.');
+    return true;
+  }
+
+  function saveStatus(state, message) {
+    if (!elements.dictationSaveStatus) return;
+    elements.dictationSaveStatus.dataset.state = state;
+    elements.dictationSaveStatus.textContent = message;
+  }
 
   function setStatus(message, mode = '') {
     const labels = {
@@ -648,13 +695,24 @@ export function createDictationController({
       sessionStore.activeId = current.id;
       sessionStore.sessions = [current, ...sessionStore.sessions.filter(item => item.id !== current.id)]
         .slice(0, MAX_SAVED_SESSIONS);
+      if (storageReadFailed || !storage) throw new Error('storage_unavailable');
       storage.setItem(STORAGE_KEY, JSON.stringify(sessionStore));
-    } catch (_) {}
+      dirty = false;
+      saveStatus('saved', 'Guardado en este navegador.');
+    } catch (_) {
+      dirty = true;
+      saveStatus('error', storageReadFailed
+        ? 'No pude recuperar el guardado anterior; no lo sobrescribí. Conservá este borrador con Descargar TXT.'
+        : 'Borrador sin guardar: el navegador no pudo conservarlo. Usá Descargar TXT antes de salir.');
+    }
     updateStats();
     renderSessions();
+    return !dirty;
   }
 
   function schedulePersist() {
+    dirty = true;
+    if (elements.dictationSaveStatus?.dataset.state !== 'error') saveStatus('pending', 'Cambios pendientes de guardar…');
     windowRef.clearTimeout(saveTimer);
     saveTimer = windowRef.setTimeout(persistNow, 350);
     updateStats();
@@ -683,7 +741,7 @@ export function createDictationController({
           sessionStore.sessions[0].id = sessionStore.activeId;
         }
       }
-    } catch (_) {}
+    } catch (_) { storageReadFailed = true; }
     if (!sessionStore.sessions.length) {
       const id = newSessionId();
       sessionStore.activeId = id;
@@ -698,14 +756,19 @@ export function createDictationController({
     editor.selectionEnd = Math.min(editor.value.length, Math.max(editor.selectionStart, Number(current.selectionEnd || editor.selectionStart)));
     updateStats();
     renderSessions();
+    saveStatus(storageReadFailed ? 'error' : 'saved', storageReadFailed
+      ? 'No pude recuperar el guardado anterior; no lo sobrescribiré. Usá Descargar TXT para conservar lo que escribas.'
+      : 'Borrador disponible en este navegador.');
   }
 
   function loadSession(id) {
     if (id === sessionStore.activeId) return;
     flushManualHistory();
-    persistNow();
+    if (!persistNow()) return;
     const next = sessionStore.sessions.find(item => item.id === id);
     if (!next) return;
+    stopListening();
+    stopSpeech();
     sessionStore.activeId = id;
     editor.value = String(next.text || '');
     elements.dictationTitleInput.value = String(next.title || 'Dictado sin título');
@@ -723,12 +786,15 @@ export function createDictationController({
   }
 
   async function createNewSession() {
+    const token = beginRequest();
     const approved = !editor.value.trim() || (dialog
       ? await dialog.confirm({ title: '¿Abrir un borrador nuevo?', message: 'El actual queda guardado en el historial.', acceptLabel: 'Abrir borrador' })
       : windowRef.confirm('¿Abrir un borrador nuevo? El actual queda guardado en el historial.'));
-    if (!approved) return;
+    if (!approved || discardStale(token)) return;
     flushManualHistory();
-    persistNow();
+    if (!persistNow()) return;
+    stopListening();
+    stopSpeech();
     const id = newSessionId();
     sessionStore.activeId = id;
     sessionStore.sessions.unshift({ id, title: 'Dictado sin título', text: '', selectionStart: 0, selectionEnd: 0, voice: String(elements.dictationVoiceSelect.value || ''), createdAt: Date.now(), updatedAt: Date.now() });
@@ -763,6 +829,7 @@ export function createDictationController({
     const before = snapshot(editor);
     const result = applyEditorInstruction(editor, instruction);
     if (result.changed) {
+      draftRevision += 1;
       pushUndo(before);
       redoStack.length = 0;
       schedulePersist();
@@ -782,6 +849,7 @@ export function createDictationController({
     }
     redoStack.push(snapshot(editor));
     restoreSnapshot(editor, previous);
+    draftRevision += 1;
     schedulePersist();
     addActivity('Cambio deshecho.');
   }
@@ -795,16 +863,18 @@ export function createDictationController({
     }
     pushUndo(snapshot(editor));
     restoreSnapshot(editor, next);
+    draftRevision += 1;
     schedulePersist();
     addActivity('Cambio rehecho.');
   }
 
-  function stopSpeech() {
+  function stopSpeech(resumeRecording = true) {
     speechSequence += 1;
     speaking = false;
+    if (cancelPlayback) cancelPlayback();
     try { elements.dictationPlayer.pause(); } catch (_) {}
     elements.dictationPlayer.removeAttribute('src');
-    if (active && !processing) startRecorderCycle();
+    if (resumeRecording && active && !processing) startRecorderCycle();
   }
 
   function seekSpeech(seconds) {
@@ -824,11 +894,14 @@ export function createDictationController({
       const cleanup = () => {
         elements.dictationPlayer.removeEventListener('ended', onEnded);
         elements.dictationPlayer.removeEventListener('error', onError);
+        if (cancelPlayback === onCancel) cancelPlayback = null;
       };
+      const onCancel = () => { cleanup(); resolve(); };
       const onEnded = () => { cleanup(); resolve(); };
       const onError = () => { cleanup(); reject(new Error('audio_playback_failed')); };
       elements.dictationPlayer.addEventListener('ended', onEnded, { once: true });
       elements.dictationPlayer.addEventListener('error', onError, { once: true });
+      cancelPlayback = onCancel;
       elements.dictationPlayer.play().catch(error => { cleanup(); reject(error); });
     });
   }
@@ -836,6 +909,7 @@ export function createDictationController({
   async function speakText(text, label = 'tramo') {
     const parts = splitSpeechText(text);
     if (!parts.length) return;
+    stopSpeech(false);
     stopRecorderCycle(true);
     speaking = true;
     speechSequence += 1;
@@ -850,6 +924,7 @@ export function createDictationController({
       }
       if (sequence === speechSequence) addActivity(`Lectura terminada (${label}).`);
     } catch (error) {
+      if (sequence !== speechSequence) return;
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
       addActivity(`No pude leer: ${detail}.`);
     } finally {
@@ -861,7 +936,8 @@ export function createDictationController({
     }
   }
 
-  async function requestProofread(instruction, transcript = '') {
+  async function requestProofread(instruction, transcript = '', token = beginRequest()) {
+    if (discardStale(token)) return;
     const selection = readTextForInstruction(editor, { ...instruction, kind: 'read' });
     if (selection.error) {
       addActivity(selection.error);
@@ -873,13 +949,12 @@ export function createDictationController({
     setStatus('Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
     try {
       const data = await api('/api/dictation/proofread', { text: source });
-      if (editor.value !== before.value) {
-        addActivity('El borrador cambió mientras corregía; descarté la respuesta para no pisar tus cambios.');
-        return;
-      }
+      if (discardStale(token)) return;
+      if (data.ok === false) throw new Error(data.detail || data.error || 'proofread_failed');
       const revised = String(data.text ?? source);
       if (revised !== source) {
         replaceRange(editor, revised, selection.start, selection.end);
+        draftRevision += 1;
         pushUndo(before);
         redoStack.length = 0;
         schedulePersist();
@@ -894,32 +969,37 @@ export function createDictationController({
       );
       return { changed: revised !== source, message: '' };
     } catch (error) {
+      if (!ownsRequest(token)) return;
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
       const technical = error && error.data && error.data.technical_detail ? ` (${error.data.technical_detail})` : '';
       addActivity(`No pude corregir el tramo: ${detail}${technical}. No cambié el texto.`);
     } finally {
-      setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+      if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
   }
 
-  async function requestAssistant(transcript) {
+  async function requestAssistant(transcript, token = beginRequest()) {
+    if (discardStale(token)) return;
     const context = dictationAssistantContext(editor);
     setStatus('Lucy está interpretando la orden…', 'processing');
     try {
       const data = await api('/api/dictation/assist', { text: transcript, ...context });
+      if (discardStale(token)) return;
       const model = data.assistant_model || data.assistant_provider || 'asistente';
       addActivity(
         `Lucy interpretó la orden con ${model}: total ${data.assistant_ms || 0} ms · carga ${data.assistant_load_ms || 0} ms.`
       );
-      return applyInstruction(data.instruction, '', false, true);
+      return applyInstruction(data.instruction, '', false, true, token);
     } catch (error) {
+      if (!ownsRequest(token)) return;
       addActivity(assistantFailureActivity(error));
     } finally {
-      setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+      if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
   }
 
-  async function applyInstruction(instruction, transcript = '', allowAssistant = false, assistantAttempted = false) {
+  async function applyInstruction(instruction, transcript = '', allowAssistant = false, assistantAttempted = false, token = beginRequest()) {
+    if (discardStale(token)) return;
     const item = instruction && typeof instruction === 'object' ? instruction : { kind: 'noop' };
     if (transcript) addActivity(`Oí: “${transcript}”`);
     if (transcript && allowAssistant && item.kind !== 'noop' && item.kind !== 'dictate') {
@@ -932,13 +1012,13 @@ export function createDictationController({
       return stopListening();
     }
     if (item.kind === 'proofread') {
-      return requestProofread(item, transcript);
+      return requestProofread(item, transcript, token);
     }
     if (item.kind === 'read') {
       const selection = readTextForInstruction(editor, item);
       if (selection.error) {
         if (allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
-          return requestAssistant(transcript);
+          return requestAssistant(transcript, token);
         }
         addActivity(selection.error);
         return;
@@ -948,7 +1028,7 @@ export function createDictationController({
       return speakText(selection.text, item.scope || 'selección');
     }
     if (item.kind === 'noop' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
-      return requestAssistant(transcript);
+      return requestAssistant(transcript, token);
     }
     if (item.kind === 'noop' && (hasLucyInvocation(transcript) || assistantAttempted)) {
       addActivity('Lucy oyó la invocación, pero no reconoció una orden segura. No cambié el texto.');
@@ -958,7 +1038,7 @@ export function createDictationController({
     if (!result.changed && allowAssistant && !assistantAttempted &&
         ['replace', 'delete', 'delete_from'].includes(String(item.kind || '')) &&
         elements.dictationAssistantSelect.value !== 'rules') {
-      return requestAssistant(transcript);
+      return requestAssistant(transcript, token);
     }
     return result;
   }
@@ -967,12 +1047,13 @@ export function createDictationController({
     const text = cleanText(elements.dictationCommandInput.value);
     if (!text) return;
     elements.dictationCommandInput.value = '';
+    const token = beginRequest();
     try {
       const data = await api('/api/dictation/interpret', {
         text,
         commands_enabled: elements.dictationCommandsToggle.checked
       });
-      await applyInstruction(data.instruction, data.transcript, true);
+      await applyInstruction(data.instruction, data.transcript, true, false, token);
     } catch (error) {
       addActivity(`No pude interpretar la orden: ${error.message}.`);
     }
@@ -1025,7 +1106,10 @@ export function createDictationController({
     monitorId = windowRef.requestAnimationFrame(monitorRecorder);
   }
 
-  async function uploadRecording(blob, mime, reservedWakeCommand = false) {
+  async function uploadRecording(blob, mime, reservedWakeCommand = false, recordedDraft = captureDraft()) {
+    const token = beginRequest(recordedDraft);
+    if (discardStale(token)) return;
+    uploadOwner = token;
     processing = true;
     setStatus(reservedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
     try {
@@ -1039,12 +1123,13 @@ export function createDictationController({
         body: blob
       });
       const data = await response.json();
+      if (discardStale(token)) return;
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
       if (elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
         if (reservedWakeCommand) wakeGate.claim();
         addActivity(`Oí: “${transcript}”`);
-        if (!await prepareAssistantForWake()) return;
+        if (!await prepareAssistantForWake() || discardStale(token)) return;
         armWakeCommand();
         log(`Dictado: ${transcript || 'sin texto'} (${data.stt_provider || 'STT'}). Esperando orden.`);
         return;
@@ -1056,12 +1141,14 @@ export function createDictationController({
         const payload = invokedInterpretationPayload(transcript);
         appliedTranscript = payload.text;
         const interpreted = await api('/api/dictation/interpret', payload);
+        if (discardStale(token)) return;
         instruction = interpreted.instruction;
       }
       const invoked = claimedWakeCommand || hasLucyInvocation(appliedTranscript);
-      await applyInstruction(instruction, appliedTranscript, invoked);
+      await applyInstruction(instruction, appliedTranscript, invoked, false, token);
       log(`Dictado: ${appliedTranscript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {
+      if (!ownsRequest(token)) return;
       addActivity(`Falló la transcripción: ${error.message}.`);
       if (reservedWakeCommand && active && elements.dictationCommandsToggle.checked) {
         wakeGate.arm();
@@ -1069,9 +1156,10 @@ export function createDictationController({
         addActivity('Lucy sigue atenta; repetí la orden completa.');
       }
     } finally {
-      processing = false;
-      if (active && !speaking) {
-        startRecorderCycle();
+      if (uploadOwner === token) {
+        uploadOwner = null;
+        processing = false;
+        if (active && !speaking) startRecorderCycle();
       }
     }
   }
@@ -1080,7 +1168,10 @@ export function createDictationController({
     windowRef.cancelAnimationFrame(monitorId);
     monitorId = 0;
     if (!recorder || recorder.state === 'inactive') return;
-    discardRecording = discard;
+    if (recordingCycle) {
+      recordingCycle.discard = discard;
+      windowRef.clearTimeout(recordingCycle.deadlineTimer);
+    }
     try { recorder.stop(); } catch (_) {}
   }
 
@@ -1094,8 +1185,8 @@ export function createDictationController({
       stopListening();
       return;
     }
-    chunks = [];
-    discardRecording = false;
+    const cycle = { recorder, chunks: [], bytes: 0, deadlineTimer: 0, discard: false, draft: captureDraft() };
+    recordingCycle = cycle;
     voiceDetected = false;
     silenceMs = 0;
     speechMs = 0;
@@ -1103,12 +1194,23 @@ export function createDictationController({
     recorderStartedAt = windowRef.performance.now();
     lastTick = recorderStartedAt;
     recorder.addEventListener('dataavailable', event => {
-      if (event.data && event.data.size) chunks.push(event.data);
+      if (recordingCycle !== cycle || cycle.discard) return;
+      if (event.data && event.data.size) {
+        cycle.bytes += event.data.size;
+        if (cycle.bytes > 4 * 1024 * 1024) {
+          stopListening();
+          setStatus('La captura superó el límite. Volvé a iniciar el dictado.', 'error');
+          return;
+        }
+        cycle.chunks.push(event.data);
+      }
     });
     recorder.addEventListener('stop', () => {
-      const shouldDiscard = discardRecording || !active || !voiceDetected;
-      const blob = new windowRef.Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
-      chunks = [];
+      windowRef.clearTimeout(cycle.deadlineTimer);
+      if (recordingCycle !== cycle) return;
+      const shouldDiscard = cycle.discard || !active || !voiceDetected || !currentDraft(cycle.draft);
+      const blob = new windowRef.Blob(cycle.chunks, { type: cycle.recorder.mimeType || mime || 'audio/webm' });
+      recordingCycle = null;
       recorder = null;
       if (shouldDiscard || blob.size < 900) {
         if (wakeGate.isArmed() && !wakeExpiryTimer) {
@@ -1123,9 +1225,18 @@ export function createDictationController({
         windowRef.clearTimeout(wakeExpiryTimer);
         wakeExpiryTimer = 0;
       }
-      uploadRecording(blob, blob.type || mime, reservedWakeCommand);
+      uploadRecording(blob, blob.type || mime, reservedWakeCommand, cycle.draft);
     }, { once: true });
-    recorder.start(250);
+    try {
+      recorder.start(250);
+      cycle.deadlineTimer = windowRef.setTimeout(() => {
+        if (recordingCycle === cycle) stopRecorderCycle(false);
+      }, MAX_DICTATION_UTTERANCE_MS);
+    } catch (error) {
+      stopListening();
+      setStatus(`No pude iniciar la grabación: ${error.message}.`, 'error');
+      return;
+    }
     setStatus(
       wakeGate.isArmed() ? 'Lucy está escuchando tu orden…' : 'Escuchando… hacé una pausa y aplico el tramo.',
       wakeGate.isArmed() ? 'armed' : 'listening'
@@ -1134,22 +1245,31 @@ export function createDictationController({
   }
 
   async function startListening() {
-    if (active) return;
+    if (active || starting || documentRoot.hidden) return;
+    starting = true;
+    const sequence = ++listenSequence;
+    const epoch = workEpoch;
     if (!windowRef.MediaRecorder || !windowRef.navigator.mediaDevices || !windowRef.navigator.mediaDevices.getUserMedia) {
+      starting = false;
       setStatus('Este navegador no ofrece captura de audio compatible.', 'error');
       return;
     }
     try {
       let compatibilityCapture = false;
       try {
-        stream = await windowRef.navigator.mediaDevices.getUserMedia({
+        const captured = await windowRef.navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
         });
+        if (sequence !== listenSequence || epoch !== workEpoch || disposed) { captured.getTracks().forEach(track => track.stop()); return; }
+        stream = captured;
       } catch (error) {
         if (!shouldRetryWithBasicMicrophone(error)) throw error;
         // WebKitGTK/PipeWire can expose a mic without supporting every advanced
         // browser constraint.  Capture first; the analyser already adapts to it.
-        stream = await windowRef.navigator.mediaDevices.getUserMedia({ audio: true });
+        if (sequence !== listenSequence || epoch !== workEpoch || disposed) return;
+        const captured = await windowRef.navigator.mediaDevices.getUserMedia({ audio: true });
+        if (sequence !== listenSequence || epoch !== workEpoch || disposed) { captured.getTracks().forEach(track => track.stop()); return; }
+        stream = captured;
         compatibilityCapture = true;
       }
       const AudioContext = windowRef.AudioContext || windowRef.webkitAudioContext;
@@ -1165,16 +1285,28 @@ export function createDictationController({
         : 'Micrófono abierto. Las pausas separan los tramos.');
       startRecorderCycle();
     } catch (error) {
+      if (sequence !== listenSequence || epoch !== workEpoch || disposed) return;
+      stopListening();
       const message = microphoneFailureMessage(error);
       setStatus(message, 'error');
       addActivity(message);
+    } finally {
+      if (sequence === listenSequence) starting = false;
     }
   }
 
   function stopListening() {
+    starting = false;
+    workEpoch += 1;
+    listenSequence += 1;
+    requestSequence += 1;
+    processing = false;
+    uploadOwner = null;
     active = false;
     clearWakeCommand();
     stopRecorderCycle(true);
+    recordingCycle = null;
+    recorder = null;
     if (stream) stream.getTracks().forEach(track => track.stop());
     if (audioContext) audioContext.close().catch(() => {});
     stream = null;
@@ -1195,6 +1327,8 @@ export function createDictationController({
   function close() {
     stopListening();
     stopSpeech();
+    flushManualHistory();
+    if (!persistNow()) return;
     elements.appRoot.classList.remove('dictation-open');
     elements.dictationWorkspace.hidden = true;
     elements.dictationToggleBtn.setAttribute('aria-expanded', 'false');
@@ -1270,7 +1404,7 @@ export function createDictationController({
 
   elements.dictationToggleBtn.addEventListener('click', () => elements.dictationWorkspace.hidden ? open() : close());
   elements.dictationCloseBtn.addEventListener('click', close);
-  elements.dictationMicBtn.addEventListener('click', () => active ? stopListening() : startListening());
+  elements.dictationMicBtn.addEventListener('click', () => active || starting ? stopListening() : startListening());
   elements.dictationStopSpeechBtn.addEventListener('click', stopSpeech);
   elements.dictationUndoBtn.addEventListener('click', undo);
   elements.dictationRedoBtn.addEventListener('click', redo);
@@ -1286,17 +1420,20 @@ export function createDictationController({
   elements.dictationDownloadPdfBtn.addEventListener('click', downloadPdf);
   elements.dictationNewBtn.addEventListener('click', () => { createNewSession(); });
   elements.dictationClearBtn.addEventListener('click', async () => {
+    const token = beginRequest();
     const approved = !editor.value || (dialog
       ? await dialog.confirm({ title: '¿Limpiar el borrador?', message: 'Podrás deshacerlo mientras esta pestaña siga abierta.', acceptLabel: 'Sí, limpiar', danger: true })
       : windowRef.confirm('¿Limpiar el borrador de dictado? Podrás deshacerlo mientras esta pestaña siga abierta.'));
-    if (!approved) return;
+    if (!approved || discardStale(token)) return;
     mutate({ kind: 'clear' });
   });
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
   elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
   elements.dictationAssistantInstallBtn.addEventListener('click', installAssistantModel);
   elements.dictationCommandsToggle.addEventListener('change', () => {
-    if (!elements.dictationCommandsToggle.checked) clearWakeCommand();
+    workEpoch += 1;
+    requestSequence += 1;
+    clearWakeCommand();
   });
   elements.dictationCommandInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
@@ -1308,12 +1445,25 @@ export function createDictationController({
     if (!manualBaseline) manualBaseline = snapshot(editor);
   });
   editor.addEventListener('input', () => {
+    draftRevision += 1;
     windowRef.clearTimeout(manualTimer);
     manualTimer = windowRef.setTimeout(flushManualHistory, 700);
     schedulePersist();
   });
   elements.dictationTitleInput.addEventListener('input', schedulePersist);
   elements.dictationVoiceSelect.addEventListener('change', schedulePersist);
+
+  function beforeLeave(event) {
+    stopListening();
+    stopSpeech();
+    if ((dirty || saveTimer) && !persistNow()) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  }
+  function onVisibilityChange() { if (documentRoot.hidden) stopListening(); }
+  documentRoot.addEventListener?.('visibilitychange', onVisibilityChange);
+  windowRef.addEventListener?.('beforeunload', beforeLeave);
 
   restoreDraft();
   refreshAssistantStatus();
@@ -1334,6 +1484,9 @@ export function createDictationController({
       persistNow();
       stopListening();
       stopSpeech();
+      disposed = true;
+      documentRoot.removeEventListener?.('visibilitychange', onVisibilityChange);
+      windowRef.removeEventListener?.('beforeunload', beforeLeave);
       windowRef.clearTimeout(saveTimer);
       windowRef.clearTimeout(manualTimer);
       windowRef.clearTimeout(assistantInstallTimer);

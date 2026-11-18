@@ -195,6 +195,7 @@ class NullSTTProvider(STTProvider):
 
 
 class WhisperCliSTTProvider(STTProvider):
+    resource_device = ""
     name = "whisper_cli"
 
     def __init__(
@@ -272,6 +273,8 @@ class WhisperCliSTTProvider(STTProvider):
                 "--threads",
                 str(max(1, self.threads)),
             ]
+            if getattr(self, "resource_device", ""):
+                cmd.extend(["--device", self.resource_device])
             requested_language = str(language or "").strip().lower()
             if requested_language not in {"", "auto", "detect"}:
                 cmd[4:4] = ["--language", requested_language]
@@ -480,6 +483,7 @@ class FasterWhisperServerSTTProvider(STTProvider):
                 hotwords=hotwords,
             )
         )
+        query += "&timeout_seconds=" + str(max(0.01, self.timeout_seconds))
         parsed = urllib.parse.urlsplit(self.base_url)
         connection_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         deadline = min(

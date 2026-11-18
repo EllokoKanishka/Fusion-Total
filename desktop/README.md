@@ -32,3 +32,7 @@ npm run build
 La ventana no abre contenido remoto: su única URL es el servidor loopback de
 Panda Fusión. El backend, voz, documentos y sus rutas API conservan el mismo
 contrato que en navegador.
+
+## Uso actual (consolidación 17/11/2026)
+
+El acceso diario usa Chrome/Chromium en modo aplicación y respeta FUSION_READER_V2_PORT. Tauri requiere PANDA_FUSION_NATIVE_EXPERIMENTAL=1; permanece experimental por diferencias de captura y renderizado en WebKitGTK. Su permiso automático se limita al micrófono, sin cámara, desde el origen local actual de Panda.

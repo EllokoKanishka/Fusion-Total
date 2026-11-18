@@ -1,6 +1,11 @@
 export function createDialogueState() {
   return {
     active: false,
+    starting: false,
+    epoch: 0,
+    request: null,
+    captureTimerId: 0,
+    capturedSamples: 0,
     stream: null,
     audioContext: null,
     analyser: null,
@@ -45,7 +50,9 @@ export function createDialogueState() {
 
 export function clearDialogueTimers(dialogue, clearTimer = clearTimeout, cancelFrame = cancelAnimationFrame) {
   if (dialogue.finalizeTimeoutId) clearTimer(dialogue.finalizeTimeoutId);
+  if (dialogue.captureTimerId) clearTimer(dialogue.captureTimerId);
   if (dialogue.monitorId) cancelFrame(dialogue.monitorId);
   dialogue.finalizeTimeoutId = 0;
+  dialogue.captureTimerId = 0;
   dialogue.monitorId = 0;
 }

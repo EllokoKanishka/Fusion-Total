@@ -37,6 +37,10 @@ Componentes principales:
 Propiedades:
 
 - no depende del LLM;
+- el resaltado acumulativo usa `audio.currentTime`, incluidos saltos y cambios de velocidad;
+  las marcas se obtienen del STT local sobre el WAV existente y se cachean por audio y texto.
+  La sincronización es opcional y asíncrona: nunca regenera voz ni impide leer si falta STT.
+  Las palabras no reconocidas se incorporan al alcanzar la siguiente marca real; la UI indica resaltado parcial.
 - acepta texto pegado como documento virtual `quick_text` dentro del mismo
   `ReaderSession`; conserva el original sólo en memoria, permite comenzar desde
   el inicio o desde el cursor y nunca lo restaura tras reiniciar;
@@ -162,6 +166,7 @@ Fusion Reader v2 permite alternar entre dos modos de anclaje (Laboratory Mode):
    - Lucy conversa libremente, sin estar anclada al documento activo.
    - **Independencia Documental:** El documento activo NO se inyecta en el contexto por defecto. Esto evita que Lucy interprete todo a través del fragmento visible.
    - **Acceso Explícito:** El documento se incluye en el prompt SOLO si el usuario lo pide explícitamente (ej: "qué dice el texto", "según el fragmento", "mirá el documento").
+   - Por decisión de Diego (17/11/2026), notas y foco del laboratorio también requieren un pedido explícito e independiente. Pedir el documento no habilita las notas. Sin pedido documental tampoco se envían título, ID ni catálogo de referencias. El historial de conversación sigue disponible; esta selección regula la nueva inyección de fuentes, no borra intercambios anteriores.
    - **Claridad Operativa:** La API separa `document` (recurso cargado) de `anchor` (anclaje activo) para evitar confundir disponibilidad con uso.
    - El perfil (Académica/Bohemia) y el Velo siguen activos, tiñendo el tono de la conversación libre.
 
@@ -419,3 +424,19 @@ Fusion Reader v2 implementa un servidor MCP de solo lectura (`scripts/fusion_mem
 Para OpenClaw/SearXNG/Antigravity:
 
 - `docs/OPENCLAW_SEARXNG_COEXISTENCE.md`
+
+## Managed application resources (9.8)
+
+The desktop/web `main` creates a `ManagedOllama` child and derives private provider
+settings before constructing the application. `ResourceController.bind` connects
+all local chat/dictation/correction consumers; `WebContext` retains that policy
+for multimedia clones and exposes the resource inventory. Ordinary provider
+construction does not launch engines. A private port that belongs to another
+process is unavailable, not an engine to be claimed.
+
+`gpu_budget.py` separates observed occupancy from configured admission estimates.
+`resource_scheduling.py` serializes native work by priority and deadline. STT
+releases its turn between source segments; local multimedia LLM work shares the
+application gate with dialogue. The model files remain in their existing store;
+the lifetime of a Panda-owned process is independent from shared files or another
+Ollama daemon. Resource shutdown reports its own processes, never all GPU users.

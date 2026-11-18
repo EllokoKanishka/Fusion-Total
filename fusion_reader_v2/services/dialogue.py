@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fusion_reader_v2.veils import veil_catalog as build_veil_catalog
+
 import threading
 import time
 from collections.abc import Callable
@@ -57,10 +59,11 @@ class DialogueService:
 
     def remember_chat_turn(self, user_message: str, assistant_answer: str) -> None:
         with self.chat_lock:
+            stamp = time.time()
             if user_message:
-                self.chat_history.append({"role": "user", "content": user_message})
+                self.chat_history.append({"role": "user", "content": user_message, "ts": stamp})
             if assistant_answer:
-                self.chat_history.append({"role": "assistant", "content": assistant_answer})
+                self.chat_history.append({"role": "assistant", "content": assistant_answer, "ts": stamp})
             del self.chat_history[:-20]
 
     def clear_history(self) -> dict:
@@ -170,35 +173,7 @@ class DialogueService:
 
     @staticmethod
     def veil_catalog() -> list[dict]:
-        return [
-            {"mode": "lucy", "label": "Lucy", "description": ""},
-            {"mode": "nocturna", "label": "Nocturna", "description": "Conversación de madrugada, cercana y lenta."},
-            {"mode": "critica", "label": "Crítica", "description": "Busca la tensión real y el punto débil."},
-            {"mode": "sombra", "label": "Sombra", "description": "Busca el deseo, miedo o autoengaño subyacente."},
-            {
-                "mode": "confesional",
-                "label": "Confesional",
-                "description": "Habla desde Lucy cuando aclare la conversación.",
-            },
-            {"mode": "taller", "label": "Taller", "description": "Piensa con el lector para fabricar una idea mejor."},
-            {"mode": "debate", "label": "Debate", "description": "Discute y objeta sin complacencia."},
-            {"mode": "evocadora", "label": "Evocadora", "description": "Usa una imagen precisa para pensar mejor."},
-            {"mode": "directa", "label": "Directa", "description": "Responde de forma frontal y sin rodeos."},
-            {"mode": "incomoda", "label": "Incómoda", "description": "Muestra lo que la idea no quiere aceptar."},
-            {"mode": "rigurosa", "label": "Rigurosa", "description": "Ordena el argumento y marca lo no sostenido."},
-            {"mode": "intima", "label": "Íntima", "description": "Piensa al lado del lector con cercanía."},
-            {
-                "mode": "bar_filosofico",
-                "label": "Bar filosófico",
-                "description": "Discusión lúcida, cercana y con filo.",
-            },
-            {"mode": "desarme", "label": "Desarme", "description": "Desarma qué afirma, oculta y no sostiene."},
-            {
-                "mode": "pregunta_viva",
-                "label": "Pregunta viva",
-                "description": "Deja la idea abierta con una pregunta.",
-            },
-        ]
+        return build_veil_catalog()
 
     def veil_status(self) -> dict:
         mode = str(self.veil or "lucy").strip().lower()

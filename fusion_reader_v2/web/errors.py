@@ -27,7 +27,11 @@ def error_response(exc: Exception, request_id: str) -> tuple[int, dict]:
         status = 404
         code = _safe_code(str(exc).strip("'"), "not_found")
         detail = "El recurso solicitado no existe."
-    elif isinstance(exc, ValueError):
+    elif isinstance(exc, RuntimeError) and str(exc) == "job_registry_full":
+        status = 503
+        code = "job_registry_full"
+        detail = "No hay capacidad para otro trabajo; reintentá cuando termine uno activo."
+    elif isinstance(exc, (ValueError, OverflowError)):
         code = _safe_code(str(exc), "invalid_request")
         status = (
             413

@@ -12,7 +12,8 @@ CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 GPU_TTS_URL="http://127.0.0.1:${GPU_TTS_PORT}"
 CPU_TTS_URL="http://127.0.0.1:${CPU_TTS_PORT}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
-STT_URL="http://127.0.0.1:${STT_PORT}/health"
+STT_BASE_URL="${FUSION_READER_STT_URL:-http://127.0.0.1:${STT_PORT}}"
+STT_URL="${STT_BASE_URL%/}/health"
 RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
 LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-$RUNTIME_DIR/logs}}"
 OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
@@ -33,6 +34,8 @@ if ! PYTHON_BIN="$(find_python)"; then
   exit 1
 fi
 
+export DIRECT_CHAT_ALLTALK_PORT="$CPU_TTS_PORT"
+export FUSION_READER_TTS_OWNER_FILE="$OWNER_FILE"
 export FUSION_READER_RUNTIME_ROOT="$RUNTIME_DIR"
 export FUSION_READER_RUNTIME_DIR="$RUNTIME_DIR"
 export FUSION_READER_LOG_ROOT="$LOG_DIR"
@@ -75,7 +78,7 @@ current_commit() {
 source "$ROOT/scripts/fusion_reader_gpu_guard.sh"
 fusion_reader_refuse_when_gpu_conflict "Fusion Reader v2 academic/chat server"
 if fusion_reader_apply_game_coexistence_mode; then
-  log_msg "Modo convivencia GPU activo: chat sin thinking, num_ctx=${FUSION_READER_CHAT_NUM_CTX}, num_predict=${FUSION_READER_CHAT_NUM_PREDICT}"
+  log_msg "Presupuesto GPU ajustado: prefetch mínimo; modo de análisis, contexto y respuesta se conservan."
 fi
 
 export FUSION_READER_CHAT_MODEL="${FUSION_READER_CHAT_MODEL:-qwen3:14b-q8_0}"
@@ -158,7 +161,15 @@ ensure_fusion_gpu_stt() {
     return 0
   fi
 
-  log_msg "Fusion STT GPU no está activo; iniciando Whisper large-v3-turbo en CUDA/float16."
+  case "${STT_BASE_URL%/}" in
+    "http://127.0.0.1:${STT_PORT}"|"http://localhost:${STT_PORT}") ;;
+    *) log_msg "STT externo configurado sin respuesta; no se inicia un motor local distinto."; return 1 ;;
+  esac
+  if [[ "${FUSION_READER_GAME_COEXISTENCE_ACTIVE:-0}" == "1" ]]; then
+    export FUSION_READER_STT_DEVICE="${FUSION_READER_STT_DEVICE:-cpu}"
+    export FUSION_READER_STT_COMPUTE_TYPE="${FUSION_READER_STT_COMPUTE_TYPE:-int8}"
+  fi
+  log_msg "Iniciando STT opcional; dispositivo ${FUSION_READER_STT_DEVICE:-cuda}."
   nohup "$ROOT/scripts/start_fusion_reader_v2_stt.sh" >>"$STT_LOG_FILE" 2>&1 &
   STT_CHILD_PID="$!"
   if wait_until_stt_ready "$STT_CHILD_PID"; then
@@ -244,14 +255,20 @@ ensure_fusion_tts_url() {
   return 1
 }
 
-ensure_fusion_tts_url || true
+if [[ "${FUSION_READER_START_ENGINES:-1}" != "0" ]]; then
+  ensure_fusion_tts_url || true
+else
+  export FUSION_READER_ALLTALK_URL="${FUSION_READER_ALLTALK_URL:-$GPU_TTS_URL}"
+fi
 
 # The default STT provider is the dedicated Faster-Whisper server.  Start it
 # from the same entry point that fusionctl uses so the UI never falls back to
 # the CLI merely because the desktop launcher was bypassed.
-if ! ensure_fusion_gpu_stt; then
-  exit 1
-fi
+case "${FUSION_READER_START_ENGINES:-1}:${FUSION_READER_STT_PROVIDER:-auto}" in
+  0:*|1:none|1:cli) log_msg "STT server omitido por configuración." ;;
+  1:auto|1:server|1:faster_whisper|1:faster-whisper) ensure_fusion_gpu_stt || log_msg "WARN: STT no disponible; lectura y navegación siguen habilitadas." ;;
+  *) log_msg "ERROR: proveedor STT inválido"; exit 1 ;;
+esac
 
 current_commit="$(current_commit)"
 existing_pid="$(listening_pid || true)"
@@ -313,6 +330,11 @@ log_msg "Voice env: ${FUSION_READER_VOICE:-female_03.wav}"
 log_msg "Profile env: ${FUSION_READER_PROFILE:-default}"
 log_msg "PID file: ${PID_FILE}"
 log_msg "Persistent log: ${LOG_FILE}"
+
+if [[ "${FUSION_READER_FOREGROUND:-0}" == "1" ]]; then
+  printf '%s\n' "$$" >"$PID_FILE"
+  exec "$PYTHON_BIN" -u -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1
+fi
 
 nohup "$PYTHON_BIN" -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 &
 server_pid=$!

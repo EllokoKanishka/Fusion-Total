@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from email.message import Message
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +17,9 @@ from fusion_reader_v2.web.downloads import (
 
 
 class AudioResponder(Protocol):
+    @property
+    def headers(self) -> Message: ...
+
     @property
     def app(self) -> FusionReaderV2: ...
 
@@ -56,7 +60,7 @@ def handle_audio_get(responder: AudioResponder, path: str, raw_path: str) -> boo
         return True
     if path.startswith("/api/audio-export/status/"):
         status = responder.app.audio_export_status(Path(path).name)
-        responder._json(200 if status.get("ok") else 404, status)
+        responder._json(404 if status.get("error") == "audio_export_job_not_found" else 200, status)
         return True
     if path.startswith("/api/audio-export/download/"):
         item = responder.app.get_audio_export_download(Path(path).name)
@@ -76,7 +80,13 @@ def handle_audio_get(responder: AudioResponder, path: str, raw_path: str) -> boo
         if not audio_path:
             responder._json(404, {"ok": False, "error": "audio_not_found"})
             return True
-        responder._send(200, "audio/wav", audio_path.read_bytes())
+        stream_file(
+            responder,
+            audio_path,
+            content_type="audio/wav",
+            filename=None,
+            range_header="" if responder.headers.get("If-Range") else responder.headers.get("Range", ""),
+        )
         return True
     return False
 

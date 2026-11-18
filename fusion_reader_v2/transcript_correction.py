@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 import os
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from contextlib import nullcontext
 from difflib import SequenceMatcher
 
 from .media import clean_text
@@ -89,6 +92,71 @@ def validate_conservative_correction(original: str, candidate: str) -> tuple[boo
     threshold = 0.72 if len(source_words) <= 8 else 0.82
     if similarity < threshold:
         return False, "rewrite_risk"
+
+    def words(value: str) -> list[str]:
+        return re.findall(r"[^\W\d_]+", unicodedata.normalize("NFC", value).casefold())
+
+    negations = {
+        "no",
+        "nunca",
+        "jamás",
+        "jamas",
+        "ni",
+        "nadie",
+        "nada",
+        "ningún",
+        "ningun",
+        "ninguna",
+        "ninguno",
+        "ningunas",
+        "ningunos",
+        "sin",
+        "tampoco",
+    }
+
+    def negative_context(value: str) -> list:
+        tokens = [{"jamás": "jamas", "ningún": "ningun"}.get(word, word) for word in words(value)]
+        return [
+            (index, token, tokens[max(0, index - 1) : index + 2])
+            for index, token in enumerate(tokens)
+            if token in negations
+        ]
+
+    if negative_context(source) != negative_context(revised):
+        return False, "protected_negation_changed"
+
+    number_words = set(
+        "cero uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece catorce quince dieciséis dieciseis diecisiete dieciocho diecinueve veinte veintiuno veintiuna veintidós veintidos veintitrés veintitres veinticuatro veinticinco veintiséis veintiseis veintisiete veintiocho veintinueve treinta cuarenta cincuenta sesenta setenta ochenta noventa cien ciento doscientos trescientos cuatrocientos quinientos seiscientos setecientos ochocientos novecientos mil millón millon millones primer primero primera segundo segunda tercer tercero tercera cuarto cuarta quinto quinta sexto sexta séptimo septimo séptima septima octavo octava noveno novena décimo decimo décima decima".split()
+    )
+
+    def numbers(value: str) -> list:
+        normalized = unicodedata.normalize("NFKC", value)
+        tokens = [
+            (match.start(), "digits", match.group()) for match in re.finditer(r"[+-]?\d+(?:[.,:/-]\d+)*%?", normalized)
+        ]
+        tokens.extend(
+            (match.start(), "word", match.group().casefold())
+            for match in re.finditer(r"[^\W\d_]+", normalized)
+            if match.group().casefold() in number_words
+        )
+        tokens.extend((match.start(), "roman", match.group()) for match in re.finditer(r"\b[IVXLCDM]+\b", normalized))
+        return [(kind, token) for _position, kind, token in sorted(tokens)]
+
+    if numbers(source) != numbers(revised):
+        return False, "protected_numbers_changed"
+
+    quote_pattern = re.compile(r"""«([^»]*)»|“([^”]*)”|"([^"]*)"|(?<!\w)‘([^’]*)’(?!\w)|(?<!\w)'([^']*)'(?!\w)""")
+
+    def quotations(value: str) -> list[str]:
+        return [
+            unicodedata.normalize("NFC", next(part for part in match.groups() if part is not None))
+            for match in quote_pattern.finditer(value)
+        ]
+
+    if quotations(source) != quotations(revised):
+        return False, "protected_quote_changed"
+    if any(re.search(r"""[«»“”"]|(?<!\w)['‘’](?!\w)""", quote_pattern.sub("", value)) for value in (source, revised)):
+        return False, "protected_quote_changed"
     return True, "accepted"
 
 
@@ -103,6 +171,7 @@ class OllamaTranscriptCorrector:
         timeout_seconds: float | None = None,
         keep_alive: str = "",
     ) -> None:
+        self.used_models: set[str] = set()
         self.base_url = (base_url or os.environ.get("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/")
         self.model = (model or os.environ.get("FUSION_READER_ASR_CORRECTOR_MODEL") or "qwen3:14b-q8_0").strip()
         self.timeout_seconds = float(
@@ -113,6 +182,9 @@ class OllamaTranscriptCorrector:
         self.keep_alive = keep_alive or os.environ.get("FUSION_READER_ASR_CORRECTOR_KEEP_ALIVE") or "1m"
 
     def health(self) -> dict:
+        guard = getattr(self, "availability_guard", None)
+        if guard is not None and not guard():
+            return {"ok": False, "model": self.model, "detail": "dedicated_ollama_unavailable"}
         request = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
         try:
             with urllib.request.urlopen(request, timeout=min(2.0, self.timeout_seconds)) as response:
@@ -151,6 +223,10 @@ class OllamaTranscriptCorrector:
         if not original:
             return CorrectionOutcome(original, False, False, detail="empty_source", model=self.model)
 
+        guard = getattr(self, "availability_guard", None)
+        if guard is not None and not guard():
+            return CorrectionOutcome(original, False, False, detail="dedicated_ollama_unavailable", model=self.model)
+        self.used_models.add(self.model)
         user_data = json.dumps(
             {
                 "context": clean_text(context),
@@ -182,8 +258,10 @@ class OllamaTranscriptCorrector:
         )
         started = time.perf_counter()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                data = json.loads(response.read().decode("utf-8"))
+            scope = getattr(self, "resource_scope", None)
+            with scope(self.model, self.timeout_seconds) if scope is not None else nullcontext():
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    data = json.loads(response.read().decode("utf-8"))
             message = data.get("message") if isinstance(data, dict) else None
             candidate = clean_text(str((message or {}).get("content") or ""))
         except urllib.error.HTTPError as exc:

@@ -23,7 +23,7 @@ class TestModelRouterScript(unittest.TestCase):
             text=True,
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertIn("MODEL_ROUTER_OK", proc.stdout)
+        self.assertIn("MODEL_ROUTER_DISABLED_USE_FUSION_DIALOGUE", proc.stdout)
 
     def test_ask_with_fallback_picks_installed_model(self) -> None:
         with tempfile.TemporaryDirectory(prefix="router_test_") as td:
@@ -96,13 +96,9 @@ exit 1
             )
 
             combined = f"{proc.stdout}\n{proc.stderr}".strip()
-            self.assertEqual(proc.returncode, 0, msg=combined)
-            self.assertIn("ANSWER_OK", combined)
-
-            log = log_path.read_text(encoding="utf-8")
-            self.assertIn("models set openai-codex/gpt-5.1-codex-mini", log)
-            self.assertIn("models set ollama/mistral-uncensored:latest", log)
-            self.assertNotIn("models set ollama/gpt-oss:20b", log)
+            self.assertEqual(proc.returncode, 2, msg=combined)
+        self.assertIn("deshabilitado", combined)
+        self.assertNotIn("models set", (REPO_ROOT / "scripts/model_router.sh").read_text())
 
 
 if __name__ == "__main__":

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlparse
+
+from .network import is_local_endpoint_host
 
 
 class ConfigurationError(ValueError):
@@ -23,6 +27,19 @@ def environment_has(name: str) -> bool:
 
 def environment_copy() -> dict[str, str]:
     return dict(os.environ)
+
+
+def resolve_openclaw_command(env: Mapping[str, str] | None = None, *, home: Path | None = None) -> str:
+    """Honor an explicit override; prefer the maintained install over the legacy copy."""
+    values = os.environ if env is None else env
+    configured = str(values.get("FUSION_READER_OPENCLAW_BIN") or "").strip()
+    if configured:
+        return configured
+    user_home = home or Path(values.get("HOME") or Path.home())
+    maintained = user_home / ".npm-global" / "bin" / "openclaw"
+    if maintained.is_file():
+        return str(maintained)
+    return shutil.which("openclaw", path=values.get("PATH", "")) or str(user_home / ".openclaw" / "bin" / "openclaw")
 
 
 def _truthy(value: str | None, *, default: bool = False) -> bool:
@@ -48,8 +65,8 @@ def _floating(env: Mapping[str, str], name: str, default: float, *, minimum: flo
         value = default if raw in {None, ""} else float(str(raw))
     except ValueError as exc:
         raise ConfigurationError(f"{name} must be numeric") from exc
-    if value < minimum:
-        raise ConfigurationError(f"{name} must be at least {minimum}")
+    if not math.isfinite(value) or value < minimum:
+        raise ConfigurationError(f"{name} must be finite and at least {minimum}")
     return value
 
 
@@ -113,6 +130,13 @@ class PortSettings:
     searxng: int = 8080
 
     def validate(self) -> None:
+        for name, value in vars(self).items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not (0 if name == "api" else 1) <= value <= 65535
+            ):
+                raise ConfigurationError(f"invalid port: {name}")
         if self.tts_gpu in {7852, 7854}:
             raise ConfigurationError(f"Fusion cannot use reserved TTS port {self.tts_gpu}")
         if self.tts_gpu != 7853:
@@ -158,13 +182,14 @@ class ProviderSettings:
     openclaw_timeout_seconds: float
     openclaw_retries: int
     openclaw_enabled: bool
+    stt_server_model: str = ""
 
     def validate(self, ports: PortSettings) -> None:
         parsed = urlparse(self.tts_url)
-        if parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
-            port = parsed.port
-            if port in {7852, 7854}:
-                raise ConfigurationError(f"Fusion cannot use reserved TTS URL port {port}")
+        port = parsed.port
+        if port in {7852, 7854}:
+            raise ConfigurationError(f"Fusion cannot use reserved TTS URL port {port}")
+        if is_local_endpoint_host(parsed.hostname):
             if port not in {ports.tts_gpu, ports.tts_cpu}:
                 raise ConfigurationError("Fusion TTS URL must target port 7853 or fallback 7851")
         if self.research_provider not in {"auto", "searxng", "openclaw", "none"}:
@@ -216,18 +241,50 @@ class SecuritySettings:
 
 
 @dataclass(frozen=True)
+class ResourceSettings:
+    ollama_mode: str = "dedicated"
+    private_ollama_port: int = 11435
+    models_dir: Path = Path("/usr/share/ollama/.ollama/models")
+    reserve_mib: int = 4096
+    llm_working_set_mib: int = 18000
+    small_llm_working_set_mib: int = 6000
+
+    def validate(self):
+        if self.ollama_mode not in {"dedicated", "shared"}:
+            raise ConfigurationError("invalid_ollama_ownership_mode")
+        if not 1 <= self.private_ollama_port <= 65535 or self.private_ollama_port in {
+            11434,
+            7851,
+            7852,
+            7853,
+            7854,
+            8010,
+            8021,
+        }:
+            raise ConfigurationError("invalid_private_ollama_port")
+        if min(self.reserve_mib, self.llm_working_set_mib, self.small_llm_working_set_mib) < 0:
+            raise ConfigurationError("invalid_gpu_budget")
+
+
+@dataclass(frozen=True)
 class Settings:
     paths: PathSettings
     ports: PortSettings
     providers: ProviderSettings
     limits: LimitSettings
     security: SecuritySettings
+    resources: ResourceSettings = field(default_factory=ResourceSettings)
 
     def validate(self) -> "Settings":
+        for section in (self.providers, self.limits):
+            for name, value in vars(section).items():
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ConfigurationError(f"{name} must be finite")
         self.paths.validate()
         self.ports.validate()
         self.providers.validate(self.ports)
         self.security.validate()
+        self.resources.validate()
         return self
 
 
@@ -239,12 +296,16 @@ def create_settings(
     env = os.environ if environ is None else environ
     repository = _path(repository_root or Path(__file__).resolve().parents[1])
     home = _path(env.get("HOME") or Path.home())
+    installed = repository_root is None and not (repository / "pyproject.toml").is_file()
+    data_root = _path(env.get("XDG_DATA_HOME") or home / ".local/share") / "panda-fusion"
     runtime = _path(
         env.get("FUSION_READER_RUNTIME_ROOT")
         or env.get("FUSION_READER_RUNTIME_DIR")
-        or repository / "runtime" / "fusion_reader_v2"
+        or (data_root / "runtime" if installed else repository / "runtime" / "fusion_reader_v2")
     )
-    library = _path(env.get("FUSION_READER_LIBRARY_ROOT") or repository / "library")
+    library = _path(
+        env.get("FUSION_READER_LIBRARY_ROOT") or (data_root / "library" if installed else repository / "library")
+    )
     downloads = _path(env.get("FUSION_READER_DOWNLOADS_ROOT") or _default_downloads(home))
     cache = _path(env.get("FUSION_READER_CACHE_ROOT") or runtime / "audio_cache")
     logs = _path(env.get("FUSION_READER_LOG_ROOT") or env.get("FUSION_READER_LOG_DIR") or runtime / "logs")
@@ -258,6 +319,21 @@ def create_settings(
         searxng=8080,
     )
     settings = Settings(
+        resources=ResourceSettings(
+            ollama_mode=env.get("FUSION_READER_OLLAMA_MODE", "dedicated"),
+            private_ollama_port=_integer(env, "FUSION_READER_PRIVATE_OLLAMA_PORT", 11435, minimum=1),
+            models_dir=_path(
+                env.get("FUSION_READER_OLLAMA_MODELS_DIR")
+                or (
+                    "/usr/share/ollama/.ollama/models"
+                    if Path("/usr/share/ollama/.ollama/models").is_dir()
+                    else home / ".ollama/models"
+                )
+            ),
+            reserve_mib=_integer(env, "FUSION_READER_GPU_RESERVE_MIB", 4096),
+            llm_working_set_mib=_integer(env, "FUSION_READER_LLM_WORKING_SET_MIB", 18000),
+            small_llm_working_set_mib=_integer(env, "FUSION_READER_SMALL_LLM_WORKING_SET_MIB", 6000),
+        ),
         paths=PathSettings(
             repository=repository,
             runtime=runtime,
@@ -276,7 +352,10 @@ def create_settings(
             voice=env.get("FUSION_READER_VOICE", "female_03.wav"),
             language=env.get("FUSION_READER_LANGUAGE", "es"),
             tts_timeout_seconds=_floating(env, "FUSION_READER_TTS_TIMEOUT", 120.0, minimum=0.1),
-            stt_provider=env.get("FUSION_READER_STT_PROVIDER", "auto").strip().lower(),
+            stt_provider={"faster_whisper": "server", "faster-whisper": "server"}.get(
+                env.get("FUSION_READER_STT_PROVIDER", "auto").strip().lower(),
+                env.get("FUSION_READER_STT_PROVIDER", "auto").strip().lower(),
+            ),
             stt_url=(env.get("FUSION_READER_STT_URL") or f"http://127.0.0.1:{ports.stt}").rstrip("/"),
             stt_timeout_seconds=_floating(env, "FUSION_READER_STT_TIMEOUT", 120.0, minimum=0.1),
             stt_command=env.get("FUSION_READER_STT_COMMAND", "whisper"),
@@ -309,11 +388,12 @@ def create_settings(
             searxng_url=(env.get("FUSION_READER_SEARXNG_URL") or f"http://127.0.0.1:{ports.searxng}").rstrip("/"),
             searxng_timeout_seconds=_floating(env, "FUSION_READER_SEARXNG_TIMEOUT", 12.0, minimum=0.1),
             searxng_enabled=_truthy(env.get("FUSION_READER_SEARXNG_ENABLED"), default=True),
-            openclaw_command=env.get("FUSION_READER_OPENCLAW_BIN", str(home / ".openclaw" / "bin" / "openclaw")),
+            openclaw_command=resolve_openclaw_command(env, home=home),
             openclaw_agent=env.get("FUSION_READER_OPENCLAW_AGENT", "fusion-research"),
             openclaw_timeout_seconds=_floating(env, "FUSION_READER_OPENCLAW_TIMEOUT", 90.0, minimum=0.1),
             openclaw_retries=_integer(env, "FUSION_READER_OPENCLAW_RETRIES", 2, minimum=1),
             openclaw_enabled=_truthy(env.get("FUSION_READER_OPENCLAW_ENABLED"), default=True),
+            stt_server_model=env.get("FUSION_READER_STT_SERVER_MODEL") or env.get("FUSION_READER_STT_MODEL", ""),
         ),
         limits=LimitSettings(
             upload_max_bytes=_integer(env, "FUSION_READER_UPLOAD_MAX_BYTES", 128 * 1024 * 1024, minimum=1),

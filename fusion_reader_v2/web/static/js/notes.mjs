@@ -24,7 +24,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
     return `B${Number(note && note.chunk_number || note && note.anchor_number || 1)}`;
   }
 
-  function render(items, activeDocId = '') {
+  function render(items, activeDocId = '', warnings = []) {
     const notes = Array.isArray(items) ? items : [];
     const status = getStatus();
     const selectedDocId = activeDocId || status && status.doc_id || '';
@@ -41,6 +41,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
       const labCount = notes.filter(isLab).length;
       elements.notesInfo.textContent = `${currentCount} nota${currentCount === 1 ? '' : 's'} en este bloque y ${labCount} de laboratorio.`;
     } else elements.notesInfo.textContent = `${currentCount} nota${currentCount === 1 ? '' : 's'} en este bloque.`;
+    if (warnings.length) elements.notesInfo.textContent += ' Hay notas anteriores que necesitan revisión; sus archivos se conservaron.';
     elements.notesList.replaceChildren();
     for (const note of notes) {
       const row = documentRoot.createElement('details');
@@ -86,13 +87,13 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
     }
     if (!status.doc_id) {
       const data = await api(`/api/notes?doc_id=${encodeURIComponent(LAB_NOTES_DOC_ID)}`);
-      render(data.items || [], data.doc_id || LAB_NOTES_DOC_ID); return;
+      render(data.items || [], data.doc_id || LAB_NOTES_DOC_ID, data.warnings || []); return;
     }
     const [docData, labData] = await Promise.all([
       api(`/api/notes?doc_id=${encodeURIComponent(status.doc_id)}`),
       api(`/api/notes?doc_id=${encodeURIComponent(LAB_NOTES_DOC_ID)}`).catch(() => ({ items: [] }))
     ]);
-    render([...(docData.items || []), ...(labData.items || [])], status.doc_id);
+    render([...(docData.items || []), ...(labData.items || [])], status.doc_id, [...(docData.warnings || []), ...(labData.warnings || [])]);
   }
 
   async function save() {
@@ -104,7 +105,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
     try {
       const data = await api('/api/notes/create', { text });
       elements.noteInput.value = ''; busyControls.setNoteText('');
-      render(data.items || [], data.note && data.note.doc_id || status.doc_id);
+      render(data.items || [], data.note && data.note.doc_id || status.doc_id, data.warnings || []);
       log(`Nota guardada como ${reference(data.note || {})}.`);
     } catch (error) { log(`No pude guardar la nota: ${error.message}`); }
     finally { releaseBusy(); }
@@ -122,7 +123,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
       : prompt('Nombre corto de la nota', compactNoteLabel(note));
     if (value === null) return;
     const label = value.trim(); if (!label) { log('El nombre de la nota no puede quedar vacío.'); return; }
-    try { const data = await api('/api/notes/rename', { note_id: note.note_id, doc_id: note.doc_id, label }); render(data.items || []); log('Nombre de nota actualizado.'); }
+    try { const data = await api('/api/notes/rename', { note_id: note.note_id, doc_id: note.doc_id, label }); render(data.items || [], note.doc_id, data.warnings || []); log('Nombre de nota actualizado.'); }
     catch (error) { log(`No pude renombrar la nota: ${error.message}`); }
   }
 
@@ -131,7 +132,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
       ? await dialog.prompt({ title: 'Editar nota', value: note.text || '', acceptLabel: 'Guardar' })
       : prompt('Editar nota', note.text || ''); if (value === null) return;
     const text = value.trim(); if (!text) { log('La nota no puede quedar vacía.'); return; }
-    try { const data = await api('/api/notes/update', { note_id: note.note_id, doc_id: note.doc_id, text }); render(data.items || []); log('Nota actualizada.'); }
+    try { const data = await api('/api/notes/update', { note_id: note.note_id, doc_id: note.doc_id, text }); render(data.items || [], note.doc_id, data.warnings || []); log('Nota actualizada.'); }
     catch (error) { log(`No pude editar la nota: ${error.message}`); }
   }
 
@@ -140,7 +141,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
       ? await dialog.confirm({ title: '¿Borrar esta nota?', message: 'No se podrá recuperar.', acceptLabel: 'Sí, borrar', danger: true })
       : confirm('Borrar esta nota?');
     if (!approved) return;
-    try { const data = await api('/api/notes/delete', { note_id: note.note_id, doc_id: note.doc_id }); render(data.items || []); log('Nota borrada.'); }
+    try { const data = await api('/api/notes/delete', { note_id: note.note_id, doc_id: note.doc_id }); render(data.items || [], note.doc_id, data.warnings || []); log('Nota borrada.'); }
     catch (error) { log(`No pude borrar la nota: ${error.message}`); }
   }
 

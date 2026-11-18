@@ -4,6 +4,7 @@ import threading
 import time
 import os
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from pathlib import Path
 
 from fusion_reader_v2 import FusionReaderV2
@@ -12,6 +13,8 @@ from fusion_reader_v2.domain.jobs import JobRegistry
 from fusion_reader_v2.pdf_to_docx import JobStatus
 from fusion_reader_v2.services.media import MediaProcessingService
 from fusion_reader_v2.version import __version__
+from fusion_reader_v2.reading_timings import ReadingTimings
+from fusion_reader_v2.web.errors import APIError
 
 
 @dataclass
@@ -23,9 +26,12 @@ class WebContext:
     pdf_jobs: JobRegistry[JobStatus] = field(init=False)
     pdf_downloads: JobRegistry[dict] = field(init=False)
     media: MediaProcessingService = field(init=False)
+    reading_timings: ReadingTimings = field(init=False)
     _threads: set[threading.Thread] = field(default_factory=set, init=False)
     _threads_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _closed: bool = field(default=False, init=False)
+    _main_import_generation: int = field(default=0, init=False)
+    _next_import_generation: int = field(default=0, init=False)
     _started_monotonic: float = field(default_factory=time.monotonic, init=False)
     _dictation_model_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _dictation_model_cancel: threading.Event = field(default_factory=threading.Event, init=False)
@@ -35,6 +41,12 @@ class WebContext:
 
     def __post_init__(self) -> None:
         limits = self.settings.limits
+        self.reading_timings = ReadingTimings(
+            root=self.settings.paths.runtime / "reading_timings",
+            stt_url=self.settings.providers.stt_url,
+            spawn=self.start_thread,
+            timeout=self.settings.providers.stt_timeout_seconds,
+        )
         self.import_jobs = JobRegistry(
             max_items=limits.job_max_items,
             ttl_seconds=limits.job_ttl_seconds,
@@ -77,6 +89,10 @@ class WebContext:
             max_input_bytes=limits.media_max_bytes,
         )
 
+        if getattr(self.app, "resource_controller", None) is not None:
+            self.media.corrector = self.app._dictation_corrector
+            self.app.resource_controller.bind_stt(self.media.stt)
+
     @property
     def library_root(self) -> Path:
         return self.settings.paths.library
@@ -114,8 +130,53 @@ class WebContext:
                 raise RuntimeError("web_context_closed")
             thread = threading.Thread(target=run_owned, name=name, daemon=False)
             self._threads.add(thread)
-            thread.start()
+            try:
+                thread.start()
+            except Exception:
+                self._threads.discard(thread)
+                raise
             return thread
+
+    def prepare_import(self, role: str = "main") -> dict:
+        with self.app._document_lock, self._threads_lock:
+            if self._closed:
+                raise APIError("import_cancelled", "El lector se está cerrando.", 409)
+            if role != "reference":
+                self._next_import_generation += 1
+            return {
+                "document_generation": self.app._document_generation,
+                "request_generation": self._next_import_generation if role != "reference" else None,
+            }
+
+    def reserve_import(self, role: str = "main", token: dict | None = None) -> dict:
+        with self.app._document_lock:
+            prepared = self.prepare_import(role) if token is None else dict(token)
+            with self._threads_lock:
+                if self._closed:
+                    raise APIError("import_cancelled", "El lector se está cerrando.", 409)
+                serial = prepared.get("request_generation")
+                if serial is not None:
+                    self._main_import_generation = max(self._main_import_generation, serial)
+            return prepared
+
+    @contextmanager
+    def import_publication(self, token: dict | None = None, job_id: str = ""):
+        # Main-document changes use the same app lock. Keep the closed/cancel
+        # check, converted-file writes, load and terminal update in one section.
+        # Order: app document lock -> web thread lock -> registry lock.
+        with self.app._document_lock, self._threads_lock:
+            job = self.import_jobs.get(job_id) if job_id else None
+            if self._closed or (job_id and (job is None or job.get("cancelled"))):
+                raise APIError("import_cancelled", "La importación fue cancelada.", 409)
+            if token is not None and (
+                token["document_generation"] != self.app._document_generation
+                or (
+                    token.get("request_generation") is not None
+                    and token["request_generation"] != self._main_import_generation
+                )
+            ):
+                raise APIError("import_superseded", "Otro documento o pedido sustituyó esta importación.", 409)
+            yield
 
     def dictation_model_install_status(self) -> dict:
         with self._dictation_model_lock:
@@ -124,8 +185,16 @@ class WebContext:
     def dictation_model_warm_status(self) -> dict:
         with self._dictation_model_lock:
             status = dict(self._dictation_model_warm or {"state": "cold", "terminal": True})
-        if status.get("state") == "ready" and float(status.get("ready_until_ts") or 0) <= time.time():
-            return {"state": "cold", "terminal": True, "model": status.get("model", "")}
+        if status.get("state") == "ready":
+            assistant = self.app.dictation_assistant
+            provider = getattr(assistant, "providers", {}).get(getattr(assistant, "selected", "rules"))
+            health = dict(provider.health() or {}) if provider is not None else {}
+            if (
+                float(status.get("ready_until_ts") or 0) <= time.time()
+                or getattr(provider, "default_model", "") != status.get("model")
+                or health.get("model_resident") is not True
+            ):
+                return {"state": "cold", "terminal": True, "model": status.get("model", "")}
         return status
 
     def warm_dictation_model(self) -> dict:
@@ -156,7 +225,11 @@ class WebContext:
             }
         with self._dictation_model_warm_lock:
             current = self.dictation_model_warm_status()
-            if current.get("state") == "ready" and current.get("model") == model:
+            if (
+                current.get("state") == "ready"
+                and current.get("model") == model
+                and health.get("model_resident") is True
+            ):
                 return {"ok": True, **current}
             with self._dictation_model_lock:
                 self._dictation_model_warm = {
@@ -270,12 +343,9 @@ class WebContext:
                 )
         return self.dictation_model_install_status()
 
-    def shutdown_jobs(self, timeout: float = 10.0) -> dict:
+    def request_shutdown_jobs(self) -> dict:
         with self._threads_lock:
-            if self._closed and not self._threads:
-                return {"ok": True, "state": "closed", "alive_threads": []}
             self._closed = True
-            threads = list(self._threads)
         self._dictation_model_cancel.set()
         for pdf_job in self.pdf_jobs.snapshot().values():
             if pdf_job.state not in {"done", "cancelled", "error"}:
@@ -283,7 +353,19 @@ class WebContext:
         for import_job in self.import_jobs.snapshot().values():
             if str(import_job.get("status") or "") not in {"done", "cancelled", "error"}:
                 import_job["cancelled"] = True
-        self.media.request_shutdown()
+        errors = []
+        for name, service in (("media", self.media), ("reading_timings", self.reading_timings)):
+            try:
+                service.request_shutdown()
+            except Exception as exc:
+                errors.append(f"{name}:{type(exc).__name__}")
+        return {"ok": not errors, "errors": errors}
+
+    def shutdown_jobs(self, timeout: float = 10.0) -> dict:
+        request = self.request_shutdown_jobs()
+        with self._threads_lock:
+            threads = list(self._threads)
+
         deadline = time.monotonic() + max(0.0, timeout)
         for thread in threads:
             remaining = deadline - time.monotonic()
@@ -295,13 +377,17 @@ class WebContext:
             if not alive:
                 self._threads.clear()
         return {
-            "ok": not alive,
-            "state": "closed" if not alive else "timeout",
+            "ok": not alive and request.get("ok", True),
+            "errors": request.get("errors", []),
+            "state": "closed" if not alive and request.get("ok", True) else "timeout",
             "alive_threads": alive,
         }
 
     def status(self) -> dict:
         status = self.app.status()
+        controller = getattr(self.app, "resource_controller", None)
+        if controller is not None:
+            status["resources"] = controller.status(self.app, self)
         services = dict(status.get("services") or {})
         degradations = [
             name
@@ -318,7 +404,7 @@ class WebContext:
                 "pid": self.runtime_info.get("pid", os.getpid()),
                 "uptime_seconds": round(time.monotonic() - self._started_monotonic, 3),
                 "state_schema": 1,
-                "cache": self.app.cache.inspect(),
+                "cache": self.app.cache.summary(),
                 "jobs": {
                     "imports": len(self.import_jobs),
                     "pdf_to_docx": len(self.pdf_jobs),

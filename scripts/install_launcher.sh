@@ -42,11 +42,7 @@ echo "Usando puerto: $PORT"
 
 # 3. Escribir configuración local al .env del repo
 echo "Escribiendo configuración persistente en .env..."
-cat << EOF > .env
-# Archivo de configuración local persistente generado por install_launcher.sh
-FUSION_READER_PYTHON=$PYTHON_BIN
-FUSION_READER_V2_PORT=$PORT
-EOF
+"$PYTHON_BIN" "$ROOT/scripts/update_launcher_env.py" "$ROOT/.env" "$PYTHON_BIN" "$PORT"
 
 # 4. Crear launcher en ~/.local/bin/
 LAUNCHER_PATH="${HOME}/.local/bin/fusion-reader-launcher"
@@ -79,7 +75,7 @@ After=network.target
 Type=simple
 EnvironmentFile=$SYSTEMD_ROOT/.env
 WorkingDirectory=$SYSTEMD_ROOT
-ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"
+ExecStart=/usr/bin/bash "$ROOT/scripts/start_pandafusion_systemd.sh"
 Restart=on-failure
 RestartSec=3
 KillMode=control-group

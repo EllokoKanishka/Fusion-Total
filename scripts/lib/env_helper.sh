@@ -8,6 +8,7 @@ if [[ -z "${ROOT:-}" ]]; then
 fi
 
 load_env_safe() {
+  [[ "${FUSION_READER_IGNORE_ENV_FILE:-0}" != "1" ]] || return 0
   if [[ -f "$ROOT/.env" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       if [[ "$line" =~ ^[[:space:]]*# ]] || [[ "$line" =~ ^[[:space:]]*$ ]]; then

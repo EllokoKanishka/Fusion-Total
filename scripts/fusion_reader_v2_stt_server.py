@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import math
 import json
 import os
 import re
@@ -19,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion_reader_v2.owned_subprocess import run_owned  # noqa: E402
+from fusion_reader_v2.resource_scheduling import PriorityGate  # noqa: E402
 
 
 HOST = os.environ.get("FUSION_READER_STT_HOST", "127.0.0.1")
@@ -32,9 +34,16 @@ RECOVERY_BEAM_SIZE = int(os.environ.get("FUSION_READER_STT_RECOVERY_BEAM_SIZE", 
 CONVERT_TIMEOUT_SECONDS = float(os.environ.get("FUSION_READER_STT_CONVERT_TIMEOUT_SECONDS", "1800"))
 MAX_BODY_BYTES = int(os.environ.get("FUSION_READER_STT_MAX_BODY_BYTES", str(2 * 1024 * 1024 * 1024)))
 SOCKET_TIMEOUT_SECONDS = float(os.environ.get("FUSION_READER_STT_SOCKET_TIMEOUT_SECONDS", "60"))
+MAX_REQUEST_TIMEOUT_SECONDS = float(
+    os.environ.get(
+        "FUSION_READER_STT_REQUEST_TIMEOUT_SECONDS", os.environ.get("FUSION_READER_MEDIA_TIMEOUT_SECONDS", "7200")
+    )
+)
+if not math.isfinite(MAX_REQUEST_TIMEOUT_SECONDS) or MAX_REQUEST_TIMEOUT_SECONDS <= 0:
+    raise ValueError("invalid_stt_request_timeout")
 CONTEXT_MAX_CHARS = int(os.environ.get("FUSION_READER_STT_CONTEXT_MAX_CHARS", "4096"))
 HOTWORD_MAX_ITEMS = int(os.environ.get("FUSION_READER_STT_HOTWORD_MAX_ITEMS", "128"))
-INFERENCE_LOCK = threading.Lock()
+INFERENCE_LOCK = PriorityGate()
 REQUESTS_LOCK = threading.Lock()
 ACTIVE_REQUESTS: dict[str, threading.Event] = {}
 
@@ -163,7 +172,10 @@ def convert_to_wav(source: Path, target: Path, cancel_event=None) -> tuple[bool,
         "wav",
         str(target),
     ]
-    proc = run_owned(cmd, check=False, text=True, timeout=CONVERT_TIMEOUT_SECONDS, cancel_event=cancel_event)
+    timeout = min(CONVERT_TIMEOUT_SECONDS, getattr(cancel_event, "deadline", float("inf")) - time.monotonic())
+    if timeout <= 0:
+        raise TimeoutError("deadline_exceeded")
+    proc = run_owned(cmd, check=False, text=True, timeout=timeout, cancel_event=cancel_event)
     elapsed = int((time.perf_counter() - started) * 1000)
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout or "ffmpeg_failed").strip(), elapsed
@@ -200,6 +212,16 @@ def _segment_payload(segments, cancel_event=None) -> tuple[str, list[dict]]:
                     "text": text,
                 }
             )
+            words = getattr(segment, "words", None)
+            if words:
+                payload[-1]["words"] = [
+                    {
+                        "word": str(word.word),
+                        "start": round(float(word.start), 3),
+                        "end": round(float(word.end), 3),
+                    }
+                    for word in words
+                ]
     return " ".join(parts).strip(), payload
 
 
@@ -211,6 +233,7 @@ def transcribe_wav(
     long_form: bool = False,
     initial_prompt: str = "",
     hotwords: str = "",
+    word_timestamps: bool = False,
 ) -> tuple[str, int, dict]:
     started = time.perf_counter()
     attempts: list[dict] = []
@@ -228,12 +251,9 @@ def transcribe_wav(
         attempt_started = time.perf_counter()
         requested_language = str(language or "").strip().lower()
         selected_language = None if requested_language in {"", "auto", "detect"} else requested_language
-        while not INFERENCE_LOCK.acquire(timeout=0.2):
-            if cancel_event is not None and cancel_event.is_set():
-                raise RuntimeError("cancelled")
-        try:
-            if cancel_event is not None and cancel_event.is_set():
-                raise RuntimeError("cancelled")
+        priority = 2 if long_form else (1 if word_timestamps else 0)
+        with INFERENCE_LOCK.slot(priority, cancel_event):
+            timestamp_options = {"word_timestamps": True} if word_timestamps else {}
             segments, info = MODEL.transcribe(
                 str(path),
                 language=selected_language,
@@ -241,10 +261,11 @@ def transcribe_wav(
                 vad_filter=vad_filter,
                 condition_on_previous_text=bool(long_form),
                 **_context_options(initial_prompt, hotwords),
+                **timestamp_options,
             )
-            text, segment_items = _segment_payload(segments, cancel_event)
-        finally:
-            INFERENCE_LOCK.release()
+        text, segment_items = _segment_payload(
+            INFERENCE_LOCK.iterate(segments, priority=priority, cancel_event=cancel_event), cancel_event
+        )
         attempts.append(
             {
                 "label": label,
@@ -293,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
                         "native_hotwords": bool(TRANSCRIBE_PARAMETERS and "hotwords" in TRANSCRIBE_PARAMETERS),
                         "per_request": True,
                     },
+                    "word_timestamps": bool(TRANSCRIBE_PARAMETERS and "word_timestamps" in TRANSCRIBE_PARAMETERS),
                 },
             )
             return
@@ -326,11 +348,22 @@ class Handler(BaseHTTPRequestHandler):
         long_form = str((params.get("long_form") or ["0"])[0]).lower() in {"1", "true", "yes", "on"}
         initial_prompt = _bounded_text(str((params.get("initial_prompt") or [""])[0]))
         request_hotwords = _normalize_hotwords(str((params.get("hotwords") or [""])[0]))
+        word_timestamps = str((params.get("word_timestamps") or ["0"])[0]) == "1"
         cancel_event = threading.Event()
+        default_timeout = MAX_REQUEST_TIMEOUT_SECONDS if long_form else min(120.0, MAX_REQUEST_TIMEOUT_SECONDS)
+        try:
+            requested_timeout = float((params.get("timeout_seconds") or [str(default_timeout)])[0])
+        except (TypeError, ValueError):
+            send_json(self, 400, {"ok": False, "error": "invalid_timeout"})
+            return
+        if not 0 < requested_timeout <= MAX_REQUEST_TIMEOUT_SECONDS:
+            send_json(self, 400, {"ok": False, "error": "invalid_timeout"})
+            return
+        cancel_event.deadline = time.monotonic() + requested_timeout
         if request_id:
             with REQUESTS_LOCK:
                 ACTIVE_REQUESTS[request_id] = cancel_event
-        self.connection.settimeout(SOCKET_TIMEOUT_SECONDS)
+        self.connection.settimeout(min(SOCKET_TIMEOUT_SECONDS, requested_timeout))
         with tempfile.TemporaryDirectory(prefix="fusion_reader_v2_stt_server_") as tmp:
             root = Path(tmp)
             source = root / f"input{suffix_for_mime(mime)}"
@@ -341,7 +374,11 @@ class Handler(BaseHTTPRequestHandler):
                     while remaining > 0:
                         if cancel_event.is_set():
                             raise RuntimeError("cancelled")
-                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        wait = cancel_event.deadline - time.monotonic()
+                        if wait <= 0:
+                            raise TimeoutError("deadline_exceeded")
+                        self.connection.settimeout(min(SOCKET_TIMEOUT_SECONDS, wait))
+                        chunk = self.rfile.read1(min(65536, remaining))
                         if not chunk:
                             raise RuntimeError("incomplete_audio")
                         handle.write(chunk)
@@ -357,8 +394,16 @@ class Handler(BaseHTTPRequestHandler):
                 if request_id:
                     with REQUESTS_LOCK:
                         ACTIVE_REQUESTS.pop(request_id, None)
-                error = "cancelled" if cancel_event.is_set() or str(exc) == "cancelled" else str(exc)
-                send_json(self, 499 if error == "cancelled" else 400, {"ok": False, "error": error})
+                error = (
+                    "deadline_exceeded"
+                    if time.monotonic() >= cancel_event.deadline
+                    else ("cancelled" if cancel_event.is_set() or str(exc) == "cancelled" else str(exc))
+                )
+                send_json(
+                    self,
+                    504 if error == "deadline_exceeded" else (499 if error == "cancelled" else 400),
+                    {"ok": False, "error": error},
+                )
                 return
             if not ok:
                 if request_id:
@@ -384,12 +429,17 @@ class Handler(BaseHTTPRequestHandler):
                     long_form=long_form,
                     initial_prompt=initial_prompt,
                     hotwords=request_hotwords,
+                    word_timestamps=word_timestamps,
                 )
             except Exception as exc:
-                error = "cancelled" if cancel_event.is_set() or str(exc) == "cancelled" else "transcribe_failed"
+                error = (
+                    "deadline_exceeded"
+                    if time.monotonic() >= cancel_event.deadline
+                    else ("cancelled" if cancel_event.is_set() or str(exc) == "cancelled" else "transcribe_failed")
+                )
                 send_json(
                     self,
-                    499 if error == "cancelled" else 500,
+                    504 if error == "deadline_exceeded" else (499 if error == "cancelled" else 500),
                     {"ok": False, "error": error, "detail": str(exc)},
                 )
                 return

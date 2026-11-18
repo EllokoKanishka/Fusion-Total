@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
+import math
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from collections import deque
 from pathlib import Path
 from typing import List
 
-from .services.persistence import AtomicJSONStore
+from .services.persistence import AtomicJSONStore, PersistenceWarning
 
 
 NOTE_LABEL_STOPWORDS = {
@@ -148,6 +152,23 @@ class ReaderNotesStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._warnings: deque[tuple[str, PersistenceWarning]] = deque(maxlen=64)
+        self._blocked: set[Path] = set()
+        self._legacy_review: set[str] = set()
+
+    @property
+    def warnings(self) -> tuple[PersistenceWarning, ...]:
+        with self._lock:
+            return tuple(warning for _doc_id, warning in self._warnings)
+
+    def warning_codes(self, doc_id: str) -> list[str]:
+        with self._lock:
+            return list(dict.fromkeys(warning.code for owner, warning in self._warnings if owner == str(doc_id or "")))
+
+    def _warn(self, doc_id: str, code: str, path: Path) -> None:
+        item = (str(doc_id or ""), PersistenceWarning(code, "Notes preserved for review", str(path)))
+        if item not in self._warnings:
+            self._warnings.append(item)
 
     def list(self, doc_id: str, chunk_index: int | None = None) -> list[dict]:
         with self._lock:
@@ -250,25 +271,96 @@ class ReaderNotesStore:
         return {"ok": True, "note_id": note_id, "deleted": True}
 
     def _path(self, doc_id: str) -> Path:
-        return self.root / f"{safe_doc_id(doc_id)}.json"
+        digest = hashlib.sha256(str(doc_id or "").encode("utf-8")).hexdigest()
+        return self.root / "by-id" / f"{digest}.json"
 
     def _store(self, doc_id: str) -> AtomicJSONStore:
         return AtomicJSONStore(self._path(doc_id), schema_version=1, max_bytes=8 * 1024 * 1024)
 
     def _read_notes(self, doc_id: str) -> List[ReaderNote]:
-        def normalize_legacy(raw: object) -> dict:
-            if isinstance(raw, list):
-                return {"doc_id": str(doc_id or ""), "notes": raw}
-            if isinstance(raw, dict):
-                return raw
-            raise ValueError("notes state must be an object or legacy list")
-
-        raw = self._store(doc_id).read(legacy_transform=normalize_legacy)
-        items = raw.get("notes", [])
-        if not isinstance(items, list):
+        selected = str(doc_id or "")
+        canonical = self._path(selected)
+        legacy = self.root / f"{safe_doc_id(selected)}.json"
+        path = canonical if canonical.exists() else legacy
+        is_legacy = path != canonical
+        if not path.exists():
             return []
-        return [ReaderNote.from_dict(item) for item in items if isinstance(item, dict)]
+        self._blocked.discard(canonical)
+
+        def preserve(code: str) -> None:
+            self._warn(selected, code, path)
+            if is_legacy:
+                self._legacy_review.add(selected)
+            else:
+                self._blocked.add(canonical)
+
+        try:
+            if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
+                raise ValueError("notes source is not a bounded regular file")
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            preserve("notes_state_requires_review")
+            return []
+        if isinstance(raw, list) and is_legacy:
+            owner = None
+            items = raw
+        elif isinstance(raw, dict) and raw.get("schema_version", 0) in (0, 1):
+            owner = raw.get("doc_id")
+            items = raw.get("notes", [])
+            if raw.get("legacy_review_required"):
+                self._legacy_review.add(selected)
+                self._warn(selected, "legacy_notes_require_review", legacy)
+        else:
+            preserve("notes_state_requires_review")
+            return []
+        if not is_legacy and owner != selected:
+            preserve("notes_identity_mismatch")
+            return []
+        if not isinstance(items, list):
+            preserve("notes_state_requires_review")
+            return []
+        notes = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                preserve("notes_state_requires_review")
+                continue
+            declared_owner = item.get("doc_id") or owner
+            if not isinstance(declared_owner, str) or not declared_owner:
+                preserve("legacy_notes_require_review")
+                continue
+            if declared_owner != selected:
+                if not is_legacy:
+                    preserve("notes_identity_mismatch")
+                continue
+            try:
+                for key in ("note_id", "doc_id", "title", "source_kind", "label", "text", "quote"):
+                    if item.get(key) is not None and not isinstance(item[key], str):
+                        raise ValueError("note text fields must be strings")
+                for key in ("chunk_index", "chunk_number", "anchor_number", "created_ts", "updated_ts"):
+                    value = item.get(key)
+                    if value is not None:
+                        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                            raise ValueError("note numeric fields must be numbers")
+                        if not math.isfinite(float(value)):
+                            raise ValueError("note numeric fields must be finite")
+                data = {**item, "doc_id": selected}
+                if not data.get("note_id"):
+                    data["note_id"] = uuid.uuid5(
+                        uuid.NAMESPACE_URL, selected + ":" + str(index) + ":" + json.dumps(item, sort_keys=True)
+                    ).hex
+                note = ReaderNote.from_dict(data)
+                if not math.isfinite(note.created_ts) or not math.isfinite(note.updated_ts):
+                    raise ValueError("note timestamps must be finite")
+            except (TypeError, ValueError, OverflowError):
+                preserve("notes_state_requires_review")
+                continue
+            notes.append(note)
+        return notes
 
     def _write_notes(self, doc_id: str, notes: List[ReaderNote]) -> None:
-        payload = {"doc_id": str(doc_id or ""), "notes": [note.to_dict() for note in notes]}
+        if self._path(doc_id) in self._blocked:
+            raise ValueError("notes_state_requires_review")
+        payload: dict = {"doc_id": str(doc_id or ""), "notes": [note.to_dict() for note in notes]}
+        if str(doc_id or "") in self._legacy_review:
+            payload["legacy_review_required"] = True
         self._store(doc_id).write(payload)

@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -43,7 +44,8 @@ class AtomicJSONStore:
         self.max_bytes = int(max_bytes)
         self.migrations = dict(migrations or {})
         self._lock = threading.RLock()
-        self._warnings: list[PersistenceWarning] = []
+        self._warnings: deque[PersistenceWarning] = deque(maxlen=64)
+        self._migration_backup_pending = False
 
     @property
     def warnings(self) -> tuple[PersistenceWarning, ...]:
@@ -55,6 +57,7 @@ class AtomicJSONStore:
         default: dict | Callable[[], dict] | None = None,
         *,
         legacy_transform: LegacyTransform | None = None,
+        validate: Callable[[dict], None] | None = None,
     ) -> dict:
         with self._lock:
             fallback = self._default_value(default)
@@ -83,9 +86,15 @@ class AtomicJSONStore:
                 self._recover("state_invalid_shape", "root JSON value must be an object")
                 return fallback
             payload = dict(loaded)
+            if validate is not None:
+                try:
+                    validate(payload)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    self._recover("state_invalid_shape", str(exc))
+                    return fallback
             try:
                 version = int(payload.get("schema_version", 0))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 self._recover("state_invalid_version", "schema_version must be an integer")
                 return fallback
             if version > self.schema_version:
@@ -98,10 +107,17 @@ class AtomicJSONStore:
                 migrated = self._migrate(payload, version)
                 if migrated is None:
                     return fallback
-                self._backup_before_migration()
+                if validate is not None:
+                    try:
+                        validate(migrated)
+                    except (TypeError, ValueError, OverflowError) as exc:
+                        self._recover("state_invalid_shape", str(exc))
+                        return fallback
+                if not self._backup_before_migration():
+                    return migrated
                 try:
                     self._write_locked(migrated)
-                except OSError as exc:
+                except (OSError, ValueError) as exc:
                     self._warn("state_migration_write_failed", str(exc))
                 payload = migrated
             return payload
@@ -113,6 +129,8 @@ class AtomicJSONStore:
             self._write_locked(payload)
 
     def _write_locked(self, payload: dict) -> None:
+        if self._migration_backup_pending and not self._backup_before_migration():
+            raise OSError("state_backup_failed")
         value = copy.deepcopy(payload)
         value["schema_version"] = self.schema_version
         encoded = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -156,13 +174,17 @@ class AtomicJSONStore:
             return None
         return current
 
-    def _backup_before_migration(self) -> None:
+    def _backup_before_migration(self) -> bool:
         stamp = self._stamp()
         target = self.path.with_name(f"{self.path.name}.backup.{stamp}")
         try:
             shutil.copy2(self.path, target)
         except OSError as exc:
+            self._migration_backup_pending = True
             self._warn("state_backup_failed", str(exc))
+            return False
+        self._migration_backup_pending = False
+        return True
 
     def _recover(self, code: str, detail: str) -> None:
         preserved = ""

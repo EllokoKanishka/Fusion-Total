@@ -137,12 +137,30 @@
           <input id="jumpInput" class="compact-input" type="number" min="1" value="1" aria-label="Bloque">
           <button id="jumpBtn" class="compact-btn">Ir</button>
           <label class="toggle compact-toggle"><input id="continuousToggle" type="checkbox"> Continuo</label>
+          <label class="reader-speed">
+            <span>Velocidad</span>
+            <input id="readerPlaybackRate" type="range" min="1" max="3" step="0.25" value="1" aria-label="Velocidad de lectura">
+            <output id="readerPlaybackRateValue" for="readerPlaybackRate">1×</output>
+          </label>
+          <label class="reader-speed">
+            <span>Resaltado</span>
+            <select id="readingHighlightColor" class="compact-select" aria-label="Color del resaltado">
+              <option value="green">Verde</option>
+              <option value="cyan">Celeste</option>
+              <option value="blue">Azul</option>
+              <option value="yellow">Amarillo</option>
+              <option value="pink">Rosa</option>
+              <option value="violet">Violeta</option>
+              <option value="off">Desactivado</option>
+            </select>
+          </label>
         </div>
         <div class="reader-player" aria-label="Controles de lectura">
           <button id="readerPlayerToggleBtn" class="compact-btn" type="button" disabled>▶ Reproducir</button>
           <input id="readerPlayerSeek" type="range" min="0" max="0" value="0" step="0.1" aria-label="Posición de lectura" disabled>
           <span id="readerPlayerTime" class="reader-player-time">0:00 / 0:00</span>
         </div>
+        <span id="readingHighlightStatus" class="reading-highlight-status" aria-live="polite"></span>
         <audio id="player" class="slim-audio"></audio>
         <div id="log" class="log">Lista para cargar.</div>
       </section>
@@ -305,6 +323,7 @@
         <button id="dictationClearBtn" class="compact-btn danger-btn" type="button">Limpiar</button>
       </div>
       <p id="dictationStats" class="dictation-stats">0 caracteres · 0 palabras · 0 hojas virtuales</p>
+      <p id="dictationSaveStatus" class="dictation-save-status" role="status" aria-live="polite"></p>
       <div class="dictation-command-row">
         <input id="dictationCommandInput" type="text" placeholder="También podés escribir una orden: reemplazá… / léeme…" aria-label="Orden de dictado escrita">
         <button id="dictationCommandBtn" class="compact-btn" type="button">Aplicar orden</button>

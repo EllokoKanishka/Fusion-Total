@@ -105,9 +105,10 @@ test('voice selectors distinguish the live provider catalog from the known fallb
   assert.match(app, /motor de voz todavía no está listo/);
 });
 
-test('media downloads validate the response before saving a browser file', () => {
+test('media downloads stream to the browser without buffering a Blob', () => {
   assert.match(media, /if \(!response\.ok\)/);
-  assert.match(media, /await response\.blob\(\)/);
+  assert.doesNotMatch(media, /await response\.blob\(\)/);
+  assert.match(media, /anchor\.href = url/);
   assert.match(media, /anchor\.download = element\.dataset\.downloadFilename/);
   assert.match(media, /No pude descargar el archivo:/);
 });

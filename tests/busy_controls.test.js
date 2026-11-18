@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 const assert = require('node:assert/strict');
-const {
-  applyControlState,
-  createBusyControlState,
-} = require('../fusion_reader_v2/web/static/busy_controls.js');
+let applyControlState, createBusyControlState;
 
 function makeElements() {
   return {
@@ -184,7 +181,8 @@ function testErrorFinallyReleasesOnlyOwnLease() {
   assertReadNavigationEnabled(els, 'sin leases quedan los controles disponibles');
 }
 
-function main() {
+async function main() {
+  ({ applyControlState, createBusyControlState } = await import('../fusion_reader_v2/web/static/js/busy.mjs'));
   testConcurrentLeasesKeepBusyUntilTheLastRelease();
   testReleaseIsIdempotent();
   testClearKeepsReadRepeatNavigationDisabledAfterRelease();
@@ -195,4 +193,4 @@ function main() {
   console.log('busy-controls: ok');
 }
 
-main();
+main().catch(error => { console.error(error); process.exitCode = 1; });

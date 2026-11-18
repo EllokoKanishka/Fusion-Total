@@ -96,6 +96,83 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(runtime.exists())
 
+    def test_promoted_reference_survives_http_server_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            first_text = "El documento A conserva su propio argumento."
+            second_text = "El documento B presenta una objeción diferente."
+            self._request(base, "/api/load", {"doc_id": "A", "title": "Original A", "text": first_text})
+            self._request(
+                base,
+                "/api/load",
+                {"doc_id": "B", "title": "Consulta B", "text": second_text, "role": "reference"},
+            )
+            code, promoted = self._request(base, "/api/reference/promote", {"doc_id": "B"})
+            self.assertEqual(code, 200)
+            self.assertEqual(promoted["doc_id"], "B")
+            self.assertEqual(promoted["text"], second_text)
+            self.assertTrue(self.doCleanups())
+
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            code, restored = self._request(base, "/api/status")
+            self.assertEqual(code, 200)
+            self.assertEqual(restored["doc_id"], "B")
+            self.assertEqual(restored["title"], "Consulta B")
+            self.assertEqual(restored["text"], second_text)
+            self.assertEqual([item["doc_id"] for item in restored["reference_documents"]], ["A"])
+            for doc_id, text in (("A", first_text), ("B", second_text)):
+                code, promoted = self._request(base, "/api/reference/promote", {"doc_id": doc_id})
+                self.assertEqual(code, 200)
+                self.assertEqual(promoted["doc_id"], doc_id)
+                self.assertEqual(promoted["text"], text)
+            self.assertTrue(self.doCleanups())
+
+    def test_colliding_note_ids_stay_isolated_through_http_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            for doc_id, text in (("libro/a", "Nota A"), ("libro_a", "Nota B")):
+                self._request(base, "/api/load", {"doc_id": doc_id, "title": doc_id, "text": "Contenido"})
+                code, note = self._request(base, "/api/notes/create", {"text": text})
+                self.assertEqual(code, 200)
+                self.assertEqual(note["note"]["doc_id"], doc_id)
+            self.assertTrue(self.doCleanups())
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            for encoded_id, text in (("libro%2Fa", "Nota A"), ("libro_a", "Nota B")):
+                code, notes = self._request(base, f"/api/notes?doc_id={encoded_id}")
+                self.assertEqual(code, 200)
+                self.assertEqual([note["text"] for note in notes["items"]], [text])
+            self.assertTrue(self.doCleanups())
+
+    def test_ambiguous_legacy_notes_warning_survives_http_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root)
+            legacy = root / "app" / "notes" / "book.json"
+            raw = b'[{"note_id":"unknown","text":"Sin identidad"}]'
+            legacy.write_bytes(raw)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            code, notes = self._request(base, "/api/notes?doc_id=book")
+            self.assertEqual(code, 200)
+            self.assertEqual(notes["items"], [])
+            self.assertIn("legacy_notes_require_review", notes["warnings"])
+            self._request(base, "/api/load", {"doc_id": "book", "title": "Book", "text": "Contenido"})
+            self._request(base, "/api/notes/create", {"text": "Identificada"})
+            self.assertTrue(self.doCleanups())
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            code, notes = self._request(base, "/api/notes?doc_id=book")
+            self.assertEqual(code, 200)
+            self.assertEqual([note["text"] for note in notes["items"]], ["Identificada"])
+            self.assertIn("legacy_notes_require_review", notes["warnings"])
+            self.assertEqual(legacy.read_bytes(), raw)
+            self.assertTrue(self.doCleanups())
+
     def test_local_path_boundary_helper_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, managed_test_app(root=Path(tmp) / "app") as app:
             root = Path(tmp)
@@ -162,6 +239,66 @@ class WebServerIntegrationTests(unittest.TestCase):
                         self.assertIn(marker, body)
                     self.assertTrue(response.headers.get("X-Request-ID"))
                     self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+
+    def test_cached_audio_supports_seeking_with_byte_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            audio = server.context.app.cache.root / "seek.wav"
+            content = bytes(range(256)) * 1024
+            audio.write_bytes(content)
+            url = f"http://127.0.0.1:{server.server_address[1]}/audio/seek.wav"
+            with urllib.request.urlopen(url, timeout=3.0) as response:
+                self.assertEqual(response.read(), content)
+                self.assertEqual(response.headers.get("Accept-Ranges"), "bytes")
+                self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+            for requested, start, end in (
+                ("bytes=70000-135000", 70000, 135000),
+                ("bytes=70000-", 70000, len(content) - 1),
+                ("bytes=-127", len(content) - 127, len(content) - 1),
+                ("bytes=250000-999999", 250000, len(content) - 1),
+            ):
+                with self.subTest(requested=requested):
+                    request = urllib.request.Request(url, headers={"Range": requested})
+                    with urllib.request.urlopen(request, timeout=3.0) as response:
+                        self.assertEqual(response.status, 206)
+                        self.assertEqual(response.read(), content[start : end + 1])
+                        self.assertEqual(response.headers.get("Content-Length"), str(end - start + 1))
+                        self.assertEqual(response.headers.get("Content-Range"), f"bytes {start}-{end}/{len(content)}")
+            for requested in ("bytes=999999-", "bytes=10-2", "bytes=-0"):
+                with self.subTest(requested=requested), self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(urllib.request.Request(url, headers={"Range": requested}), timeout=3.0)
+                self.assertEqual(error.exception.code, 416)
+                self.assertEqual(error.exception.headers.get("Content-Range"), f"bytes */{len(content)}")
+                self.assertEqual(error.exception.read(), b"")
+            request = urllib.request.Request(url, headers={"Range": "bytes=10-20"}, method="HEAD")
+            with urllib.request.urlopen(request, timeout=3.0) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers.get("Accept-Ranges"), "bytes")
+                self.assertEqual(response.headers.get("Content-Length"), str(len(content)))
+                self.assertEqual(response.read(), b"")
+
+    def test_word_timings_are_bound_to_current_text_voice_and_cached_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), synthetic_tts=True)
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            self._request(base, "/api/load", {"doc_id": "timings", "text": "La enseñanza de la filosofía."})
+            _, read = self._request(base, "/api/read", {"play": False})
+            with patch.object(
+                server.context.reading_timings, "start", return_value={"ok": True, "state": "pending"}
+            ) as start:
+                status, result = self._request(base, "/api/read/timings", {"audio_url": read["audio_url"]})
+                self.assertEqual(status, 200)
+                self.assertEqual(result["state"], "pending")
+                self.assertEqual(start.call_args.args[1], "La enseñanza de la filosofía.")
+                for url in ("https://external.example/audio.wav", "/audio/missing.wav"):
+                    with self.subTest(url=url), self.assertRaises(urllib.error.HTTPError) as error:
+                        self._request(base, "/api/read/timings", {"audio_url": url})
+                    self.assertEqual(error.exception.code, 409)
+                self._request(base, "/api/load", {"doc_id": "changed", "text": "Otro documento."})
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self._request(base, "/api/read/timings", {"audio_url": read["audio_url"]})
+                self.assertEqual(error.exception.code, 409)
+                self.assertEqual(start.call_count, 1)
 
     def test_http_server_rejects_non_loopback_security_even_if_settings_are_injected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,7 +33,7 @@ class SystemdUnitPathTests(unittest.TestCase):
         self.assertIn('SYSTEMD_ROOT="$("$PYTHON_BIN" "$ROOT/scripts/systemd_unit_path.py" "$ROOT")"', installer)
         self.assertIn("EnvironmentFile=$SYSTEMD_ROOT/.env", installer)
         self.assertIn("WorkingDirectory=$SYSTEMD_ROOT", installer)
-        self.assertIn('ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
+        self.assertIn('ExecStart=/usr/bin/bash "$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
         self.assertNotIn('EnvironmentFile="$ROOT/.env"', installer)
         self.assertNotIn('WorkingDirectory="$ROOT"', installer)
 

@@ -37,7 +37,7 @@ class OllamaProviderMatrixTests(unittest.TestCase):
         self.assertTrue(health["ok"])
         self.assertTrue(health["model_present"])
         with mock.patch.object(conversation.urllib.request, "urlopen", return_value=Response([])):
-            self.assertIsNone(provider.health()["model_present"])
+            self.assertIs(provider.health()["model_present"], False)
         with mock.patch.object(conversation.urllib.request, "urlopen", return_value=Response({"models": "bad"})):
             self.assertEqual(provider.health()["available_models"], [])
         error = urllib.error.HTTPError("http://local", 503, "down", {}, None)

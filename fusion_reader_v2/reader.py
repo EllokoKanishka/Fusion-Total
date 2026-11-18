@@ -47,7 +47,7 @@ def split_text(
 
 
 def chunk_index_for_offset(text: str, chunks: list[str], offset: int) -> int:
-    """Map a source-text cursor offset to the closest generated reading chunk."""
+    """Map a Python codepoint offset to the following/current reading chunk."""
     if not chunks:
         return 0
     source = str(text or "")
@@ -55,17 +55,52 @@ def chunk_index_for_offset(text: str, chunks: list[str], offset: int) -> int:
     if clamped <= 0:
         return 0
 
-    # Chunking normalizes line breaks and repeated whitespace. Comparing the
-    # same flattened representation keeps the browser cursor useful without
-    # mutating the original ephemeral text stored in the virtual document.
-    prefix_length = len(re.sub(r"\s+", " ", source[:clamped]).strip())
-    consumed = 0
+    normalized_chars: list[str] = []
+    positions: list[int] = []
+    index = 0
+    while index < len(source):
+        normalized_chars.append("\n" if source[index] == "\r" else source[index])
+        positions.append(index)
+        index += 2 if source[index : index + 2] == "\r\n" else 1
+    normalized = "".join(normalized_chars)
+    boundaries = [(match.start(), match.end()) for match in re.finditer(r"\n\s*\n+", normalized)]
+    starts = [0] + [end for _start, end in boundaries]
+    ends = [start for start, _end in boundaries] + [len(normalized)]
+    flattened: list[str] = []
+    source_positions: list[int] = []
+    for start, end in zip(starts, ends):
+        paragraph = normalized[start:end]
+        if is_noise_paragraph(paragraph):
+            continue
+        for word in re.finditer(r"\S+", paragraph):
+            if flattened:
+                flattened.append(" ")
+                source_positions.append(positions[start + word.start()])
+            flattened.extend(word.group())
+            source_positions.extend(positions[start + word.start() : start + word.end()])
+    view = "".join(flattened)
+    search_from = 0
     for index, chunk in enumerate(chunks):
-        chunk_length = len(re.sub(r"\s+", " ", str(chunk or "")).strip())
-        if prefix_length < consumed + chunk_length:
+        needle = re.sub(r"\s+", " ", str(chunk or "")).strip()
+        found = view.find(needle, search_from)
+        if found < 0:
+            raise ValueError("chunk_not_in_source")
+        end = found + len(needle)
+        if clamped < source_positions[end - 1] + 1:
             return index
-        consumed += chunk_length + 1
+        search_from = end
     return len(chunks) - 1
+
+
+def utf16_offset_to_index(text: str, offset: int) -> int:
+    """Convert a browser textarea offset, clamping a split surrogate pair left."""
+    remaining = max(0, int(offset or 0))
+    for index, char in enumerate(text):
+        width = 2 if ord(char) > 0xFFFF else 1
+        if remaining < width:
+            return index
+        remaining -= width
+    return len(text)
 
 
 def normalize_chunk_limits(
@@ -130,6 +165,13 @@ def split_long_sentence(sentence: str, max_chars: int | None = None) -> list[str
     chunks: list[str] = []
     current = ""
     for word in words:
+        if len(word) > max_chars:
+            if current:
+                chunks.append(current)
+            pieces = [word[start : start + max_chars] for start in range(0, len(word), max_chars)]
+            chunks.extend(pieces[:-1])
+            current = pieces[-1]
+            continue
         if current and len(current) + 1 + len(word) > max_chars:
             chunks.append(current)
             current = word

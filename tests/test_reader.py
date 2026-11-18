@@ -1,4 +1,5 @@
 import unittest
+import json
 import time
 import tempfile
 from pathlib import Path
@@ -11,6 +12,7 @@ from tests.helpers import (
     FailingTTSProvider,
     make_reading_document,
     manual_document,
+    managed_test_app,
 )
 
 
@@ -304,6 +306,59 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(status["doc_id"], "doc")
         self.assertEqual(len(status["reference_documents"]), 1)
         self.assertEqual(status["reference_documents"][0]["title"], "Consulta")
+
+    def test_promoted_reference_restores_its_content_and_source(self):
+        for reference_is_file in (False, True):
+            with self.subTest(reference_is_file=reference_is_file), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                main_path = root / "original.txt"
+                main_text = "Contenido exclusivo del documento original."
+                main_path.write_text(main_text, encoding="utf-8")
+                reference_text = "La filosofía de la consulta tiene su propio contenido."
+                reference_path = root / "consulta.txt" if reference_is_file else None
+                if reference_path is not None:
+                    reference_path.write_text(reference_text, encoding="utf-8")
+                source_path = str(reference_path) if reference_path is not None else ""
+                source_type = "file" if reference_is_file else "text"
+                app_root = root / "reader"
+
+                with managed_test_app(root=app_root) as app:
+                    app.load_text(
+                        "original",
+                        "Original",
+                        main_text,
+                        prefetch=False,
+                        source_path=str(main_path),
+                        source_type="file",
+                    )
+                    app.add_reference_text(
+                        "consulta",
+                        "Consulta",
+                        reference_text,
+                        source_path=source_path,
+                        source_type=source_type,
+                    )
+                    promoted = app.promote_reference_document("consulta", prefetch=False)
+                    self.assertTrue(promoted["ok"])
+                    saved = json.loads((app_root / "session_state.json").read_text(encoding="utf-8"))
+                    self.assertEqual(saved["doc_id"], "consulta")
+                    self.assertEqual(saved["title"], "Consulta")
+                    self.assertEqual(saved["text"], reference_text)
+                    self.assertEqual(saved.get("source_path", ""), source_path)
+                    self.assertEqual(saved["source_type"], source_type)
+
+                with managed_test_app(root=app_root) as reopened:
+                    status = reopened.status()
+                    self.assertEqual(status["doc_id"], "consulta")
+                    self.assertEqual(status["title"], "Consulta")
+                    self.assertEqual(reopened.session.document.text, reference_text)
+                    self.assertEqual(status["main_document"]["source_path"], source_path)
+                    self.assertEqual(status["main_document"]["source_type"], source_type)
+                    previous = reopened.promote_reference_document("original", prefetch=False)
+                    self.assertTrue(previous["ok"])
+                    self.assertEqual(reopened.session.document.text, main_text)
+                    self.assertEqual(previous["main_document"]["source_path"], str(main_path))
+                    self.assertEqual(previous["main_document"]["source_type"], "file")
 
     def test_clear_document_resets_state(self):
         app = test_app()

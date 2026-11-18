@@ -40,7 +40,27 @@ except ModuleNotFoundError:
 
         @staticmethod
         def ratecv(data: bytes, width: int, channels: int, inrate: int, outrate: int, state):
-            return data, state
+            if width != 2 or channels < 1 or inrate <= 0 or outrate <= 0:
+                raise ValueError("invalid_pcm_resampling_parameters")
+            samples = _AudioopCompat._samples(data, width)
+            if len(samples) % channels:
+                raise ValueError("incomplete_pcm_frame")
+            frames = [samples[index:index + channels] for index in range(0, len(samples), channels)]
+            previous, position = state if state is not None else (None, 0.0)
+            if previous is not None:
+                frames.insert(0, previous)
+            if not frames:
+                return b"", state
+            output = bytearray()
+            step = inrate / outrate
+            while position < len(frames) - 1:
+                left = int(position)
+                fraction = position - left
+                for channel in range(channels):
+                    value = round(frames[left][channel] * (1 - fraction) + frames[left + 1][channel] * fraction)
+                    output.extend(struct.pack("<h", max(-32768, min(32767, value))))
+                position += step
+            return bytes(output), (frames[-1], position - (len(frames) - 1))
 
     audioop = _AudioopCompat()
 

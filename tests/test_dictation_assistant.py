@@ -292,6 +292,7 @@ class DictationAssistantTests(unittest.TestCase):
                     "ok": self.healthy,
                     "provider": "ollama",
                     "model_present": self.healthy,
+                    "model_resident": self.healthy,
                 }
 
             def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:

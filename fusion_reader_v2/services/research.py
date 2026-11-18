@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable
 
@@ -23,6 +24,29 @@ class ResearchService:
         clean = self.normalized_key(text)
         if not clean:
             return False
+        # Only a request clause can launch a provider. Quoted examples, questions
+        # about searching and negative instructions are conversation, not actions.
+        prefix = (
+            r"(?:(?:por favor|che|bueno|bien|hola)[,.]?\s+)*"
+            r"(?:(?:necesito|quiero|quisiera|te pido|me gustaria)\s+(?:que\s+)?)?"
+            r"(?:(?:me\s+)?(?:podes|podrias|puedes|puede)\s+)?"
+        )
+        request = re.match(
+            rf"^{prefix}(busca(?:r|me|s)?|busques|investiga(?:r|s)?|investigues|trae(?:r|me)?|traigas|revisa|googlea(?:lo|la)?)\b(.*)$",
+            clean,
+        )
+        if not request:
+            return False
+        verb, target = request.groups()
+        # Normalize imperative/subjunctive/infinitive forms for the markers below.
+        if verb.startswith("bus"):
+            clean = "busca" + target
+        elif verb.startswith("invest"):
+            clean = "investiga" + target
+        elif verb.startswith("tra"):
+            clean = "trae" + target
+        else:
+            clean = verb + target
         explicit = (
             "busca en internet",
             "buscar en internet",

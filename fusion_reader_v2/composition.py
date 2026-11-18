@@ -88,6 +88,8 @@ def create_providers(settings: Settings) -> ProviderBundle:
                     default_model=settings.providers.openai_dictation_model,
                     timeout_seconds=settings.providers.openai_dictation_timeout_seconds,
                     enabled=settings.providers.openai_chat_enabled,
+                    execution_mode=settings.providers.openai_chat_execution_mode,
+                    agent_dir=str(settings.providers.openai_chat_agent_dir),
                 ),
             },
             selected=settings.providers.dictation_assistant,
@@ -143,7 +145,7 @@ def create_research_provider(settings: ProviderSettings) -> ExternalResearchBrid
         timeout_seconds=settings.openclaw_timeout_seconds,
         retry_attempts=settings.openclaw_retries,
         enabled=settings.openclaw_enabled,
-        environment={},
+        environment=None,
     )
     if settings.research_provider == "searxng":
         return searxng

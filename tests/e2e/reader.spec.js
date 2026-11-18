@@ -38,6 +38,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
     }
   });
 
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto(baseURL);
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
   await expect(page.locator('#mediaToolsTitle')).toContainText('Audio y video');
@@ -72,8 +73,9 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#dictationEditor')).toHaveValue('Primer párrafo.\n\nSegundo párrafo para la lectora.');
   await page.locator('#dictationAssistantSelect').selectOption('local');
   await expect(page.locator('#dictationAssistantInstallBtn')).toBeVisible();
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('#dictationAssistantInstallBtn').click();
+  await expect(page.locator('#pandaDialog')).toBeVisible();
+  await page.locator('#pandaDialogAccept').click();
   await expect(page.locator('#dictationAssistantStatus')).toContainText('local · se prepara al decir Lucy');
   await expect(page.locator('#dictationAssistantInstallBtn')).toBeHidden();
   await page.locator('#dictationEditor').fill('Una tarde en Buenos Aires. Lo sé.');
@@ -88,7 +90,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   const dictationSpeechBefore = requestCounts.get('/api/dictation/speak') || 0;
   await page.locator('#dictationReadBtn').click();
   await expect.poll(() => requestCounts.get('/api/dictation/speak') || 0).toBe(dictationSpeechBefore + 1);
-  await expect(page.locator('#dictationActivity')).toContainText('Lectura terminada');
+  await expect(page.locator('#log')).toContainText('Lectura terminada');
   const dictationReaderBefore = requestCounts.get('/api/quick-text') || 0;
   await page.locator('#dictationUseReaderBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Dictado sin título');
@@ -105,6 +107,12 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.locator('#quickReadStartBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Texto rápido — Texto pegado');
   await expect(page.locator('#quickTextInfo')).toContainText('temporal');
+  const titleBox = await page.locator('.title').boundingBox();
+  const readerBox = await page.locator('.reader').boundingBox();
+  expect(titleBox.width).toBeGreaterThanOrEqual(240);
+  expect(titleBox.height).toBeLessThan(100);
+  expect(readerBox.height).toBeGreaterThan(50);
+  await page.screenshot({ path: '../evidencia/browser-layout-1280.png' });
   await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(quickTextBefore + 1);
   await page.locator('#quickClearBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
@@ -141,8 +149,9 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.locator('#sendChatBtn').click();
   await expect(page.locator('#chatLog')).toContainText('Entendido.');
 
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('#clearDocBtn').click();
+  await expect(page.locator('#pandaDialog')).toBeVisible();
+  await page.locator('#pandaDialogAccept').click();
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
   await page.locator('#fileInput').setInputFiles({
     name: 'nuevo.md',

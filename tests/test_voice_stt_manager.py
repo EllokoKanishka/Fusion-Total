@@ -34,6 +34,13 @@ class _DummyWorker:
 
 class TestVoiceSttManager(unittest.TestCase):
     def setUp(self) -> None:
+        from unittest.mock import patch
+
+        health_patch = patch(
+            "app.voice.AllTalkTTSProvider.health", return_value={"ok": False, "provider": "isolated_legacy"}
+        )
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
         with direct_chat._VOICE_CHAT_DEDUPE_LOCK:
             direct_chat._VOICE_CHAT_DEDUPE_BY_SESSION = {}
         with direct_chat._VOICE_CHAT_PENDING_LOCK:

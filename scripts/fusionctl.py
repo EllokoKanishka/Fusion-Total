@@ -45,7 +45,10 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
         _json({"ok": False, "error": "start_script_missing", "path": str(script)})
         return 1
     environment = dict(os.environ)
-    environment.setdefault("FUSION_READER_PYTHON", sys.executable)
+    if getattr(_args, "no_engines", False):
+        environment["FUSION_READER_START_ENGINES"] = "0"
+    project_python = settings.paths.repository / ".venv/bin/python"
+    environment.setdefault("FUSION_READER_PYTHON", str(project_python) if project_python.is_file() else sys.executable)
     environment.update(
         {
             "FUSION_READER_RUNTIME_ROOT": str(settings.paths.runtime),
@@ -57,7 +60,54 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
             "FUSION_READER_LOG_DIR": str(settings.paths.logs),
         }
     )
-    result = run_owned([str(script)], cwd=settings.paths.repository, env=environment, timeout=240.0, check=False)
+    environment.update(
+        {
+            "FUSION_READER_V2_PORT": str(settings.ports.api),
+            "FUSION_READER_GPU_TTS_PORT": str(settings.ports.tts_gpu),
+            "FUSION_READER_CPU_TTS_PORT": str(settings.ports.tts_cpu),
+            "DIRECT_CHAT_ALLTALK_PORT": str(settings.ports.tts_cpu),
+            "FUSION_READER_STT_PORT": str(settings.ports.stt),
+            "FUSION_READER_STT_PROVIDER": settings.providers.stt_provider,
+            "FUSION_READER_STT_URL": settings.providers.stt_url,
+            "FUSION_READER_OLLAMA_URL": settings.providers.ollama_url,
+            "FUSION_READER_TTS_OWNER_FILE": str(settings.providers.tts_owner_file),
+            "FUSION_READER_OPENAI_EXECUTION_MODE": settings.providers.openai_chat_execution_mode,
+            "FUSION_READER_OPENAI_CHAT_AGENT_DIR": str(settings.providers.openai_chat_agent_dir),
+        }
+    )
+    aliases = {
+        "tts_url": "ALLTALK_URL",
+        "openclaw_command": "OPENCLAW_BIN",
+        "research_provider": "EXTERNAL_RESEARCH_PROVIDER",
+        "openai_chat_execution_mode": "OPENAI_EXECUTION_MODE",
+    }
+    for name, value in vars(settings.providers).items():
+        if name == "stt_model":
+            continue  # CLI fallback default must not override the GPU server default.
+        key = aliases.get(
+            name, name.removesuffix("_seconds").upper() if name.endswith("_timeout_seconds") else name.upper()
+        )
+        environment["FUSION_READER_" + key] = str(int(value)) if isinstance(value, bool) else str(value)
+    for name, value in vars(settings.limits).items():
+        environment["FUSION_READER_" + name.upper()] = str(value)
+    resource_keys = {"models_dir": "OLLAMA_MODELS_DIR", "reserve_mib": "GPU_RESERVE_MIB"}
+    for name, value in vars(settings.resources).items():
+        environment["FUSION_READER_" + resource_keys.get(name, name.upper())] = str(value)
+    environment["FUSION_READER_BIND_HOST"] = settings.security.bind_host
+    defaults = {
+        "TTS_GPU_START_WAIT_SECONDS": environment.get("FUSION_READER_GPU_TTS_WAIT_SECONDS", "90"),
+        "TTS_CPU_START_WAIT_SECONDS": 60,
+        "STT_GPU_START_WAIT_SECONDS": 120,
+        "STARTUP_WAIT_SECONDS": 40,
+    }
+    import math
+
+    waits = [float(environment.get("FUSION_READER_" + key, default)) for key, default in defaults.items()]
+    if any(not math.isfinite(value) or value <= 0 for value in waits):
+        raise ValueError("invalid_startup_wait")
+    result = run_owned(
+        ["bash", str(script)], cwd=settings.paths.repository, env=environment, timeout=sum(waits) + 60, check=False
+    )
     return int(result.returncode)
 
 
@@ -281,6 +331,10 @@ def build_parser() -> argparse.ArgumentParser:
     for name, handler in commands.items():
         subparser = subparsers.add_parser(name)
         subparser.set_defaults(handler=handler)
+        if name == "start":
+            subparser.add_argument(
+                "--no-engines", action="store_true", help="start only API/UI; use existing or unavailable providers"
+            )
     logs = subparsers.add_parser("logs")
     logs.add_argument("--lines", type=int, default=100)
     logs.set_defaults(handler=command_logs)

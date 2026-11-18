@@ -10,6 +10,7 @@ PORT="${FUSION_READER_V2_PORT:-8010}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
 STT_PROVIDER_RAW="${FUSION_READER_STT_PROVIDER:-auto}"
 case "${STT_PROVIDER_RAW,,}" in
+  none) STT_PROVIDER="none" ;;
   cli) STT_PROVIDER="cli" ;;
   server|faster_whisper|faster-whisper) STT_PROVIDER="server" ;;
   *) STT_PROVIDER="auto" ;;
@@ -20,7 +21,7 @@ URL="http://127.0.0.1:${PORT}/"
 STT_URL="http://127.0.0.1:${STT_PORT}/health"
 GPU_TTS_URL="http://127.0.0.1:${GPU_TTS_PORT}/api/ready"
 CPU_TTS_URL="http://127.0.0.1:${CPU_TTS_PORT}/api/ready"
-LOG_DIR="$ROOT/runtime/fusion_reader_v2"
+LOG_DIR="${FUSION_READER_LOG_ROOT:-${FUSION_READER_LOG_DIR:-${FUSION_READER_RUNTIME_ROOT:-$ROOT/runtime/fusion_reader_v2}}}"
 LOG_FILE="$LOG_DIR/desktop_launcher.log"
 STT_LOG_FILE="$LOG_DIR/stt_server.log"
 GPU_TTS_LOG_FILE="$LOG_DIR/alltalk_gpu_5090.log"
@@ -32,7 +33,7 @@ mkdir -p "$LOG_DIR"
 source "$ROOT/scripts/fusion_reader_gpu_guard.sh"
 fusion_reader_refuse_when_gpu_conflict "Fusion Reader v2 launcher"
 if fusion_reader_apply_game_coexistence_mode; then
-  echo "Modo convivencia GPU activo: se prioriza CPU para STT/TTS automaticos." >>"$LOG_FILE"
+  echo "Presupuesto GPU ajustado: prefetch mínimo y CPU para STT/TTS automáticos si hace falta." >>"$LOG_FILE"
 fi
 
 export FUSION_READER_CHAT_MODEL="${FUSION_READER_CHAT_MODEL:-qwen3:14b-q8_0}"
@@ -88,7 +89,7 @@ run_background() {
 }
 
 echo "STT provider solicitado: ${STT_PROVIDER} (valor: ${STT_PROVIDER_RAW})" >>"$LOG_FILE"
-if [[ "$STT_PROVIDER" == "cli" ]]; then
+if [[ "$STT_PROVIDER" == "cli" || "$STT_PROVIDER" == "none" ]]; then
   echo "STT server ${STT_PORT}: inicio omitido porque el provider es cli." >>"$LOG_FILE"
 elif ! curl -fsS "$STT_URL" >/dev/null 2>&1; then
   echo "STT server ${STT_PORT}: intentando iniciar para provider ${STT_PROVIDER}." >>"$LOG_FILE"

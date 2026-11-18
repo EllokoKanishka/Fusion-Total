@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from fusion_reader_v2 import ConversationCore, NullChatProvider
 from fusion_reader_v2.metrics import VoiceMetric, VoiceMetricsStore
@@ -16,8 +17,11 @@ class NotesMetricsTests(unittest.TestCase):
         app = test_app(root=root)
         app.load_text("doc1", "Doc 1", "Contenido", prefetch=False)
         app.create_note("Nota de prueba", 0)
-        notes_file = root / "notes" / "doc1.json"
-        self.assertTrue(notes_file.exists())
+        notes_files = list((root / "notes").rglob("*.json"))
+        self.assertEqual(len(notes_files), 1)
+        saved = json.loads(notes_files[0].read_text(encoding="utf-8"))
+        self.assertEqual(saved["doc_id"], "doc1")
+        self.assertEqual(saved["notes"][0]["text"], "Nota de prueba")
 
     def test_notes_can_be_filtered_by_document(self):
         app = test_app()

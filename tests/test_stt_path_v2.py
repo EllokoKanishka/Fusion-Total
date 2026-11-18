@@ -35,7 +35,7 @@ class SttPathV2Tests(unittest.TestCase):
 
     def test_launchers_and_env_resolution_are_structurally_consistent(self):
         launcher = Path("scripts/open_fusion_reader.sh").read_text(encoding="utf-8")
-        self.assertIn('[[ "$STT_PROVIDER" == "cli" ]]', launcher)
+        self.assertIn('"$STT_PROVIDER" == "cli" || "$STT_PROVIDER" == "none"', launcher)
         self.assertIn("inicio omitido porque el provider es cli", launcher)
         self.assertIn("intentando iniciar para provider", launcher)
         server = Path("scripts/start_fusion_reader_v2_stt.sh").read_text(encoding="utf-8")

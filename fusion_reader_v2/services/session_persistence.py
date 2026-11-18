@@ -106,7 +106,44 @@ class SessionPersistenceService:
         self.store.write(payload)
 
     def read(self) -> dict:
-        return self.store.read() if self.store is not None else {}
+        return self.store.read(validate=self._validate) if self.store is not None else {}
+
+    @staticmethod
+    def _validate(raw: dict) -> None:
+        text_fields = (
+            "doc_id",
+            "title",
+            "text",
+            "source_path",
+            "source_type",
+            "voice",
+            "reasoning_mode",
+            "laboratory_mode",
+            "profile",
+            "veil",
+            "chat_provider",
+            "dictation_assistant",
+        )
+        for field in text_fields:
+            if raw.get(field) is not None and not isinstance(raw[field], str):
+                raise ValueError(f"session {field} must be text")
+        for field in ("cursor", "current", "total"):
+            value = raw.get(field)
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                    raise ValueError(f"session {field} must be an integer")
+                int(value)
+        references = raw.get("reference_documents")
+        if references is None:
+            return
+        if not isinstance(references, list):
+            raise ValueError("session reference_documents must be a list")
+        for item in references:
+            if not isinstance(item, dict):
+                raise ValueError("session references must be objects")
+            for field in ("doc_id", "title", "text", "source_path", "source_type"):
+                if item.get(field) is not None and not isinstance(item[field], str):
+                    raise ValueError(f"session reference {field} must be text")
 
     def restore(self) -> None:
         raw = self.read()

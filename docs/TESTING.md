@@ -38,3 +38,9 @@ only documented exclusions.
 
 Real TTS, STT, Ollama, external search and microphones are not CI requirements.
 Never claim a real microphone validation from synthetic audio.
+
+## Ejecución aislada de la consolidación
+
+Ejecutar `python scripts/run_isolated_tests.py` para la suite completa y `python scripts/run_isolated_tests.py stress` para stress. Crea HOME, estado legacy y temporales privados antes de importar pruebas. Permite conexiones sólo a sockets efímeros creados por la propia suite y bloquea motores/hijos no previstos. FUSION_TEST_EVIDENCE_ROOT puede seleccionar la carpeta de resultados. CI usa este recorrido, también bajo coverage. Un bloqueo del arnés no se cuenta como prueba satisfecha.
+
+Los 174 métodos legacy fueron comparados con sus candidatos; sólo 41 cuerpos AST idénticos se retiraron del módulo compatible. Los otros 133 permanecen como referencia inactiva porque hay diferencias de fixtures y aserciones; no se afirma equivalencia de cobertura por nombre. Se conservan las 42 pruebas activas y el entrypoint compatible. La matriz de comparación completa se conserva en la auditoría local.

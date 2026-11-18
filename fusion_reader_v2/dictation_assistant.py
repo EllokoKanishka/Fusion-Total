@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .health_observation import observe_health
+
 import json
 import re
 import time
@@ -134,7 +136,7 @@ class DictationAssistant:
             health = {"ok": True, "detail": "ready", "provider": "rules"}
         else:
             provider = self.providers[self.selected]
-            health = dict(provider.health() or {})
+            health = dict(observe_health(provider) or {})
             if health.get("model_present") is False:
                 health["ok"] = False
                 health["detail"] = "model_not_installed"

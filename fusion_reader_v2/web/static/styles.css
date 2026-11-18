@@ -250,6 +250,7 @@ main {
   grid-column: 2;
   grid-row: 1;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   height: 100%;
@@ -651,6 +652,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
   background: var(--panel-2);
 }
@@ -658,6 +660,7 @@ html[data-skin="neon"] .topbar {
   clip-path: polygon(0 0, calc(100% - 28px) 0, 100% 28px, 100% 100%, 0 100%);
 }
 .title {
+  flex: 1 0 min(100%, 240px);
   min-width: 0;
 }
 .title strong {
@@ -720,6 +723,53 @@ html[data-skin="neon"] .reader {
   font-style: italic;
   text-align: center;
 }
+.chunk {
+  --highlight-light: #90e2c5;
+  --highlight-dark: #175c46;
+  --highlight-current: #a7e8ce;
+  --highlight-tint: rgba(80, 181, 142, .10);
+}
+.chunk[data-highlight-color="cyan"] {
+  --highlight-light: #83ddeb; --highlight-dark: #125c6b;
+  --highlight-current: #a4e7f0; --highlight-tint: rgba(70, 180, 200, .12);
+}
+.chunk[data-highlight-color="blue"] {
+  --highlight-light: #9fc2ff; --highlight-dark: #224f94;
+  --highlight-current: #b6d1ff; --highlight-tint: rgba(90, 140, 230, .12);
+}
+.chunk[data-highlight-color="yellow"] {
+  --highlight-light: #ffe283; --highlight-dark: #795a08;
+  --highlight-current: #ffeaa5; --highlight-tint: rgba(220, 175, 45, .12);
+}
+.chunk[data-highlight-color="pink"] {
+  --highlight-light: #ffa7c7; --highlight-dark: #923155;
+  --highlight-current: #ffc2d8; --highlight-tint: rgba(220, 100, 145, .12);
+}
+.chunk[data-highlight-color="violet"] {
+  --highlight-light: #cbb0ff; --highlight-dark: #633a99;
+  --highlight-current: #ddcaff; --highlight-tint: rgba(165, 110, 220, .12);
+}
+.chunk:not([data-highlight-color="off"]) .reader-word.is-read {
+  color: var(--highlight-light);
+  background: var(--highlight-tint);
+}
+.chunk:not([data-highlight-color="off"]) .reader-word.is-current {
+  color: #10242b;
+  background: var(--highlight-current);
+  border-radius: 3px;
+}
+html[data-skin="neon"] .chunk:not([data-highlight-color="off"]) .reader-word.is-read {
+  color: var(--highlight-dark);
+}
+html[data-skin="neon"] .chunk:not([data-highlight-color="off"]) .reader-word.is-current {
+  color: #10242b;
+  background: var(--highlight-current);
+}
+.reading-highlight-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+.reading-highlight-status:empty { display: none; }
 html[data-skin="neon"] .chunk {
   color: #18212b;
 }
@@ -984,6 +1034,22 @@ audio {
   font: 11px/1.2 "IBM Plex Mono", monospace;
   text-align: right;
 }
+.reader-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.reader-speed input[type="range"] {
+  width: 112px;
+  min-width: 60px;
+  accent-color: var(--accent);
+}
+.reader-speed output {
+  min-width: 36px;
+  font-variant-numeric: tabular-nums;
+}
 textarea {
   width: 100%;
   min-height: 102px;
@@ -1103,6 +1169,8 @@ textarea {
 }
 .header-selectors {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   gap: 8px;
   align-items: center;
   margin-left: auto;
@@ -1252,12 +1320,14 @@ html[data-skin="neon"] .skins-menu-options {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
-.app.dictation-open > :not(.dictation-workspace) {
+.app.dictation-open > :not(.dictation-workspace):not(.panda-dialog-overlay) {
   display: none;
 }
 .dictation-workspace[hidden] {
   display: none;
 }
+.dictation-save-status { margin: 0; color: var(--muted); }
+.dictation-save-status[data-state="error"] { color: var(--danger); font-weight: 600; }
 .dictation-workspace {
   grid-column: 1;
   grid-row: 1;

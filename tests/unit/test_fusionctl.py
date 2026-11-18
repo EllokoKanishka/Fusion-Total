@@ -67,7 +67,7 @@ class FusionCtlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._settings(Path(tmp))
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
+            with contextlib.redirect_stdout(output), mock.patch.object(fusionctl, "_port_open", return_value=False):
                 code = fusionctl.command_doctor(settings, mock.Mock())
             self.assertIn(code, (0, 1))
             self.assertFalse(settings.paths.runtime.exists())

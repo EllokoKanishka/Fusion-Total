@@ -37,7 +37,7 @@ def allowed_memory_files() -> List[str]:
     """Returns the list of allowed memory files present in the directory."""
     if not MEMORY_DIR.exists():
         return []
-    return sorted([f for f in ALLOWED_FILENAMES if (MEMORY_DIR / f).is_file()])
+    return sorted([f for f in ALLOWED_FILENAMES if safe_memory_path(f) is not None])
 
 
 def safe_memory_path(name: str) -> Optional[Path]:
@@ -54,7 +54,7 @@ def safe_memory_path(name: str) -> Optional[Path]:
         target = (MEMORY_DIR / name).resolve()
 
         # Check if target is inside base
-        if not str(target).startswith(str(base)):
+        if target.parent != base:
             return None
 
         # Only .md allowed
@@ -93,7 +93,9 @@ def search_memory(query: str, limit: int = 20) -> List[Dict]:
     files = allowed_memory_files()
 
     for filename in files:
-        path = MEMORY_DIR / filename
+        path = safe_memory_path(filename)
+        if path is None:
+            continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
             for i, line in enumerate(lines):

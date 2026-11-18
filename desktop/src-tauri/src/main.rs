@@ -10,14 +10,18 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "linux")]
 use webkit2gtk::{
-    glib::prelude::*, PermissionRequestExt, SettingsExt, WebViewExt,
+    glib::prelude::*, PermissionRequestExt, SettingsExt, WebViewExt, UserMediaPermissionRequestExt,
 };
 
-const FUSION_URL: &str = "http://127.0.0.1:8010";
-const FUSION_ADDRESS: &str = "127.0.0.1:8010";
+fn fusion_address() -> String {
+    let port = std::env::var("FUSION_READER_V2_PORT").ok()
+        .and_then(|value| value.parse::<u16>().ok()).filter(|port| *port > 0).unwrap_or(8010);
+    format!("127.0.0.1:{port}")
+}
+fn fusion_url() -> String { format!("http://{}", fusion_address()) }
 
 fn fusion_is_ready() -> bool {
-    let address: SocketAddr = match FUSION_ADDRESS.parse() {
+    let address: SocketAddr = match fusion_address().parse() {
         Ok(address) => address,
         Err(_) => return false,
     };
@@ -64,7 +68,7 @@ fn main() {
                     if fusion_is_ready() {
                         let app_handle = handle.clone();
                         let _ = handle.run_on_main_thread(move || {
-                            let url = FUSION_URL.parse().expect("Fusion loopback URL must be valid");
+                            let url = fusion_url().parse().expect("Fusion loopback URL must be valid");
                             if WebviewWindowBuilder::new(
                                 &app_handle,
                                 "panda-fusion",
@@ -85,13 +89,18 @@ fn main() {
                                         settings.set_enable_media_stream(true);
                                         settings.set_enable_webrtc(true);
                                     }
-                                    native_webview.connect_permission_request(|_, request| {
-                                        if request.is::<webkit2gtk::UserMediaPermissionRequest>() {
-                                            request.allow();
+                                    native_webview.connect_permission_request(|view, request| {
+                                        if let Some(media) = request.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>() {
+                                            let expected = fusion_url();
+                                            let trusted = view.uri().and_then(|uri| tauri::Url::parse(uri.as_str()).ok())
+                                                .map(|uri| uri.origin().ascii_serialization() == expected).unwrap_or(false);
+                                            if trusted && media.is_for_audio_device() && !media.is_for_video_device() {
+                                                request.allow();
+                                            } else {
+                                                request.deny();
+                                            }
                                             true
-                                        } else {
-                                            false
-                                        }
+                                        } else { false }
                                     });
                                 });
                             })

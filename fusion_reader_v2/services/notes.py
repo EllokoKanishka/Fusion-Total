@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import builtins
+
 import re
+import math
 import threading
 from collections.abc import Callable
 
@@ -20,9 +23,9 @@ class NotesService:
         *,
         session: ReaderSession,
         notes: ReaderNotesStore,
-        dialogue_history: list[dict],
+        dialogue_history: builtins.list[dict],
         dialogue_lock: threading.Lock,
-        chat_history: list[dict],
+        chat_history: builtins.list[dict],
         chat_lock: threading.Lock,
         looks_like_note_request: Callable[[str], bool],
     ) -> None:
@@ -34,6 +37,10 @@ class NotesService:
         self.chat_lock = chat_lock
         self.looks_like_note_request = looks_like_note_request
 
+    def _with_warnings(self, result: dict, doc_id: str) -> dict:
+        warnings = self.notes.warning_codes(doc_id)
+        return {**result, "warnings": warnings} if warnings else result
+
     def summary(self) -> dict:
         status = self.session.status()
         doc_id = str(status.get("doc_id") or "")
@@ -42,7 +49,7 @@ class NotesService:
         notes = self.notes.list(doc_id)
         current_index = max(0, int(status.get("current") or 1) - 1)
         current_count = sum(1 for note in notes if int(note.get("chunk_index") or 0) == current_index)
-        return {"ok": True, "count": len(notes), "current_count": current_count}
+        return self._with_warnings({"ok": True, "count": len(notes), "current_count": current_count}, doc_id)
 
     def list(self, doc_id: str = "", chunk_index: int | None = None, current_only: bool = False) -> dict:
         status = self.session.status()
@@ -51,7 +58,10 @@ class NotesService:
             return {"ok": True, "doc_id": "", "items": []}
         if current_only:
             chunk_index = max(0, int(status.get("current") or 1) - 1)
-        return {"ok": True, "doc_id": selected_doc, "items": self.notes.list(selected_doc, chunk_index=chunk_index)}
+        return self._with_warnings(
+            {"ok": True, "doc_id": selected_doc, "items": self.notes.list(selected_doc, chunk_index=chunk_index)},
+            selected_doc,
+        )
 
     def create(self, text: str, chunk_index: int | None = None) -> dict:
         document = self.session.document
@@ -70,7 +80,9 @@ class NotesService:
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(document.doc_id)}
+        return self._with_warnings(
+            {"ok": True, "note": note, "items": self.notes.list(document.doc_id)}, document.doc_id
+        )
 
     def create_laboratory(self, text: str) -> dict:
         clean_text = self.resolve_laboratory_text(text)
@@ -87,7 +99,9 @@ class NotesService:
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(LABORATORY_NOTES_DOC_ID)}
+        return self._with_warnings(
+            {"ok": True, "note": note, "items": self.notes.list(LABORATORY_NOTES_DOC_ID)}, LABORATORY_NOTES_DOC_ID
+        )
 
     def resolve_chunk_index(self, chunk_index: int | None = None) -> int | None:
         document = self.session.document
@@ -107,7 +121,7 @@ class NotesService:
             note = self.notes.update(selected_doc, str(note_id or ""), text)
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(selected_doc)}
+        return self._with_warnings({"ok": True, "note": note, "items": self.notes.list(selected_doc)}, selected_doc)
 
     def rename(self, note_id: str, label: str, doc_id: str = "") -> dict:
         selected_doc = str(doc_id or self.session.status().get("doc_id") or "")
@@ -117,7 +131,7 @@ class NotesService:
             note = self.notes.update_label(selected_doc, str(note_id or ""), label)
         except (KeyError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "note": note, "items": self.notes.list(selected_doc)}
+        return self._with_warnings({"ok": True, "note": note, "items": self.notes.list(selected_doc)}, selected_doc)
 
     def delete(self, note_id: str, doc_id: str = "") -> dict:
         selected_doc = str(doc_id or self.session.status().get("doc_id") or "")
@@ -125,9 +139,9 @@ class NotesService:
             return {"ok": False, "error": "no_document_loaded"}
         try:
             out = self.notes.delete(selected_doc, str(note_id or ""))
-        except KeyError as exc:
+        except (KeyError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        return {**out, "items": self.notes.list(selected_doc)}
+        return self._with_warnings({**out, "items": self.notes.list(selected_doc)}, selected_doc)
 
     def reference(self, note: dict) -> str:
         kind = str(note.get("source_kind") or "document").strip().lower()
@@ -143,12 +157,8 @@ class NotesService:
         return f"Listo, guardé esa nota en el bloque {block}." if spoken else f"Nota guardada en el bloque {block}."
 
     def recent_laboratory_quote(self) -> str:
-        with self.dialogue_lock:
-            dialogue_history = list(self.dialogue_history[-4:])
-        with self.chat_lock:
-            chat_history = list(self.chat_history[-4:])
-        history = dialogue_history or chat_history
-        lines: list[str] = []
+        history = self._recent_laboratory_history()[-4:]
+        lines: builtins.list[str] = []
         for item in history:
             role = str(item.get("role") or "").strip().lower()
             content = " ".join(str(item.get("content") or "").split())
@@ -157,6 +167,35 @@ class NotesService:
             prefix = "Vos" if role == "user" else "Laboratorio" if role == "assistant" else "Sistema"
             lines.append(f"{prefix}: {content}")
         return "\n".join(lines[:4]).strip()
+
+    def _recent_laboratory_history(self) -> builtins.list[dict]:
+        with self.dialogue_lock:
+            dialogue_history = list(self.dialogue_history)
+        with self.chat_lock:
+            chat_history = list(self.chat_history)
+
+        def latest(history: builtins.list[dict]) -> float | None:
+            timestamps = []
+            for item in history:
+                content = str(item.get("content") or "").strip()
+                if not content or self.looks_like_note_request(content):
+                    continue
+                try:
+                    raw_stamp = item.get("ts")
+                    if raw_stamp is None:
+                        continue
+                    stamp = float(raw_stamp)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(stamp):
+                    timestamps.append(stamp)
+            return max(timestamps) if timestamps else None
+
+        dialogue_ts, chat_ts = latest(dialogue_history), latest(chat_history)
+        if chat_ts is not None and (dialogue_ts is None or chat_ts > dialogue_ts):
+            return chat_history
+        # Untimed legacy histories and ties retain the previous dialogue-first rule.
+        return dialogue_history or chat_history
 
     def resolve_laboratory_text(self, text: str) -> str:
         clean = str(text or "").strip()
@@ -167,17 +206,13 @@ class NotesService:
         return clean
 
     def recent_laboratory_target(self) -> str:
-        with self.dialogue_lock:
-            dialogue_history = list(self.dialogue_history)
-        with self.chat_lock:
-            chat_history = list(self.chat_history)
-        for history in (dialogue_history, chat_history):
-            for preferred_role in ("assistant", "user"):
-                for item in reversed(history):
-                    role = str(item.get("role") or "").strip().lower()
-                    content = " ".join(str(item.get("content") or "").split()).strip()
-                    if role == preferred_role and content and not self.looks_like_note_request(content):
-                        return content
+        history = self._recent_laboratory_history()
+        for preferred_role in ("assistant", "user"):
+            for item in reversed(history):
+                role = str(item.get("role") or "").strip().lower()
+                content = " ".join(str(item.get("content") or "").split()).strip()
+                if role == preferred_role and content and not self.looks_like_note_request(content):
+                    return content
         return ""
 
     @staticmethod

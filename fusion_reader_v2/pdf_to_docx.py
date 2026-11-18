@@ -139,7 +139,7 @@ def convert_pdf_to_docx(
     # Fallback to legacy engines if Docling GPU is not available
     # Initial fast check for textual content
     try:
-        page_texts_sample = _extract_pages_text(pdf_path, limit=20)
+        page_texts_sample = _extract_pages_text(pdf_path, limit=20, job=job)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         err_msg = f"No se pudo extraer texto del PDF: {exc}"
         if job:
@@ -167,7 +167,7 @@ def convert_pdf_to_docx(
             if status_callback:
                 status_callback(job)
 
-        page_texts = _extract_pages_text(pdf_path)
+        page_texts = _extract_pages_text(pdf_path, job=job)
         engine = "pdftotext"
 
         if job and job.cancelled:
@@ -246,16 +246,19 @@ def _page_count(pdf_path: Path) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _extract_pages_text(pdf_path: Path, limit: int | None = None) -> list[str]:
+def _extract_pages_text(pdf_path: Path, limit: int | None = None, *, job=None) -> list[str]:
     pages = _page_count(pdf_path)
-    if pages <= 0:
-        raw = _pdftotext_page(pdf_path, None)
-        return [segment for segment in raw.split("\f") if segment is not None]
-
-    total = min(pages, limit) if limit else pages
-    out: list[str] = []
-    for page in range(1, total + 1):
-        out.append(_pdftotext_page(pdf_path, page))
+    if job is not None and job.cancelled:
+        raise RuntimeError("cancelled")
+    raw = _pdftotext_page(pdf_path, None, limit=limit, cancel_event=job)
+    out = raw.split("\f")
+    if raw.endswith("\f"):
+        out.pop()
+    total = min(pages, limit) if limit and pages else (pages or len(out))
+    out = out[:total]
+    out.extend([""] * max(0, total - len(out)))
+    if job is not None and job.cancelled:
+        raise RuntimeError("cancelled")
     return out
 
 
@@ -373,24 +376,29 @@ def _preprocess_image(image_path: Path) -> None:
         pass
 
 
-def _pdftotext_page(pdf_path: Path, page: int | None) -> str:
+def _pdftotext_page(pdf_path: Path, page: int | None, *, limit=None, cancel_event=None) -> str:
     tool = shutil.which("pdftotext")
     if not tool:
         raise RuntimeError("pdftotext_not_found")
     cmd = [tool, "-layout"]
     if page is not None:
         cmd.extend(["-f", str(page), "-l", str(page)])
-    cmd.extend([str(pdf_path), "-"])
-    proc = run_owned(
-        cmd,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "pdftotext_failed").strip())
-    return proc.stdout
+    if page is None and limit is not None:
+        cmd.extend(["-f", "1", "-l", str(limit)])
+
+    class Signal:
+        def is_set(self):
+            return bool(cancel_event is not None and cancel_event.cancelled)
+
+    # Text goes to an owned file, so the subprocess log cap cannot silently
+    # truncate a large book when extracting all pages in one invocation.
+    with tempfile.TemporaryDirectory(prefix="fusion_pdf_text_") as folder:
+        output = Path(folder) / "pages.txt"
+        cmd.extend([str(pdf_path), str(output)])
+        proc = run_owned(cmd, cancel_event=Signal(), check=False, capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "pdftotext_failed").strip())
+        return output.read_text(encoding="utf-8", errors="replace")
 
 
 def _has_meaningful_text(text: str) -> bool:

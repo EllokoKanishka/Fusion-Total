@@ -900,8 +900,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
 def run():
-    print(f"Starting Modular Backend on port {PORT}...")
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    import argparse
+    parser = argparse.ArgumentParser(description="Historical local compatibility backend")
+    parser.add_argument("--port", type=int, default=PORT)
+    args = parser.parse_args()
+    if os.environ.get("FUSION_READER_ENABLE_LEGACY_BACKEND") != "1":
+        parser.error("Historical backend disabled; use Panda Fusión, or explicitly enable the compatibility backend.")
+    if not 1 <= args.port <= 65535:
+        parser.error("invalid port")
+    print(f"Starting historical local backend on port {args.port}...")
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.serve_forever()
 
 if __name__ == "__main__":

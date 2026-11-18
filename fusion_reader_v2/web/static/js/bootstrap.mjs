@@ -1,3 +1,4 @@
+import { renderLaboratoryFocus } from './lab_focus.mjs';
 import { api } from './api.mjs';
 import { appendPcmChunk, dialoguePcmStats, encodeDialogueWav, friendlyTtsMessage } from './audio.mjs';
 import { applyControlState, createBusyControlState } from './busy.mjs';
@@ -9,6 +10,8 @@ import { createNotesController, LAB_NOTES_DOC_ID } from './notes.mjs';
 import { createMediaController } from './media.mjs';
 import { createDictationController } from './dictation.mjs';
 import { createPandaDialog } from './panda_dialog.mjs';
+import { createReadingHighlight } from './reading_highlight.mjs';
+import { startDesktopLifetime } from './desktop_lifetime.mjs';
 
 const SKIN_STORAGE_KEY = 'pandafusion.skin.v1';
 const SKINS = new Set(['classic', 'neon']);
@@ -39,6 +42,26 @@ function initializeSkin() {
 }
 
 const els = collectElements();
+startDesktopLifetime();
+const readingHighlight = createReadingHighlight({
+  player: els.player, container: els.chunk, indicator: els.readingHighlightStatus,
+  request: (audioURL, signal, retry) => api('/api/read/timings', { audio_url: audioURL, retry }, { signal })
+});
+const HIGHLIGHT_COLOR_STORAGE_KEY = 'pandafusion.reader.highlight.color.v1';
+const HIGHLIGHT_COLORS = new Set(['green', 'cyan', 'blue', 'yellow', 'pink', 'violet', 'off']);
+function setHighlightColor(value, { persist = true } = {}) {
+  const color = HIGHLIGHT_COLORS.has(value) ? value : 'green';
+  els.readingHighlightColor.value = color;
+  els.chunk.dataset.highlightColor = color;
+  readingHighlight.setEnabled(color !== 'off');
+  if (persist) {
+    try { window.localStorage.setItem(HIGHLIGHT_COLOR_STORAGE_KEY, color); } catch (_) {}
+  }
+}
+let savedHighlightColor = 'green';
+try { savedHighlightColor = window.localStorage.getItem(HIGHLIGHT_COLOR_STORAGE_KEY) || 'green'; } catch (_) {}
+setHighlightColor(savedHighlightColor, { persist: false });
+els.readingHighlightColor.addEventListener('change', () => setHighlightColor(els.readingHighlightColor.value));
 const pandaDialog = createPandaDialog();
 initializeSkin();
 let status = null;
@@ -49,6 +72,8 @@ let audioLifecycleSequence = 0;
 let activeReadController = null;
 let activeReadRequest = 0;
 let voiceCatalogRefreshInFlight = false;
+let readerSeeking = false;
+const READER_RATE_STORAGE_KEY = 'pandafusion.reader.rate.v1';
 const busyControls = createBusyControlState(
   (availability, busyLeaseCount) => applyControlState(els, availability, busyLeaseCount),
   null,
@@ -131,9 +156,33 @@ function syncReaderPlayer() {
   els.readerPlayerToggleBtn.disabled = !hasAudio;
   els.readerPlayerSeek.disabled = !hasAudio;
   els.readerPlayerSeek.max = String(hasAudio ? duration : 0);
-  els.readerPlayerSeek.value = String(current);
+  if (!readerSeeking || !hasAudio) {
+    els.readerPlayerSeek.value = String(current);
+  }
   els.readerPlayerToggleBtn.textContent = els.player.paused ? '▶ Reproducir' : '❚❚ Pausar';
   els.readerPlayerTime.textContent = `${formatPlaybackTime(current)} / ${formatPlaybackTime(duration)}`;
+}
+
+function setReaderPlaybackRate(value, { persist = true } = {}) {
+  const requested = Number(value);
+  const rate = Number.isFinite(requested) ? Math.max(1, Math.min(3, Math.round(requested * 4) / 4)) : 1;
+  els.readerPlaybackRate.value = String(rate);
+  els.readerPlaybackRateValue.value = `${String(rate).replace('.', ',')}×`;
+  els.player.defaultPlaybackRate = rate;
+  els.player.playbackRate = rate;
+  els.player.preservesPitch = true;
+  if (persist) {
+    try { window.localStorage.setItem(READER_RATE_STORAGE_KEY, String(rate)); } catch (_) {}
+  }
+}
+
+function seekReaderPlayer() {
+  const duration = Number(els.player.duration);
+  const target = Number(els.readerPlayerSeek.value);
+  if (Number.isFinite(duration) && duration > 0 && Number.isFinite(target)) {
+    els.player.currentTime = Math.max(0, Math.min(duration, target));
+    readingHighlight.sync();
+  }
 }
 
 function toggleReaderPlayer() {
@@ -532,7 +581,7 @@ function renderStatus(data) {
   renderLabFocus(data.laboratory_focus || {});
   els.jumpInput.max = data.total || 1;
   els.jumpInput.value = data.current || 1;
-  els.chunk.textContent = header.chunk;
+  readingHighlight.setText(header.chunk, `${nextDocId}:${nextBlockIndex}:${data.document_generation}:${data.voice}:${data.language}`);
   els.chunk.classList.toggle('empty', !data.text);
   renderAudioExportStatus(data.audio_export || {});
   const didChangeViewport = nextDocId !== lastRenderedDocId || nextBlockIndex !== lastRenderedBlockIndex || header.chunk !== lastRenderedBlockText;
@@ -842,6 +891,9 @@ function renderChatProviderStatus(providerInfo) {
   els.chatProviderSelect.title = active.cloud
     ? 'OpenAI vía el agente aislado fusion-dialogue. La voz continúa siendo local.'
     : 'Modelo local 14B. El contenido no sale de la computadora.';
+  if (selected === 'openai' && item.detail === 'openclaw_auth_required') {
+    els.chatProviderSelect.title = 'ChatGPT requiere volver a iniciar sesión para Panda.';
+  }
 }
 
 async function setChatProvider(providerId) {
@@ -853,7 +905,11 @@ async function setChatProvider(providerId) {
     status.chat_provider = data;
     renderChatProviderStatus(data);
     const destination = data.cloud ? 'OpenAI mediante OpenClaw' : 'el modelo local 14B';
-    log(`Diálogo conectado con ${destination}. La voz neural sigue siendo local.`);
+    if (data.detail === 'openclaw_auth_required') {
+      log('ChatGPT requiere volver a iniciar sesión para Panda. La autorización guardada fue invalidada.');
+    } else {
+      log(`IA seleccionada: ${destination}. La conexión se comprueba al responder.`);
+    }
   } catch (err) {
     log(`No pude cambiar el proveedor de diálogo: ${err.message}`);
     if (status && status.chat_provider) renderChatProviderStatus(status.chat_provider);
@@ -933,17 +989,7 @@ async function setReasoningMode(mode) {
 }
 
 function renderLabFocus(focus) {
-  const item = focus && typeof focus === 'object' ? focus : {};
-  const title = String(item.title || '').trim();
-  if (!title) {
-    els.labFocus.innerHTML = '<strong>Foco del laboratorio</strong>Sin foco activo.';
-    return;
-  }
-  const role = item.role === 'main' ? 'principal' : 'consulta';
-  const query = item.query ? `<br>Búsqueda: ${String(item.query)}` : '';
-  const excerpt = String(item.text || '').trim();
-  const clipped = excerpt.length > 240 ? `${excerpt.slice(0, 240).trimEnd()}...` : excerpt;
-  els.labFocus.innerHTML = `<strong>Foco del laboratorio</strong>${title} | ${role} | bloque ${Number(item.chunk_number || 0)} de ${Number(item.total || 0)}${query}${clipped ? `<br>${clipped}` : ''}`;
+  renderLaboratoryFocus(els.labFocus, focus);
 }
 
 async function promoteReference(docId) {
@@ -1031,6 +1077,8 @@ function invalidatePendingRead() {
 
 function resetAudioLifecycle(message = '') {
   invalidatePendingRead();
+  readingHighlight.clearAudio();
+  readerSeeking = false;
   els.continuousToggle.checked = false;
   try { els.player.pause(); } catch (_) {}
   try { els.player.currentTime = 0; } catch (_) {}
@@ -1053,6 +1101,8 @@ function playAudio(data, expectedSequence, expectedRequest) {
     return false;
   }
   els.player.src = data.audio_url;
+  setReaderPlaybackRate(els.readerPlaybackRate.value, { persist: false });
+  readingHighlight.load(data.audio_url);
   els.player.play().catch(() => {
     log('Audio generado. Tocá play si el navegador bloqueó la reproducción automática.');
   });
@@ -1098,6 +1148,9 @@ async function pollImportJob(jobId) {
     }
     if (data.status === 'error') {
       throw new Error(data.error || data.message || 'import_failed');
+    }
+    if (data.status === 'cancelled') {
+      throw new Error(data.message || 'Importación cancelada.');
     }
   }
 }
@@ -1350,19 +1403,34 @@ function stopDialoguePlaybackForTypedTurn() {
   dialogue.suppressUntil = performance.now() + 180;
 }
 
-async function playDialogueAnswer(data) {
+function beginDialogueTurn() {
+  if (dialogue.request) dialogue.request.controller.abort();
+  const token = { epoch: dialogue.epoch, controller: new AbortController() };
+  dialogue.request = token;
+  dialogue.processing = true;
+  return token;
+}
+
+function currentDialogueTurn(token) {
+  return dialogue.active && token.epoch === dialogue.epoch && dialogue.request === token && !token.controller.signal.aborted;
+}
+
+async function playDialogueAnswer(data, token = null) {
+  if (!dialogue.active || (token && !currentDialogueTurn(token))) return;
   if (data.audio_url) {
     dialogue.speaking = true;
     els.dialoguePlayer.src = data.audio_url;
     try {
       await els.dialoguePlayer.play();
     } catch (_) {
+      if (token && !currentDialogueTurn(token)) return;
       dialogue.speaking = false;
       log('Voz generada. Tocá play si el navegador bloqueó la reproducción automática.');
     }
   } else if (data.answer && data.provider === 'text_ack') {
     dialogue.speaking = true;
     speakLocal(data.answer, () => {
+      if (token && !currentDialogueTurn(token)) return;
       dialogue.speaking = false;
       if (dialogue.active) {
       setDialogueInfo(`Escuchando... ${currentReasoningLabel()}. ${laboratoryModeSummary()}`);
@@ -1375,7 +1443,7 @@ async function sendTypedDialogue(message) {
   if (dialogue.speaking) {
     stopDialoguePlaybackForTypedTurn();
   }
-  dialogue.processing = true;
+  const token = beginDialogueTurn();
   dialogue.recording = false;
   dialogue.finalizing = false;
   dialogue.pcmChunks = [];
@@ -1384,7 +1452,8 @@ async function sendTypedDialogue(message) {
   const pending = addChatMessage('system', currentReasoningMode() === 'supreme' ? 'Dialogando por voz; Supremo se baja a Pensamiento para no romper latencia...' : 'Dialogando por voz...');
   const startedAt = performance.now();
   try {
-    const data = await api('/api/dialogue/turn', { text: message, chunk_index: visibleChunkIndex() });
+    const data = await api('/api/dialogue/turn', { text: message, chunk_index: visibleChunkIndex() }, { signal: token.controller.signal });
+    if (!currentDialogueTurn(token)) return;
     if (pending && pending.isConnected) {
       pending.remove();
     }
@@ -1395,14 +1464,17 @@ async function sendTypedDialogue(message) {
     }
     if (data.note) {
       await refreshNotes();
+      if (!currentDialogueTurn(token)) return;
     }
     await refresh().catch(() => {});
+    if (!currentDialogueTurn(token)) return;
     const wallMs = Math.round(performance.now() - startedAt);
     const info = `${dialogueModeSummary(data)} | chat ${fmtMs(data.chat_ms)} | voz ${fmtMs(data.tts_ms)} | total ${fmtMs(data.duration_ms || wallMs)} | ${Number(data.reasoning_passes || 1)} pasada${Number(data.reasoning_passes || 1) === 1 ? '' : 's'}`;
     setDialogueInfo(`${laboratoryModeSummary()} ${info}`);
     log(`Diálogo escrito listo con ${data.model || 'modelo local'} en ${wallMs} ms. ${dialogueModeSummary(data)}`);
-    await playDialogueAnswer(data);
+    await playDialogueAnswer(data, token);
   } catch (err) {
+    if (!currentDialogueTurn(token) || err.name === "AbortError") return;
     if (pending && pending.isConnected) {
       pending.remove();
     }
@@ -1414,6 +1486,8 @@ async function sendTypedDialogue(message) {
     setDialogueInfo(`Falló el diálogo: ${err.message}`);
     log(`Falló el diálogo: ${err.message}`);
   } finally {
+    if (pending && pending.isConnected) pending.remove();
+    if (!currentDialogueTurn(token)) return;
     dialogue.processing = false;
     if (!dialogue.speaking && dialogue.active) {
       setDialogueInfo(`Escuchando... ${dialogueModeSummary(status && status.dialogue_reasoning ? { reasoning_mode_requested: status.reasoning && status.reasoning.mode, reasoning_mode_applied: status.dialogue_reasoning.applied_mode, reasoning_degraded: status.dialogue_reasoning.degraded } : {})} ${laboratoryModeSummary()}`);
@@ -1447,7 +1521,7 @@ function dialogueMimeType() {
 }
 
 async function toggleDialogue() {
-  if (dialogue.active) {
+  if (dialogue.active || dialogue.starting) {
     stopDialogue();
     return;
   }
@@ -1467,12 +1541,17 @@ async function microphonePermissionState() {
 }
 
 async function startDialogue() {
+  if (dialogue.active || dialogue.starting || document.hidden) return;
+  dialogue.starting = true;
+  const epoch = ++dialogue.epoch;
   if (!navigator.mediaDevices || !(window.AudioContext || window.webkitAudioContext)) {
+    dialogue.starting = false;
     setDialogueInfo('Tu navegador no permite grabar audio desde esta página.');
     return;
   }
   try {
     const permissionState = await microphonePermissionState();
+    if (epoch !== dialogue.epoch || !dialogue.starting) return;
     if (permissionState === 'denied') {
       setDialogueInfo('El micrófono está bloqueado en el navegador. Permitilo para usar Dialogar.');
       return;
@@ -1481,7 +1560,7 @@ async function startDialogue() {
       setDialogueInfo('Permiso de micrófono pendiente. Aprobalo en el navegador para empezar a escuchar.');
     }
     api('/api/prepare/cancel', {}).catch(() => {});
-    dialogue.stream = await navigator.mediaDevices.getUserMedia({
+    const captured = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -1491,6 +1570,11 @@ async function startDialogue() {
         sampleSize: 16
       }
     });
+    if (epoch !== dialogue.epoch || !dialogue.starting || document.hidden) {
+      captured.getTracks().forEach(track => track.stop());
+      return;
+    }
+    dialogue.stream = captured;
     const audioTrack = dialogue.stream.getAudioTracks()[0];
     dialogue.micDeviceLabel = audioTrack && audioTrack.label ? audioTrack.label : 'Micrófono activo';
     dialogue.audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1505,7 +1589,7 @@ async function startDialogue() {
     source.connect(processor);
     processor.connect(silentGain);
     silentGain.connect(dialogue.audioContext.destination);
-    processor.onaudioprocess = handleDialoguePcm;
+    processor.onaudioprocess = event => { if (dialogue.epoch === epoch) handleDialoguePcm(event); };
     dialogue.processor = processor;
     dialogue.silentGain = silentGain;
     dialogue.active = true;
@@ -1520,16 +1604,29 @@ async function startDialogue() {
     setDialogueInfo(`Escuchando... ${currentReasoningLabel()}. ${laboratoryModeSummary()} Hacé una pausa corta y respondo. Mic: ${dialogue.micDeviceLabel}`);
     monitorDialogue();
   } catch (err) {
+    if (epoch !== dialogue.epoch) return;
+    stopDialogue();
+    const failedEpoch = dialogue.epoch;
     const permissionState = await microphonePermissionState();
+    if (failedEpoch !== dialogue.epoch) return;
     if (permissionState === 'denied' || (err && err.name === 'NotAllowedError')) {
       setDialogueInfo('El micrófono está bloqueado o fue rechazado. Permitilo en el navegador y volvé a intentar.');
       return;
     }
     setDialogueInfo(`No pude abrir el micrófono: ${err.message}`);
+  } finally {
+    if (epoch === dialogue.epoch) dialogue.starting = false;
   }
 }
 
 function stopDialogue() {
+  dialogue.epoch += 1;
+  dialogue.starting = false;
+  if (dialogue.request) dialogue.request.controller.abort();
+  dialogue.request = null;
+  dialogue.recording = false;
+  if (dialogue.captureTimerId) window.clearTimeout(dialogue.captureTimerId);
+  dialogue.captureTimerId = 0;
   dialogue.active = false;
   dialogue.processing = false;
   dialogue.speaking = false;
@@ -1559,7 +1656,7 @@ function stopDialogue() {
     } catch (_) {}
   }
   if (dialogue.audioContext) {
-    dialogue.audioContext.close().catch(() => {});
+    try { dialogue.audioContext.close().catch(() => {}); } catch (_) {}
   }
   els.dialoguePlayer.pause();
   els.dialoguePlayer.removeAttribute('src');
@@ -1690,7 +1787,12 @@ function handleDialoguePcm(event) {
     return;
   }
   if (dialogue.recording || (dialogue.finalizing && performance.now() <= (dialogue.captureStopAt || 0))) {
-    appendPcmChunk(dialogue.pcmChunks, chunk);
+    const limit = Math.ceil(dialogue.sampleRate * (dialogue.maxRecordMs + dialogue.preRollMs + dialogue.finalFlushMs) / 1000);
+    const remaining = Math.max(0, limit - dialogue.capturedSamples);
+    dialogue.capturedSamples += appendPcmChunk(dialogue.pcmChunks, chunk.subarray(0, remaining));
+    if (dialogue.recording && (dialogue.capturedSamples >= limit || performance.now() - dialogue.startedAt >= dialogue.maxRecordMs)) {
+      stopDialogueRecording();
+    }
   }
 }
 
@@ -1723,6 +1825,12 @@ function beginDialogueRecording() {
   const now = performance.now();
   dialogue.turnId += 1;
   dialogue.pcmChunks = dialogue.pcmPreRoll.slice();
+  dialogue.capturedSamples = dialogue.pcmChunks.reduce((total, chunk) => total + chunk.length, 0);
+  const epoch = dialogue.epoch;
+  const turn = dialogue.turnId;
+  dialogue.captureTimerId = window.setTimeout(() => {
+    if (dialogue.active && dialogue.epoch === epoch && dialogue.turnId === turn) stopDialogueRecording();
+  }, dialogue.maxRecordMs);
   dialogue.recording = true;
   dialogue.finalizing = false;
   dialogue.chunkIndex = visibleChunkIndex();
@@ -1746,6 +1854,8 @@ function stopDialogueRecording() {
   if (!dialogue.recording || dialogue.finalizing) {
     return;
   }
+  if (dialogue.captureTimerId) window.clearTimeout(dialogue.captureTimerId);
+  dialogue.captureTimerId = 0;
   dialogue.recording = false;
   dialogue.finalizing = true;
   dialogue.captureStopAt = performance.now() + dialogueFlushWaitMs();
@@ -1761,7 +1871,11 @@ function stopDialogueRecording() {
   if (dialogue.finalizeTimeoutId) {
     window.clearTimeout(dialogue.finalizeTimeoutId);
   }
-  dialogue.finalizeTimeoutId = window.setTimeout(finishDialogueRecording, dialogueFlushWaitMs());
+  const epoch = dialogue.epoch;
+  const turn = dialogue.turnId;
+  dialogue.finalizeTimeoutId = window.setTimeout(() => {
+    if (dialogue.active && dialogue.epoch === epoch && dialogue.turnId === turn) finishDialogueRecording();
+  }, dialogueFlushWaitMs());
 }
 
 async function sendDialogueAudio(blob, mimeType) {
@@ -1775,7 +1889,7 @@ async function sendDialogueAudio(blob, mimeType) {
     setDialogueInfo(`Escuchando... ${currentReasoningLabel()}. ${laboratoryModeSummary()}`);
     return;
   }
-  dialogue.processing = true;
+  const token = beginDialogueTurn();
   const requestStartedAt = performance.now();
   const audioMime = mimeType || blob.type || 'audio/webm';
   const turnTrace = dialogue.trace ? { ...dialogue.trace, sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime } : { sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime };
@@ -1794,9 +1908,11 @@ async function sendDialogueAudio(blob, mimeType) {
     const res = await fetch(`/api/dialogue/turn?${params.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': audioMime },
-      body: blob
+      body: blob,
+      signal: token.controller.signal
     });
     const data = await res.json();
+    if (!currentDialogueTurn(token)) return;
     turnTrace.responseAt = performance.now();
     if (!res.ok || data.ok === false) {
       const wallMs = Math.round(performance.now() - requestStartedAt);
@@ -1825,8 +1941,10 @@ async function sendDialogueAudio(blob, mimeType) {
     }
     if (data.note) {
       await refreshNotes();
+      if (!currentDialogueTurn(token)) return;
     }
     await refresh().catch(() => {});
+    if (!currentDialogueTurn(token)) return;
     addChatMessage('system', traceText);
     if (data.detail === 'empty_transcript' || data.detail === 'empty_audio') {
       log(`Diálogo sin transcripción útil (${data.detail}). ${traceText}`);
@@ -1834,12 +1952,14 @@ async function sendDialogueAudio(blob, mimeType) {
       log(`Diálogo por audio listo. ${dialogueModeSummary(data)} ${traceText}`);
     }
     setDialogueInfo(`${laboratoryModeSummary()} ${dialogueModeSummary(data)} | ${traceText}`);
-    await playDialogueAnswer(data);
+    await playDialogueAnswer(data, token);
   } catch (err) {
+    if (!currentDialogueTurn(token) || err.name === "AbortError") return;
     addChatMessage('system', `Falló el diálogo: ${err.message}`);
     setDialogueInfo(`Falló el diálogo: ${err.message}`);
     log(`Falló el diálogo: ${err.message}`);
   } finally {
+    if (!currentDialogueTurn(token)) return;
     dialogue.processing = false;
     dialogue.chunkIndex = null;
     if (!dialogue.speaking && dialogue.active) {
@@ -1878,6 +1998,7 @@ els.voiceSelect.addEventListener('change', changeVoice);
 els.dictationVoiceSelect.addEventListener('change', changeDictationVoice);
 els.freeModeBtn.addEventListener('click', () => setLaboratoryMode(currentLaboratoryMode() === 'free' ? 'document' : 'free'));
 els.dialogueBtn.addEventListener('click', toggleDialogue);
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopDialogue(); });
 els.chatInput.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
@@ -1885,11 +2006,22 @@ els.chatInput.addEventListener('keydown', event => {
   }
 });
 els.readerPlayerToggleBtn.addEventListener('click', toggleReaderPlayer);
-els.readerPlayerSeek.addEventListener('input', () => {
-  if (Number.isFinite(Number(els.player.duration))) {
-    els.player.currentTime = Number(els.readerPlayerSeek.value || 0);
-  }
+els.readerPlayerSeek.addEventListener('pointerdown', () => { readerSeeking = true; });
+els.readerPlayerSeek.addEventListener('input', seekReaderPlayer);
+els.readerPlayerSeek.addEventListener('change', () => {
+  seekReaderPlayer();
+  readerSeeking = false;
+  syncReaderPlayer();
 });
+els.readerPlayerSeek.addEventListener('pointercancel', () => {
+  readerSeeking = false;
+  syncReaderPlayer();
+});
+els.readerPlayerSeek.addEventListener('blur', () => { readerSeeking = false; syncReaderPlayer(); });
+els.readerPlaybackRate.addEventListener('input', () => setReaderPlaybackRate(els.readerPlaybackRate.value));
+let savedReaderRate = 1;
+try { savedReaderRate = window.localStorage.getItem(READER_RATE_STORAGE_KEY) || 1; } catch (_) {}
+setReaderPlaybackRate(savedReaderRate, { persist: false });
 for (const eventName of ['loadedmetadata', 'durationchange', 'timeupdate', 'play', 'pause', 'ended', 'emptied']) {
   els.player.addEventListener(eventName, syncReaderPlayer);
 }
@@ -1983,13 +2115,14 @@ els.pdfToWordTool.addEventListener('drop', event => {
 });
 
 window.addEventListener('beforeunload', () => {
+  readingHighlight.dispose();
   if (activeReadController) activeReadController.abort();
   preparation.dispose();
   audioExport.dispose();
   mediaController.dispose();
   dictationController.dispose();
+  stopDialogue();
   clearDialogueTimers(dialogue);
-  if (dialogue.stream) dialogue.stream.getTracks().forEach(track => track.stop());
   try { els.player.pause(); } catch (_) {}
   try { els.dialoguePlayer.pause(); } catch (_) {}
 });

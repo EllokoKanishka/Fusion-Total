@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Dedicated STT override wins; FUSION_READER_GPU_ENV remains a compatible fallback.
 STT_ENV="${FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}}"
+if [[ -n "${FUSION_READER_STT_SERVER_MODEL:-}" ]]; then
+  export FUSION_READER_STT_MODEL="$FUSION_READER_STT_SERVER_MODEL"
+fi
 STT_DEVICE_WAS_SET="${FUSION_READER_STT_DEVICE+x}"
 STT_MODEL_WAS_SET="${FUSION_READER_STT_MODEL+x}"
 STT_BEAM_WAS_SET="${FUSION_READER_STT_BEAM_SIZE+x}"

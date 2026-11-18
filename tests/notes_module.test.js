@@ -26,3 +26,25 @@ test('notes controller saves with one request and balances busy ownership', asyn
   assert.equal(elements.noteInput.value, '');
   assert.equal(releases, 1);
 });
+
+test('notes controller shows preserved legacy notes warning after refresh', async () => {
+  const { createNotesController } = await import('../fusion_reader_v2/web/static/js/notes.mjs');
+  const elements = {
+    notesSummary: { textContent: '' }, notesInfo: { textContent: '' },
+    notesList: { replaceChildren() {}, appendChild() {} }
+  };
+  const controller = createNotesController({
+    elements, getStatus: () => ({ doc_id: 'book', current: 1 }), renderMainStatus() {},
+    beginBusyLease: () => () => {}, busyControls: {}, log() {},
+    api: async path => path.includes('book')
+      ? { items: [], warnings: ['legacy_notes_require_review'] }
+      : { items: [] },
+    documentRoot: {}, prompt: () => null, confirm: () => false
+  });
+  await controller.refresh();
+  assert.match(elements.notesInfo.textContent, /necesitan revisión/);
+  assert.match(elements.notesInfo.textContent, /archivos se conservaron/);
+  assert.doesNotMatch(elements.notesInfo.textContent, /legacy_notes_require_review/);
+  controller.render([]);
+  assert.doesNotMatch(elements.notesInfo.textContent, /necesitan revisión/);
+});

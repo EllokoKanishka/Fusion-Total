@@ -13,6 +13,7 @@ from fusion_reader_v2 import (
     ConversationCore,
     FusionReaderV2,
     NullChatProvider,
+    NullExternalResearchBridge,
     NullSTTProvider,
     NullTTSProvider,
     ReaderNotesStore,
@@ -46,13 +47,16 @@ def run() -> dict:
             tts=NullTTSProvider(),
             stt=NullSTTProvider(),
             conversation=ConversationCore(NullChatProvider()),
+            external_research=NullExternalResearchBridge(),
             cache=AudioCache(root / "cache", max_bytes=32 * 1024 * 1024),
             metrics=VoiceMetricsStore(root / "metrics.jsonl"),
             notes=ReaderNotesStore(root / "notes"),
             session_state_path=root / "session.json",
             audio_export_root=root / "downloads",
         )
-        text = "\n\n".join(f"Bloque {index}. Lectura sintética estable." for index in range(1, 40))
+        text = "\n\n".join(
+            f"Bloque {index}. " + "Lectura sintética estable y suficientemente extensa. " * 30 for index in range(1, 40)
+        )
         try:
             load = timed(25, lambda: app.load_text("bench", "Benchmark", text, prefetch=False))
             status = timed(1000, app.status)
@@ -60,8 +64,14 @@ def run() -> dict:
             app.jump(1)
             app.read_current(play=False)
             cached_read = timed(100, lambda: app.read_current(play=False))
-            cache_lookup = timed(1000, lambda: app.cache.get("Bloque 1", app.voice.voice, app.voice.language))
+            cache_lookup = timed(
+                1000, lambda: app.cache.get(app.session.current_chunk(), app.voice.voice, app.voice.language)
+            )
+            assert len(app.session.document.chunks) > 1
+            assert app.cache.get(app.session.current_chunk(), app.voice.voice, app.voice.language) is not None
             return {
+                "chunks": len(app.session.document.chunks),
+                "cache_hit_verified": True,
                 "kind": "synthetic",
                 "status": summarize(status),
                 "load_text": summarize(load),

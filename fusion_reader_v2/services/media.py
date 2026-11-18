@@ -35,6 +35,7 @@ from fusion_reader_v2.media import (
 from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.reader import Document
 from fusion_reader_v2.tts import AudioArtifact
+from fusion_reader_v2.resources import resource_work
 from fusion_reader_v2.transcript_correction import OllamaTranscriptCorrector
 
 LOG = logging.getLogger(__name__)
@@ -406,7 +407,11 @@ class MediaProcessingService:
                     job.updated_at = time.time()
                     self.stt.cancel(job.job_id)
 
-    def _worker(
+    def _worker(self, job_id, input_path, stt_initial_prompt="", stt_hotwords=""):
+        with resource_work(2, self._signal(job_id)):
+            return self._worker_native(job_id, input_path, stt_initial_prompt, stt_hotwords)
+
+    def _worker_native(
         self,
         job_id: str,
         input_path: Path,

@@ -121,16 +121,15 @@ def handle_dictation_raw_post(responder: DictationResponder, path: str) -> bool:
     content_type = str(responder.headers.get("Content-Type", "") or "")  # type: ignore[attr-defined]
     temporary = responder._read_body_to_temp(filename)
     try:
-        responder._json(
-            200,
-            responder.app.dictation_turn_audio(
-                temporary,
-                mime=content_type,
-                commands_enabled=commands_enabled,
-            ),
+        result = responder.app.dictation_turn_audio(
+            temporary,
+            mime=content_type,
+            commands_enabled=commands_enabled,
         )
     finally:
         temporary.unlink(missing_ok=True)
+    responder._json(200, result)
+
     return True
 
 
@@ -184,7 +183,21 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
         )
         return True
     if path == "/api/dictation/proofread":
-        responder._json(200, responder.app.dictation_proofread(str(payload.get("text") or "")))
+        text = payload.get("text", "")
+        if not isinstance(text, str):
+            raise ValueError("dictation_text_required")
+        result = responder.app.dictation_proofread(text)
+        status = (
+            200
+            if result.get("ok")
+            else {
+                "empty_dictation_proofread": 400,
+                "dictation_proofread_too_large": 413,
+                "dictation_proofread_unavailable": 503,
+                "dictation_proofread_failed": 502,
+            }.get(str(result.get("error") or ""), 500)
+        )
+        responder._json(status, result)
         return True
     if path == "/api/dictation/speak":
         responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))

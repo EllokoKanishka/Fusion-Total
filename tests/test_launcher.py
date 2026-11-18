@@ -106,7 +106,17 @@ echo "systemd-run $*" >> "{self.side_effects_log}"
         self.mock_systemd_run.chmod(0o755)
 
         # Setup test environment PATH
-        self.test_env = dict(os.environ)
+        self.test_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": self.tmp_dir,
+            "FUSION_READER_RUNTIME_ROOT": self.tmp_dir + "/runtime",
+            "FUSION_READER_LOG_ROOT": self.tmp_dir + "/logs",
+            "FUSION_READER_LIBRARY_ROOT": self.tmp_dir + "/library",
+            "FUSION_READER_DOWNLOADS_ROOT": self.tmp_dir + "/downloads",
+            "FUSION_READER_IGNORE_ENV_FILE": "1",
+            "FUSION_READER_GPU_GUARD": "0",
+            "FUSION_READER_STT_PROVIDER": "none",
+        }
         self.test_env["PATH"] = f"{self.bin_dir}:{self.test_env.get('PATH', '')}"
         self.test_env["FUSION_READER_V2_PORT"] = "19010"
         self.test_env["FUSION_READER_STARTUP_WAIT_SECONDS"] = "2"
@@ -233,31 +243,27 @@ exit 0
         installer = (self.repo_root / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
         entrypoint = (self.repo_root / "scripts" / "start_pandafusion_systemd.sh").read_text(encoding="utf-8")
 
-        self.assertIn('ExecStart="$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
+        self.assertIn('ExecStart=/usr/bin/bash "$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
         self.assertIn("KillMode=control-group", installer)
-        self.assertIn("start_reader_neural_tts_gpu_5090.sh", entrypoint)
-        self.assertIn("start_reader_neural_tts.sh", entrypoint)
-        self.assertLess(
-            entrypoint.index("start_reader_neural_tts_gpu_5090.sh"),
-            entrypoint.index("start_reader_neural_tts.sh"),
-        )
-        self.assertIn('export FUSION_READER_ALLTALK_URL="$GPU_TTS_URL"', entrypoint)
-        self.assertIn('export FUSION_READER_ALLTALK_URL="$CPU_TTS_URL"', entrypoint)
-        self.assertIn("start_fusion_reader_v2_stt.sh", entrypoint)
-        self.assertIn("start_stt || true", entrypoint)
-        self.assertIn("-m scripts.fusion_reader_v2_server", entrypoint)
+        self.assertIn("FUSION_READER_FOREGROUND=1", entrypoint)
+        self.assertIn("start_fusion_reader_v2.sh", entrypoint)
+        active = (self.repo_root / "scripts/start_fusion_reader_v2.sh").read_text()
+        self.assertIn("ensure_fusion_tts_url", active)
+        self.assertIn("start_reader_neural_tts.sh", active)
 
     def test_desktop_launcher_uses_native_shell_and_panda_icon(self):
         installer = (self.repo_root / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
         desktop_launcher = (self.repo_root / "scripts" / "start_pandafusion_desktop.sh").read_text(encoding="utf-8")
 
         self.assertIn('exec bash "$ROOT/scripts/start_pandafusion_desktop.sh"', installer)
-        self.assertIn('Name=Panda Fusión', installer)
-        self.assertIn('Icon=$ROOT/desktop/src-tauri/icons/icon.png', installer)
-        self.assertIn('panda-fusion.desktop', installer)
+        self.assertIn("Name=Panda Fusión", installer)
+        self.assertIn("Icon=$ROOT/desktop/src-tauri/icons/icon.png", installer)
+        self.assertIn("panda-fusion.desktop", installer)
         self.assertIn('DEFAULT_PORT="8010"', installer)
-        self.assertIn('Panda\\ Fusión_*.AppImage', desktop_launcher)
-        self.assertNotIn('exec npm run dev', desktop_launcher.split('if [[ -x "$desktop_root/node_modules/.bin/tauri" ]]')[0])
+        self.assertIn("Panda\\ Fusión_*.AppImage", desktop_launcher)
+        self.assertNotIn(
+            "exec npm run dev", desktop_launcher.split('if [[ -x "$desktop_root/node_modules/.bin/tauri" ]]')[0]
+        )
 
     def test_systemd_entrypoint_selects_ready_cpu_fallback_before_web_server(self):
         self.mock_python.write_text(
@@ -276,7 +282,7 @@ exit 0
         }
 
         result = subprocess.run(
-            [str(self.repo_root / "scripts" / "start_pandafusion_systemd.sh")],
+            ["bash", str(self.repo_root / "scripts" / "start_pandafusion_systemd.sh")],
             cwd=str(self.repo_root),
             env=environment,
             capture_output=True,

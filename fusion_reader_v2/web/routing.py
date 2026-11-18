@@ -112,6 +112,8 @@ def create_router() -> Router:
         "/api/reference/remove",
         "/api/document/clear",
         "/api/read",
+        "/api/read/timings",
+        "/api/runtime/client",
         "/api/next",
         "/api/previous",
         "/api/jump",
@@ -137,12 +139,14 @@ def create_router() -> Router:
         "/api/dictation/assistant/install",
         "/api/dictation/assistant/warm",
         "/api/dictation/assist",
+        "/api/dictation/proofread",
         "/api/dictation/export/pdf",
         "/api/dictation/speak",
         "/api/voice/test",
         "/api/chat",
     )
     post_prefixes = (
+        "/api/import-cancel/",
         "/api/tools/pdf-to-docx/cancel/",
         "/api/audio-export/cancel/",
         "/api/media/cancel/",

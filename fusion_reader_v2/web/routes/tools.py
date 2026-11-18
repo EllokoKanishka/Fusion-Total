@@ -13,7 +13,12 @@ from fusion_reader_v2.output_reservation import reserve_output_path
 from fusion_reader_v2.pdf_to_docx import JobStatus, convert_pdf_to_docx, safe_output_name
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.downloads import OutputValidationError, stream_file, validate_output_file
-from fusion_reader_v2.web.jobs import get_import_job, get_pdf_to_docx_download, register_pdf_to_docx_download
+from fusion_reader_v2.web.jobs import (
+    cancel_import_job,
+    get_import_job,
+    get_pdf_to_docx_download,
+    register_pdf_to_docx_download,
+)
 
 
 class ToolsResponder(Protocol):
@@ -127,6 +132,10 @@ def handle_tools_get(responder: ToolsResponder, path: str, raw_path: str) -> boo
 
 
 def handle_tools_post(responder: ToolsResponder, path: str) -> bool:
+    if path.startswith("/api/import-cancel/"):
+        job = cancel_import_job(responder.context, path.split("/")[-1])
+        responder._json(200 if job is not None else 404, job or {"ok": False, "error": "import_job_not_found"})
+        return True
     if path == "/api/tools/pdf-to-docx":
         filename, _mime, input_path = responder._read_multipart_file(field_name="file")
         clean_name = Path(filename).name
@@ -134,17 +143,28 @@ def handle_tools_post(responder: ToolsResponder, path: str) -> bool:
             input_path.unlink(missing_ok=True)
             responder._json(400, {"ok": False, "error": "Solo se aceptan archivos PDF."})
             return True
-        responder.context.pdf_root.mkdir(parents=True, exist_ok=True)
         job_id = uuid.uuid4().hex[:16]
         owned_input = responder.context.pdf_root / f"{job_id}.pdf"
-        os.replace(input_path, owned_input)
         pdf_job = JobStatus(job_id=job_id, filename=safe_output_name(clean_name))
-        responder.context.pdf_jobs.add(job_id, pdf_job)
-        responder.context.start_thread(
-            target=_run_pdf_job,
-            args=(responder.context, responder.request_id, pdf_job, owned_input),
-            name=f"fusion-pdf-to-docx-{job_id}",
-        )
+        registered = False
+        try:
+            responder.context.pdf_root.mkdir(parents=True, exist_ok=True)
+            os.replace(input_path, owned_input)
+            responder.context.pdf_jobs.add(job_id, pdf_job)
+            registered = True
+            responder.context.start_thread(
+                target=_run_pdf_job,
+                args=(responder.context, responder.request_id, pdf_job, owned_input),
+                name=f"fusion-pdf-to-docx-{job_id}",
+            )
+        except Exception as exc:
+            input_path.unlink(missing_ok=True)
+            owned_input.unlink(missing_ok=True)
+            if registered:
+                pdf_job.state = "error"
+                pdf_job.error = type(exc).__name__
+                pdf_job.updated_ts = time.time()
+            raise
         responder._json(200, {"ok": True, "job_id": job_id})
         return True
     if path.startswith("/api/tools/pdf-to-docx/cancel/"):

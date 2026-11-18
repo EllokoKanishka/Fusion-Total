@@ -23,6 +23,9 @@ class BackgroundShutdownContext:
     shutdown_threads: list[threading.Thread] = field(default_factory=list)
     shutdown_errors: list[tuple[str, Exception]] = field(default_factory=list)
     started: bool = False
+    captured: set[str] = field(default_factory=set)
+    capture_errors: dict[str, Exception] = field(default_factory=dict)
+    executor_started: set[int] = field(default_factory=set)
 
 
 class BackgroundLifecycleService:
@@ -94,8 +97,21 @@ class BackgroundLifecycleService:
     def capture_shutdown_context(self, context: BackgroundShutdownContext) -> None:
         if self.audio_export is None or self.preparation is None:
             raise RuntimeError("background_services_not_bound")
-        context.export_thread = self.audio_export.begin_shutdown()
-        context.prepare_thread = self.preparation.begin_shutdown()
+        for label, capture in (
+            ("audio export", lambda: setattr(context, "export_thread", self.audio_export.begin_shutdown())),
+            ("prepare", lambda: setattr(context, "prepare_thread", self.preparation.begin_shutdown())),
+            ("prefetch", lambda: self._capture_prefetch(context)),
+        ):
+            if label in context.captured:
+                continue
+            try:
+                capture()
+                context.captured.add(label)
+                context.capture_errors.pop(label, None)
+            except Exception as exc:
+                context.capture_errors[label] = exc
+
+    def _capture_prefetch(self, context: BackgroundShutdownContext) -> None:
         context.executors, context.prefetch_futures = self.capture_prefetch()
 
     def prioritize_dialogue(self) -> None:
@@ -125,69 +141,87 @@ class BackgroundLifecycleService:
         if thread.is_alive():
             raise AssertionError(f"timed out waiting for {label} thread to stop: {thread.name}")
 
-    def shutdown(self, timeout: float = 10.0) -> dict:
-        deadline = time.monotonic() + max(0.0, float(timeout))
+    def begin_shutdown(self) -> BackgroundShutdownContext:
         with self.condition:
-            if self.state == "closed":
-                return {"ok": True, "state": "closed", "detail": "already_closed"}
             context = self.shutdown_context
             if context is None:
                 context = BackgroundShutdownContext()
                 self.shutdown_context = context
             if self.state == "open":
                 self.set_state_locked("closing")
-            if not context.started:
+            if not context.started or context.capture_errors:
                 self.capture_shutdown_context(context)
-                shutdown_errors_lock = threading.Lock()
+            for future in context.prefetch_futures:
+                future.cancel()
+            for index, executor in enumerate(context.executors):
+                if index in context.executor_started:
+                    continue
 
-                def shutdown_executor(executor: ThreadPoolExecutor, label: str) -> None:
+                def shutdown_executor(owned=executor, label=f"executor-{index}") -> None:
                     try:
-                        executor.shutdown(wait=True, cancel_futures=True)
-                    except Exception as exc:  # pragma: no cover - surfaced by the caller
-                        with shutdown_errors_lock:
+                        owned.shutdown(wait=True, cancel_futures=True)
+                    except Exception as exc:
+                        with self.condition:
                             context.shutdown_errors.append((label, exc))
 
-                for index, executor in enumerate(context.executors):
-                    thread = threading.Thread(
-                        target=shutdown_executor,
-                        args=(executor, f"executor-{index}"),
-                        name=f"fusion-reader-v2-shutdown-{index}",
-                        daemon=False,
-                    )
+                thread = threading.Thread(
+                    target=shutdown_executor, name=f"fusion-reader-v2-shutdown-{index}", daemon=False
+                )
+                try:
                     thread.start()
                     context.shutdown_threads.append(thread)
-                context.started = True
-            export_thread = context.export_thread
-            prepare_thread = context.prepare_thread
-            prefetch_futures = list(context.prefetch_futures)
-            shutdown_threads = list(context.shutdown_threads)
-            shutdown_errors = context.shutdown_errors
-        self.wait_for_thread(export_thread, label="audio export", deadline=deadline)
-        self.wait_for_thread(prepare_thread, label="prepare", deadline=deadline)
-        for future in prefetch_futures:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AssertionError("timed out waiting for prefetch future to stop")
-            if future.done() or future.cancel():
-                continue
-            try:
-                future.result(timeout=max(0.0, deadline - time.monotonic()))
-            except CancelledError:
-                pass
-            except TimeoutError as exc:
-                raise AssertionError("timed out waiting for prefetch future to stop") from exc
-        for thread in shutdown_threads:
-            self.wait_for_thread(thread, label="prefetch executor shutdown", deadline=deadline)
-        if shutdown_errors:
-            label, shutdown_error = shutdown_errors[0]
-            raise AssertionError(f"prefetch executor shutdown failed for {label}: {shutdown_error}") from shutdown_error
+                    context.executor_started.add(index)
+                    context.capture_errors.pop(f"executor-{index}", None)
+                except Exception as exc:
+                    context.capture_errors[f"executor-{index}"] = exc
+            context.started = True
+            return context
+
+    def shutdown(self, timeout: float = 10.0) -> dict:
+        deadline = time.monotonic() + max(0.0, float(timeout))
         with self.condition:
-            self.wait_for_active_tts_locked(deadline)
-            self.set_state_locked("closed")
+            if self.state == "closed":
+                return {"ok": True, "state": "closed", "detail": "already_closed"}
+        context = self.begin_shutdown()
+        errors: list[str] = [f"{label}: {exc}" for label, exc in context.capture_errors.items()]
+        for label, thread in [
+            ("audio export", context.export_thread),
+            ("prepare", context.prepare_thread),
+            *[("prefetch executor shutdown", t) for t in context.shutdown_threads],
+        ]:
+            try:
+                self.wait_for_thread(thread, label=label, deadline=deadline)
+            except Exception as exc:
+                errors.append(str(exc))
+        for future in context.prefetch_futures:
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AssertionError("timed out waiting for prefetch future to stop")
+                if future.done() or future.cancel():
+                    continue
+                try:
+                    future.result(timeout=remaining)
+                except CancelledError:
+                    pass
+                except TimeoutError as exc:
+                    raise AssertionError("timed out waiting for prefetch future to stop") from exc
+            except Exception as exc:
+                errors.append(str(exc))
+        errors.extend(f"prefetch executor shutdown failed for {label}: {exc}" for label, exc in context.shutdown_errors)
+        with self.condition:
+            try:
+                self.wait_for_active_tts_locked(deadline)
+            except Exception as exc:
+                errors.append(str(exc))
+            if not errors:
+                self.set_state_locked("closed")
+        if errors:
+            raise AssertionError("; ".join(errors))
         return {
             "ok": True,
             "state": "closed",
-            "prefetch_futures": len(prefetch_futures),
+            "prefetch_futures": len(context.prefetch_futures),
             "executors": len(context.executors),
         }
 

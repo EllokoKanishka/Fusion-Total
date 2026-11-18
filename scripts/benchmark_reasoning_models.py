@@ -50,7 +50,7 @@ TASKS = [
         prompt=(
             "Respondé solo JSON minificado.\n"
             "Leé estas oraciones numeradas:\n"
-            "1. Todos los manuscritos fueron catalogados el lunes.\n"
+            "1. Algunos manuscritos se conservaron en el archivo.\n"
             "2. Ningún manuscrito fue catalogado antes del martes.\n"
             "3. El archivo quedó cerrado el miércoles.\n"
             "4. Al menos un manuscrito fue catalogado el lunes.\n"
@@ -60,13 +60,13 @@ TASKS = [
     ),
     Task(
         key="syllogism",
-        kind="contains",
-        expected="no se deduce",
+        kind="exact",
+        expected="sí se deduce",
         prompt=(
             "Respondé con una frase breve.\n"
             "Premisas: Todos los lectores atentos subrayan. Algunos filósofos no subrayan.\n"
             "Conclusión propuesta: Algunos filósofos no son lectores atentos.\n"
-            "¿La conclusión se deduce necesariamente, sí o no? Si no, escribí 'no se deduce'."
+            "¿La conclusión se deduce necesariamente? Respondé exactamente 'sí se deduce' o 'no se deduce'."
         ),
     ),
     Task(
@@ -89,8 +89,8 @@ TASKS = [
     ),
     Task(
         key="arithmetic_constraint",
-        kind="contains",
-        expected="14",
+        kind="exact",
+        expected="12",
         prompt=(
             "Respondé solo con el número final.\n"
             "Un lector divide 84 páginas en bloques iguales de 6 páginas.\n"
@@ -139,7 +139,7 @@ def run_chat(host: str, model: str, prompt: str, think: bool, num_predict: int) 
 def score_answer(task: Task, answer: str) -> tuple[bool, str]:
     clean = " ".join(answer.strip().lower().split())
     expected = " ".join(task.expected.strip().lower().split())
-    if task.kind == "json_exact":
+    if task.kind in {"json_exact", "exact"}:
         ok = clean == expected
         return ok, f"expected={task.expected}"
     ok = expected in clean

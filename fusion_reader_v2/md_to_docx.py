@@ -583,6 +583,8 @@ def _is_suspicious_glued_token_v4(token: str) -> bool:
         return False
     if folded in EXACT_GLUED_REPAIRS_FOLDED_V4:
         return True
+    if folded in SPANISH_WORDLIST_V4:
+        return False
     if re.search(r"[a-záéíóúüñ][A-ZÁÉÍÓÚÜÑ]", token):
         return True
     strong_patterns = (
@@ -747,6 +749,8 @@ def _split_connector_span_v4(token: str) -> tuple[str, bool]:
         if before and len(before) < 3:
             continue
         if after and len(after) < 2:
+            continue
+        if any(_fold_spanish_v4(piece) not in SPANISH_WORDLIST_V4 for piece in (before, after) if piece):
             continue
         pieces = []
         if before:

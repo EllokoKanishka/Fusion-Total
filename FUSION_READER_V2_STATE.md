@@ -1,6 +1,6 @@
 # Panda Fusión: estado de continuidad
 
-Fecha: 2026-09-02
+Fecha: 2026-11-17
 Versión del paquete: `2.0.0`
 
 ## Norte
@@ -115,3 +115,7 @@ Los defaults locales heredados y sus overrides permanecen auditados en
 5. Leer `docs/CONTRACTS.md`.
 6. Tratar blueprints y documentos archivados sólo como referencia.
 7. Ejecutar `git status --short` y no revertir cambios ajenos.
+
+## Consolidación de noviembre
+
+El arranque administra Ollama propio en 11435, reutiliza los pesos y no descarga modelos del servidor compartido. STT es opcional; cliente CLI usa small por defecto, servidor GPU large-v3-turbo y convivencia CPU según configuración. El cierre informa recursos propios y pendientes, sin afirmar VRAM global cero. La suite debe ejecutarse con scripts/run_isolated_tests.py para aislar raíces, estado y proveedores. La validación neural integrada tiene evidencia separada de las pruebas sintéticas.

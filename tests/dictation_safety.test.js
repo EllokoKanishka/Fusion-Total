@@ -1,0 +1,312 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { pathToFileURL } = require('node:url');
+const path = require('node:path');
+const moduleUrl = pathToFileURL(path.resolve('fusion_reader_v2/web/static/js/dictation.mjs')).href;
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
+
+class Element {
+  constructor() {
+    this.value = ''; this.selectionStart = 0; this.selectionEnd = 0; this.textContent = '';
+    this.dataset = {}; this.listeners = new Map(); this.children = []; this.options = []; this.hidden = false;
+    const classes = new Set();
+    this.classList = { add: x => classes.add(x), remove: x => classes.delete(x), toggle: (x, on) => on ? classes.add(x) : classes.delete(x) };
+  }
+  addEventListener(name, fn) { if (!this.listeners.has(name)) this.listeners.set(name, new Set()); this.listeners.get(name).add(fn); }
+  removeEventListener(name, fn) { this.listeners.get(name)?.delete(fn); }
+  emit(name, event = {}) { return Promise.all([...(this.listeners.get(name) || [])].map(fn => fn({ target: this, preventDefault() {}, ...event }))); }
+  setAttribute(name, value) { this[name] = value; }
+  removeAttribute(name) { delete this[name]; }
+  append(...items) { this.children.push(...items); }
+  appendChild(item) { this.children.push(item); if (item.tag === 'option') this.options.push(item); }
+  replaceChildren() { this.children = []; }
+  setRangeText(text, start, end) { this.value = this.value.slice(0, start) + text + this.value.slice(end); this.selectionStart = start + text.length; this.selectionEnd = this.selectionStart; }
+  focus() {} remove() {} click() { this.clicked = true; } pause() {}
+  play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve(); }
+}
+
+async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOverride } = {}) {
+  const { createDictationController, STORAGE_KEY } = await import(moduleUrl);
+  const elements = new Proxy({}, { get(target, name) { return target[name] ||= new Element(); } });
+  elements.dictationCommandsToggle.checked = true;
+  elements.dictationWorkspace.hidden = true;
+  const saved = { schemaVersion: 2, activeId: 'A', sessions: ['A', 'B'].map(id => ({ id, title: id, text: 'Texto original', selectionStart: 14, selectionEnd: 14, createdAt: 1, updatedAt: 1 })) };
+  const values = new Map([[STORAGE_KEY, JSON.stringify(saved)]]);
+  const memory = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const timers = new Map(); const frames = new Map(); let timerId = 0; let now = 0; let loud = true; let ids = 0;
+  const logs = []; const recorders = []; const downloads = [];
+  const track = { stopCalls: 0, stop() { this.stopCalls++; } };
+  const stream = { getTracks: () => [track] };
+  class Recorder extends Element {
+    static isTypeSupported() { return true; }
+    constructor() { super(); this.mimeType = 'audio/webm'; this.state = 'inactive'; recorders.push(this); }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.emit('dataavailable', { data: new Blob(['x'.repeat(1200)]) }); this.emit('stop'); }
+  }
+  class Context {
+    createAnalyser() { return { fftSize: 1024, getByteTimeDomainData(data) { data.fill(loud ? 180 : 128); } }; }
+    createMediaStreamSource() { return { connect() {} }; }
+    close() { return Promise.resolve(); }
+  }
+  const windowRef = new Element();
+  Object.assign(windowRef, {
+    crypto: { randomUUID: () => `new-${++ids}` }, performance: { now: () => now }, Blob, Event: class { constructor(type) { this.type = type; } },
+    MediaRecorder: Recorder, AudioContext: ContextOverride || Context, navigator: { mediaDevices: { getUserMedia: getUserMedia || (async () => stream) } },
+    setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) { const id = ++timerId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
+    URL: { createObjectURL(blob) { downloads.push(blob); return 'blob:fixture'; }, revokeObjectURL() {} }, confirm: () => true,
+  });
+  const documentRoot = new Element();
+  documentRoot.body = new Element(); documentRoot.createElement = tag => { const el = new Element(); el.tag = tag; return el; };
+  const baseApi = async (route, body) => {
+    if (route === '/api/dictation/assistant') return { selected: 'rules', available: [] };
+    if (api) return api(route, body);
+    if (route === '/api/dictation/speak') return { audio_url: '/fixture.wav' };
+    return { instruction: { kind: 'noop' } };
+  };
+  const controller = createDictationController({ api: baseApi, elements, refreshMainStatus: async () => {}, log: x => logs.push(x), documentRoot, windowRef, fetchFn: fetchFn || (async () => ({ ok: true, json: async () => ({ instruction: { kind: 'dictate', text: ' tardío' } }) })), storage: storage || memory, dialog });
+  await tick();
+  return {
+    controller, elements, logs, windowRef, memory, values, downloads, track, documentRoot, recorders, timers,
+    async edit(value) { await elements.dictationEditor.emit('beforeinput'); elements.dictationEditor.value = value; elements.dictationEditor.selectionStart = value.length; elements.dictationEditor.selectionEnd = value.length; await elements.dictationEditor.emit('input'); },
+    async flushSave() { for (const [id, entry] of [...timers]) if (entry.ms === 350) { timers.delete(id); entry.fn(); } await tick(); },
+    async startRecording() {
+      await elements.dictationMicBtn.emit('click');
+      for (let i = 0; i < 3; i++) { now += 100; const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn()); }
+    },
+    async finishRecording() { recorders.at(-1).stop(); await tick(); },
+    async upload() { await this.startRecording(); await this.finishRecording(); },
+  };
+}
+
+test('destructive fallback cannot find sol inside consolida or cross word boundaries', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  for (const [value, target] of [['consolida', 'sol'], ['filosóficamente', 'filosofica'], ['foobar', 'foo.bar'], ['𐐀sol', 'sol']]) {
+    const editor = new Element(); editor.value = value; editor.selectionStart = value.length;
+    assert.equal(applyEditorInstruction(editor, { kind: 'delete', target }).changed, false);
+    assert.equal(editor.value, value);
+  }
+});
+
+test('accent-insensitive matches preserve decomposed accents and original UTF-16 ranges', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const editor = new Element(); editor.value = '😀 cri\u0301tica y crítica'; editor.selectionStart = editor.value.length;
+  applyEditorInstruction(editor, { kind: 'replace', target: 'critica', text: 'análisis', all_matches: true });
+  assert.equal(editor.value, '😀 análisis y análisis');
+});
+
+test('typed interpretation is discarded after manual edit or selection change', async () => {
+  for (const change of ['text', 'selection']) {
+    const pending = deferred(); const f = await fixture({ api: () => pending.promise });
+    f.elements.dictationCommandInput.value = 'orden';
+    const running = f.elements.dictationCommandBtn.emit('click');
+    if (change === 'text') await f.edit('Mi texto nuevo');
+    else { f.elements.dictationEditor.selectionStart = 0; f.elements.dictationEditor.selectionEnd = 5; }
+    const expected = f.elements.dictationEditor.value;
+    pending.resolve({ instruction: { kind: 'clear' } }); await running;
+    assert.equal(f.elements.dictationEditor.value, expected, change);
+  }
+});
+
+test('assistant result cannot edit another session with identical text', async () => {
+  const pending = deferred(); const f = await fixture({ api: () => pending.promise });
+  f.elements.dictationAssistantSelect.value = 'local';
+  const running = f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, orden', true);
+  f.controller.loadSession('B');
+  pending.resolve({ instruction: { kind: 'insert', text: ' respuesta vieja' } }); await running;
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+});
+
+test('proofreading rejects a changed revision even when text is edited back to its original value', async () => {
+  const pending = deferred(); const f = await fixture({ api: () => pending.promise });
+  const running = f.controller.applyInstruction({ kind: 'proofread', scope: 'all' });
+  await f.edit('Cambio'); await f.edit('Texto original');
+  pending.resolve({ text: 'Respuesta vieja', changed_parts: 1 }); await running;
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+});
+
+test('a later command wins when assistant responses arrive in reverse order', async () => {
+  const pending = [deferred(), deferred()]; let calls = 0;
+  const f = await fixture({ api: () => pending[calls++].promise });
+  f.elements.dictationAssistantSelect.value = 'local';
+  const first = f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, primera', true);
+  const second = f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, segunda', true);
+  pending[1].resolve({ instruction: { kind: 'insert', text: ' nueva' } }); await second;
+  pending[0].resolve({ instruction: { kind: 'clear' } }); await first;
+  assert.equal(f.elements.dictationEditor.value, 'Texto original nueva');
+});
+
+test('STT arriving after editing, switching sessions or closing never mutates the draft', async () => {
+  for (const change of ['edit', 'session', 'close', 'stop']) {
+    const pending = deferred(); const f = await fixture({ fetchFn: () => pending.promise });
+    await f.upload();
+    if (change === 'edit') await f.edit('Texto nuevo');
+    if (change === 'session') f.controller.loadSession('B');
+    if (change === 'close') f.controller.close();
+    if (change === 'stop') f.controller.stopListening();
+    const expected = f.elements.dictationEditor.value;
+    pending.resolve({ ok: true, json: async () => ({ transcript: 'voz vieja', instruction: { kind: 'dictate', text: ' vieja' } }) });
+    await tick(); await tick();
+    assert.equal(f.elements.dictationEditor.value, expected, change);
+    f.controller.dispose();
+  }
+});
+
+test('late microphone permission cannot restart dictation after closing', async () => {
+  const pending = deferred(); const f = await fixture({ getUserMedia: () => pending.promise });
+  const running = f.elements.dictationMicBtn.emit('click');
+  f.controller.close(); pending.resolve({ getTracks: () => [f.track] }); await running;
+  assert.ok(f.track.stopCalls > 0);
+  assert.equal(f.elements.dictationMicBtn.textContent, 'Iniciar dictado');
+});
+
+test('quota failure stays visible, keeps draft recoverable by TXT and blocks switching away', async () => {
+  const storage = { getItem: () => null, setItem() { throw new Error('quota'); } };
+  const f = await fixture({ storage }); await f.edit('Borrador que no puede perderse'); await f.flushSave();
+  assert.match(f.elements.dictationSaveStatus.textContent, /no.*guard|sin guardar/i);
+  assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
+  await f.controller.createNewSession();
+  assert.equal(f.elements.dictationEditor.value, 'Borrador que no puede perderse');
+  await f.elements.dictationDownloadBtn.emit('click');
+  assert.equal(await f.downloads[0].text(), 'Borrador que no puede perderse');
+  let prevented = false;
+  await f.windowRef.emit('beforeunload', { preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+});
+
+test('storage read failure is visible and never overwrites unreadable stored data', async () => {
+  let writes = 0;
+  const f = await fixture({ storage: { getItem() { throw new Error('denied'); }, setItem() { writes++; } } });
+  await f.edit('Recuperación manual'); await f.flushSave();
+  assert.equal(writes, 0);
+  assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
+});
+
+test('successful retry clears the save warning only after data is persisted', async () => {
+  let fail = true; let saved = '';
+  const f = await fixture({ storage: { getItem: () => null, setItem(_key, value) { if (fail) throw new Error('quota'); saved = value; } } });
+  await f.edit('Texto seguro'); await f.flushSave(); assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
+  fail = false; await f.edit('Texto seguro actualizado'); await f.flushSave();
+  assert.equal(f.elements.dictationSaveStatus.dataset.state, 'saved');
+  assert.equal(JSON.parse(saved).sessions[0].text, 'Texto seguro actualizado');
+});
+
+test('stopping playback settles the read promise and removes media listeners', async () => {
+  const f = await fixture();
+  const running = f.controller.applyInstruction({ kind: 'read', scope: 'all' });
+  await tick(); f.controller.stopSpeech();
+  assert.equal(await Promise.race([running.then(() => 'settled'), new Promise(resolve => setTimeout(() => resolve('pending'), 40))]), 'settled');
+  assert.equal(f.elements.dictationPlayer.listeners.get('ended')?.size || 0, 0);
+  assert.equal(f.elements.dictationPlayer.listeners.get('error')?.size || 0, 0);
+});
+
+test('a delayed TTS response cannot start playback after stop', async () => {
+  const pending = deferred();
+  const f = await fixture({ api: () => pending.promise });
+  const running = f.controller.applyInstruction({ kind: 'read', scope: 'all' });
+  await tick(); f.controller.stopSpeech(); pending.resolve({ audio_url: '/late.wav' });
+  await running;
+  assert.equal(f.elements.dictationPlayer.playCalls || 0, 0);
+  assert.equal(f.elements.dictationPlayer.src, undefined);
+  assert.equal(f.elements.dictationPlayer.listeners.get('ended')?.size || 0, 0);
+});
+
+test('fresh STT and assistant responses still apply and can be undone', async () => {
+  const pending = deferred(); const f = await fixture({ fetchFn: () => pending.promise });
+  await f.upload();
+  pending.resolve({ ok: true, json: async () => ({ transcript: 'nuevo', instruction: { kind: 'dictate', text: 'nuevo' } }) });
+  await tick(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'Texto original nuevo');
+  f.controller.undo();
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  f.controller.dispose();
+  const assistant = await fixture({ api: async () => ({ instruction: { kind: 'insert', text: ' aceptada' } }) });
+  assistant.elements.dictationAssistantSelect.value = 'local';
+  await assistant.controller.applyInstruction({ kind: 'noop' }, 'Lucy, orden', true);
+  assert.equal(assistant.elements.dictationEditor.value, 'Texto original aceptada');
+  assistant.controller.undo();
+  assert.equal(assistant.elements.dictationEditor.value, 'Texto original');
+});
+
+test('an older recording cannot supersede a typed command issued while it was captured', async () => {
+  const pending = deferred(); let uploads = 0;
+  const f = await fixture({ api: () => pending.promise, fetchFn: async () => { uploads++; return { ok: true, json: async () => ({ instruction: { kind: 'clear' } }) }; } });
+  await f.startRecording();
+  f.elements.dictationCommandInput.value = 'orden reciente';
+  const running = f.elements.dictationCommandBtn.emit('click');
+  await f.finishRecording();
+  assert.equal(uploads, 0);
+  pending.resolve({ instruction: { kind: 'insert', text: ' reciente' } }); await running;
+  assert.equal(f.elements.dictationEditor.value, 'Texto original reciente');
+  f.controller.dispose();
+});
+
+test('disabling commands invalidates an already transcribing destructive instruction', async () => {
+  const pending = deferred(); const f = await fixture({ fetchFn: () => pending.promise });
+  await f.upload();
+  f.elements.dictationCommandsToggle.checked = false;
+  await f.elements.dictationCommandsToggle.emit('change');
+  pending.resolve({ ok: true, json: async () => ({ transcript: 'Lucy, borrá todo', instruction: { kind: 'clear' } }) });
+  await tick(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  f.controller.dispose();
+});
+
+test('cancelled confirmation preserves text and a stale accepted confirmation cannot clear a newer revision', async () => {
+  for (const choice of ['cancel', 'stale']) {
+    const pending = deferred(); const f = await fixture({ dialog: { confirm: () => pending.promise } });
+    const running = f.elements.dictationClearBtn.emit('click');
+    if (choice === 'stale') await f.edit('Texto posterior');
+    const expected = f.elements.dictationEditor.value;
+    pending.resolve(choice !== 'cancel'); await running;
+    assert.equal(f.elements.dictationEditor.value, expected);
+  }
+});
+
+test('dictation microphone does not reenter a pending permission request', async () => {
+  const pending = deferred(); let calls = 0;
+  const f = await fixture({ getUserMedia: () => { calls++; return pending.promise; } });
+  const first = f.elements.dictationMicBtn.emit('click');
+  const second = f.elements.dictationMicBtn.emit('click');
+  await tick();
+  try { assert.equal(calls, 1); }
+  finally { pending.resolve({ getTracks: () => [f.track] }); await Promise.all([first, second]); f.controller.dispose(); }
+});
+
+test('dictation closes its microphone after AudioContext initialization fails', async () => {
+  const f = await fixture({ ContextOverride: class { constructor() { throw new Error('fixture_context_failure'); } } });
+  await f.elements.dictationMicBtn.emit('click');
+  assert.ok(f.track.stopCalls >= 1);
+  f.controller.dispose();
+});
+
+test('dictation recording has a deadline independent of animation frames', async () => {
+  const f = await fixture();
+  await f.startRecording();
+  const timer = [...f.timers.values()].find(entry => entry.ms === 10000);
+  assert.ok(timer, 'capture owns a wall-clock timer');
+  timer.fn();
+  assert.equal(f.recorders.at(-1).state, 'inactive');
+  f.controller.dispose();
+});
+
+test('hidden dictation tab stops and releases capture without resuming automatically', async () => {
+  const f = await fixture();
+  await f.startRecording();
+  f.documentRoot.hidden = true;
+  await f.documentRoot.emit('visibilitychange');
+  assert.ok(f.track.stopCalls >= 1);
+  assert.equal(f.recorders.at(-1).state, 'inactive');
+  f.controller.dispose();
+});
+
+test('dictation byte limit discards capture and releases the microphone', async () => {
+  const f = await fixture();
+  await f.startRecording();
+  await f.recorders.at(-1).emit('dataavailable', { data: new Blob(['x'.repeat(4 * 1024 * 1024 + 1)]) });
+  assert.ok(f.track.stopCalls >= 1);
+  assert.match(f.elements.dictationStatus.textContent, /límite/i);
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  f.controller.dispose();
+});

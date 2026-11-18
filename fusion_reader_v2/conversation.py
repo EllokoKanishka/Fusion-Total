@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .health_observation import observe_health
+
 import json
 import os
 import re
@@ -10,11 +12,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
 from unicodedata import normalize
 
-from .config import environment_copy, environment_has, environment_value
+from .config import environment_copy, environment_has, environment_value, resolve_openclaw_command
 from .owned_subprocess import CancelSignal, run_owned
 
 
@@ -58,6 +61,7 @@ class OllamaChatProvider(ChatProvider):
     name = "ollama"
 
     def __init__(self, base_url: str = "", default_model: str = "", timeout_seconds: float | None = None) -> None:
+        self.used_models: set[str] = set()
         self.base_url = (base_url or environment_value("FUSION_READER_OLLAMA_URL") or "http://127.0.0.1:11434").rstrip(
             "/"
         )
@@ -80,7 +84,18 @@ class OllamaChatProvider(ChatProvider):
             or str(max(self.num_predict, 1024 if self.think else 1536))
         )
 
+    def _resource_available(self):
+        guard = getattr(self, "availability_guard", None)
+        return guard is None or guard()
+
     def health(self) -> dict:
+        if not self._resource_available():
+            return {
+                "ok": False,
+                "provider": self.name,
+                "model": self.default_model,
+                "detail": "dedicated_ollama_unavailable",
+            }
         req = urllib.request.Request(f"{self.base_url}/api/tags", method="GET")
         try:
             with urllib.request.urlopen(req, timeout=1.5) as resp:
@@ -105,19 +120,32 @@ class OllamaChatProvider(ChatProvider):
         available = []
         if isinstance(models, list):
             available = [str(item.get("name") or item.get("model") or "") for item in models if isinstance(item, dict)]
-        model_present = self.default_model in available if available else None
+        model_present = self.default_model in available
+        resident = None
+        try:
+            with urllib.request.urlopen(self.base_url + "/api/ps", timeout=1.5) as response:
+                rows = json.load(response).get("models", [])
+            resident = any(
+                (row.get("name") or row.get("model")) == self.default_model for row in rows if isinstance(row, dict)
+            )
+        except Exception:
+            pass
         return {
             "ok": True,
             "provider": self.name,
             "url": self.base_url,
             "model": self.default_model,
             "model_present": model_present,
-            "available_models": available[:12],
+            "model_resident": resident,
+            "connection_verified": True,
+            "available_models": available,
             "detail": "ready",
         }
 
     def install_model(self, model: str = "", *, cancel_event: CancelSignal | None = None) -> dict:
         """Install one explicitly configured Ollama model without invoking a shell."""
+        if not self._resource_available():
+            return {"ok": False, "provider": self.name, "detail": "dedicated_ollama_unavailable"}
         selected_model = str(model or self.default_model).strip()
         if not selected_model:
             return {"ok": False, "provider": self.name, "detail": "missing_model"}
@@ -134,6 +162,7 @@ class OllamaChatProvider(ChatProvider):
                 [ollama, "pull", selected_model],
                 timeout=30 * 60,
                 cancel_event=cancel_event,
+                env={**environment_copy(), "OLLAMA_HOST": self.base_url},
                 text=True,
                 output_limit=256 * 1024,
                 check=False,
@@ -154,7 +183,11 @@ class OllamaChatProvider(ChatProvider):
                 "detail": detail[-2000:] or "ollama_pull_failed",
             }
         health = self.health()
-        installed = health.get("model_present") is not False
+        installed = (
+            health.get("model_present") is True
+            if selected_model == self.default_model
+            else selected_model in health.get("available_models", [])
+        )
         return {
             "ok": bool(health.get("ok")) and installed,
             "provider": self.name,
@@ -162,7 +195,21 @@ class OllamaChatProvider(ChatProvider):
             "detail": "installed" if installed else "model_not_installed",
         }
 
-    def _chat(
+    def _chat(self, messages, **kwargs):
+        if not self._resource_available():
+            return ChatResult(
+                False, detail="dedicated_ollama_unavailable", model=kwargs.get("model") or self.default_model
+            )
+        scope = getattr(self, "resource_scope", None)
+        if scope is None:
+            return self._chat_native(messages, **kwargs)
+        try:
+            with scope(kwargs.get("model") or self.default_model, self.timeout_seconds):
+                return self._chat_native(messages, **kwargs)
+        except Exception as exc:
+            return ChatResult(False, detail=str(exc), model=kwargs.get("model") or self.default_model)
+
+    def _chat_native(
         self,
         messages: list[dict],
         *,
@@ -175,6 +222,7 @@ class OllamaChatProvider(ChatProvider):
     ) -> ChatResult:
         started = time.perf_counter()
         selected_model = model or self.default_model
+        self.used_models.add(selected_model)
         selected_think = self.think if think is None else bool(think)
         selected_num_predict = int(
             num_predict
@@ -269,6 +317,7 @@ class OllamaChatProvider(ChatProvider):
     def preload_model(self, model: str = "", *, keep_alive: str | int = "10m") -> dict:
         started = time.perf_counter()
         selected_model = str(model or self.default_model).strip()
+        self.used_models.add(selected_model)
         payload = {"model": selected_model, "stream": False, "keep_alive": keep_alive}
         req = urllib.request.Request(
             f"{self.base_url}/api/generate",
@@ -321,11 +370,7 @@ class OpenClawChatProvider(ChatProvider):
         execution_mode: str = "agent",
         agent_dir: str = "",
     ) -> None:
-        self.command = (
-            command
-            or environment_value("FUSION_READER_OPENCLAW_BIN")
-            or str(Path.home() / ".openclaw" / "bin" / "openclaw")
-        )
+        self.command = command or resolve_openclaw_command(environment)
         self.agent = str(agent or "fusion-dialogue").strip()
         self.default_model = str(default_model or "openai/gpt-5.6-sol").strip()
         self.timeout_seconds = max(10.0, float(timeout_seconds))
@@ -335,6 +380,7 @@ class OpenClawChatProvider(ChatProvider):
         if self.execution_mode not in {"agent", "infer"}:
             raise ValueError("invalid_openclaw_execution_mode")
         self.agent_dir = str(agent_dir or Path.home() / ".openclaw" / "agents" / self.agent / "agent")
+        self._last_detail: str | None = None
 
     def available(self) -> bool:
         if not self.enabled or self.agent != "fusion-dialogue":
@@ -348,7 +394,7 @@ class OpenClawChatProvider(ChatProvider):
     def health(self) -> dict:
         available = self.available()
         return {
-            "ok": available,
+            "ok": available and not self._last_detail,
             "provider": self.name,
             "command": self.command,
             "agent": self.agent,
@@ -357,8 +403,41 @@ class OpenClawChatProvider(ChatProvider):
             "execution_mode": self.execution_mode,
             "session_mode": "stateless" if self.execution_mode == "infer" else "fresh_per_turn",
             "prompt_transport": "argv" if self.execution_mode == "infer" else "file",
-            "detail": "configured" if available else ("disabled" if not self.enabled else "openclaw_unavailable"),
+            "connection_verified": self._last_detail == "",
+            "detail": (self._last_detail or ("ready" if self._last_detail == "" else "configured"))
+            if available
+            else ("disabled" if not self.enabled else "openclaw_unavailable"),
         }
+
+    @staticmethod
+    def _error_detail(raw: str, default: str = "openclaw_agent_error") -> str:
+        message = str(raw or "").lower()
+        if any(
+            s in message
+            for s in (
+                "refresh_token_reused",
+                "invalid_grant",
+                "re-authenticate",
+                "reauthenticate",
+                "signing in again",
+                "http 401",
+                "http_401",
+            )
+        ):
+            return "openclaw_auth_required"
+        if "config is invalid" in message or "invalid config" in message:
+            return "openclaw_config_invalid"
+        if "newer schema version" in message or "unsupported" in message and "schema" in message:
+            return "openclaw_version_mismatch"
+        if "gateway is running" in message:
+            return "openclaw_runtime_conflict"
+        if "429" in message or "rate limit" in message or "quota" in message:
+            return "openclaw_rate_limit"
+        if any(s in message for s in ("econnreset", "econnrefused", "fetch failed", "network error", "enotfound")):
+            return "openclaw_network_error"
+        if "unknown model" in message or "model_not_found" in message:
+            return "openclaw_model_unavailable"
+        return default
 
     @staticmethod
     def _messages_as_prompt(messages: list[dict]) -> str:
@@ -397,10 +476,22 @@ class OpenClawChatProvider(ChatProvider):
                     continue
                 if isinstance(candidate, dict):
                     nested_result = candidate.get("result")
-                    if "payloads" in candidate or (isinstance(nested_result, dict) and "payloads" in nested_result):
+                    if (
+                        "payloads" in candidate
+                        or "outputs" in candidate
+                        or "error" in candidate
+                        or (isinstance(nested_result, dict) and "payloads" in nested_result)
+                    ):
                         payload = candidate
         if not isinstance(payload, dict):
-            return "", "", "openclaw_invalid_json"
+            return "", "", OpenClawChatProvider._error_detail(clean, "openclaw_invalid_json")
+        if payload.get("ok") is False and payload.get("error"):
+            default = "openclaw_infer_error" if payload.get("capability") == "model.run" else "openclaw_agent_error"
+            return (
+                "",
+                str(payload.get("model") or ""),
+                OpenClawChatProvider._error_detail(str(payload["error"]), default),
+            )
         outputs_value = payload.get("outputs")
         if payload.get("capability") == "model.run" or isinstance(outputs_value, list):
             model = str(payload.get("model") or "").strip()
@@ -440,6 +531,13 @@ class OpenClawChatProvider(ChatProvider):
     def chat(
         self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
     ) -> ChatResult:
+        result = self._chat_once(messages, model=model, think=think, num_predict=num_predict)
+        self._last_detail = "" if result.ok else result.detail
+        return result
+
+    def _chat_once(
+        self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
+    ) -> ChatResult:
         del num_predict
         started = time.perf_counter()
         selected_model = str(model or self.default_model).strip()
@@ -449,7 +547,9 @@ class OpenClawChatProvider(ChatProvider):
             return ChatResult(False, model=selected_model, detail="openclaw_unavailable")
         prompt = self._messages_as_prompt(messages)
         env = dict(self.environment) if self.environment is not None else environment_copy()
-        env["PATH"] = f"{Path.home() / '.openclaw' / 'bin'}:{env.get('PATH', '')}"
+        command_dir = Path(self.command).parent if os.path.isabs(self.command) else None
+        if command_dir is not None:
+            env["PATH"] = f"{command_dir}:{env.get('PATH', '')}"
         thinking = "off"
         if bool(think):
             thinking = environment_value("FUSION_READER_OPENAI_THINKING_LEVEL", "medium") or "medium"
@@ -466,6 +566,8 @@ class OpenClawChatProvider(ChatProvider):
                     "model",
                     "run",
                     "--local",
+                    "--agent",
+                    self.agent,
                     "--model",
                     selected_model,
                     "--thinking",
@@ -487,7 +589,6 @@ class OpenClawChatProvider(ChatProvider):
                 cmd = [
                     self.command,
                     "agent",
-                    "--local",
                     "--agent",
                     self.agent,
                     "--session-id",
@@ -533,6 +634,8 @@ class OpenClawChatProvider(ChatProvider):
         answer, reported_model, detail = self._extract_answer(proc.stdout or "")
         if detail == "openclaw_invalid_json" and proc.stderr:
             answer, reported_model, detail = self._extract_answer(proc.stderr)
+        if not answer and proc.stderr:
+            detail = self._error_detail(proc.stderr, detail)
         duration_ms = int((time.perf_counter() - started) * 1000)
         if proc.returncode != 0 and not answer:
             return ChatResult(
@@ -621,7 +724,7 @@ class SelectableChatProvider(ChatProvider):
         ]
 
     def health(self) -> dict:
-        active = dict(self.active.health() or {})
+        active = dict(observe_health(self.active) or {})
         return {
             **active,
             "ok": bool(active.get("ok")),
@@ -673,8 +776,15 @@ class ConversationCore:
         self.max_intro_chunks_per_reference = max(
             1, int(environment_value("FUSION_READER_CHAT_REFERENCE_INTRO_CHUNKS", "2") or "2")
         )
+        # Character budget across all input messages, shared by local/cloud and
+        # every reasoning pass. This is deliberately not a tokenizer estimate.
+        self.max_input_chars = max(
+            8192, int(environment_value("FUSION_READER_CHAT_MAX_INPUT_CHARS", "64000") or "64000")
+        )
         mode_from_env = str(environment_value("FUSION_READER_REASONING_MODE") or "").strip().lower()
-        if mode_from_env not in {"normal", "thinking", "supreme"}:
+        if mode_from_env == "contrapunto":
+            mode_from_env = "pensamiento_critico"
+        if mode_from_env not in {"normal", "thinking", "supreme", "pensamiento_critico"}:
             mode_from_env = (
                 "thinking"
                 if getattr(self.provider, "think", False) or not environment_has("FUSION_READER_CHAT_THINK")
@@ -846,9 +956,10 @@ class ConversationCore:
         veil: str = "lucy",
         free_mode: bool = False,
     ) -> ChatResult:
+        messages = self._bounded_messages(messages)
         profile = self._resolve_reasoning_profile(reasoning_mode)
         if profile.passes <= 1:
-            result = self.provider.chat(messages, model=model, think=profile.think, num_predict=profile.num_predict)
+            result = self._chat(messages, model=model, think=profile.think, num_predict=profile.num_predict)
             return ChatResult(
                 result.ok,
                 answer=result.answer,
@@ -892,7 +1003,7 @@ class ConversationCore:
         free_mode: bool = False,
     ) -> ChatResult:
         total_ms = 0
-        draft = self.provider.chat(messages, model=model, think=True, num_predict=profile.num_predict)
+        draft = self._chat(messages, model=model, think=True, num_predict=profile.num_predict)
         total_ms += draft.duration_ms
         if not draft.ok:
             return ChatResult(
@@ -903,7 +1014,7 @@ class ConversationCore:
                 reasoning_mode=profile.key,
                 reasoning_passes=1,
             )
-        transcript = self._messages_as_text(messages)
+        transcript = self._messages_as_text(messages[:-1])
         persona_overlay = self._persona_overlay(
             reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil
         )
@@ -922,7 +1033,8 @@ class ConversationCore:
                 "content": f"CONVERSACION BASE:\n{transcript}\n\nBORRADOR ACTUAL:\n{draft.answer}",
             },
         ]
-        review = self.provider.chat(
+        review_messages.append(dict(messages[-1]))
+        review = self._chat(
             review_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict
         )
         total_ms += review.duration_ms
@@ -963,7 +1075,8 @@ class ConversationCore:
                 ),
             },
         ]
-        final = self.provider.chat(
+        final_messages.append(dict(messages[-1]))
+        final = self._chat(
             final_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict
         )
         total_ms += final.duration_ms
@@ -1000,7 +1113,7 @@ class ConversationCore:
     ) -> ChatResult:
         total_ms = 0
         # PASO 1: TESIS (Lucy Cunningham)
-        tesis = self.provider.chat(messages, model=model, think=True, num_predict=profile.num_predict)
+        tesis = self._chat(messages, model=model, think=True, num_predict=profile.num_predict)
         total_ms += tesis.duration_ms
         if not tesis.ok:
             return ChatResult(
@@ -1012,7 +1125,7 @@ class ConversationCore:
                 reasoning_passes=1,
             )
 
-        transcript = self._messages_as_text(messages)
+        transcript = self._messages_as_text(messages[:-1])
         persona_overlay = self._persona_overlay(
             reasoning_mode or profile.key, dialogue=dialogue, profile=profile_str, free_mode=free_mode, veil=veil
         )
@@ -1037,7 +1150,8 @@ class ConversationCore:
                 "content": f"CONTEXTO DEL LECTOR:\n{transcript}\n\nTESIS PROPUESTA:\n{tesis.answer}",
             },
         ]
-        antitesis = self.provider.chat(
+        antitesis_messages.append(dict(messages[-1]))
+        antitesis = self._chat(
             antitesis_messages, model=model, think=True, num_predict=profile.review_num_predict or profile.num_predict
         )
         total_ms += antitesis.duration_ms
@@ -1078,7 +1192,8 @@ class ConversationCore:
                 ),
             },
         ]
-        sintesis = self.provider.chat(
+        sintesis_messages.append(dict(messages[-1]))
+        sintesis = self._chat(
             sintesis_messages, model=model, think=True, num_predict=profile.final_num_predict or profile.num_predict
         )
         total_ms += sintesis.duration_ms
@@ -1337,6 +1452,67 @@ class ConversationCore:
 
         return " ".join(parts).strip()
 
+    @staticmethod
+    def _clip_context(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        marker = "\n[Contexto recortado por limite global.]\n"
+        if limit <= len(marker):
+            return marker[:limit]
+        available = limit - len(marker)
+        # Retain both ends (late matches, latest turns and revision instructions).
+        head = (available + 1) // 2
+        tail = available - head
+        return text[:head] + marker + (text[-tail:] if tail else "")
+
+    def _bounded_messages(self, messages: list[dict]) -> list[dict]:
+        result = [dict(item, content=str(item.get("content") or "")) for item in messages]
+        if sum(len(item["content"]) for item in result) <= self.max_input_chars:
+            return result
+        # Keep the persona and current question ahead of historical material.
+        remaining = self.max_input_chars
+        system_indexes = [i for i, item in enumerate(result) if item.get("role") == "system"]
+        for i in system_indexes:
+            limit = min(max(0, remaining - 1024), len(result[i]["content"]))
+            result[i]["content"] = self._clip_context(result[i]["content"], limit)
+            remaining -= len(result[i]["content"])
+        last = len(result) - 1
+        if last >= 0 and last not in system_indexes:
+            result[last]["content"] = self._clip_context(result[last]["content"], remaining // 2)
+            remaining -= len(result[last]["content"])
+        middle = [i for i in range(last) if i not in system_indexes]
+        # Water-fill section allowances. A huge note or history cannot consume
+        # all space before another section is considered.
+        allowances = {i: 0 for i in middle}
+        pending = list(middle)
+        while pending and remaining:
+            share = max(1, remaining // len(pending))
+            for i in list(reversed(pending)):
+                amount = min(share, len(result[i]["content"]) - allowances[i], remaining)
+                allowances[i] += amount
+                remaining -= amount
+                if allowances[i] == len(result[i]["content"]):
+                    pending.remove(i)
+        for i in middle:
+            result[i]["content"] = self._clip_context(result[i]["content"], allowances[i])
+        return result
+
+    def _chat(self, messages: list[dict], **kwargs) -> ChatResult:
+        return self.provider.chat(self._bounded_messages(messages), **kwargs)
+
+    def _requests_context(self, question: str, pattern: str) -> bool:
+        clean = self._normalize_intent_text(question)
+        for clause in re.split(r"[.;\n]|\bpero\b", clean):
+            for match in re.finditer(pattern, clause):
+                prefix = clause[: match.end()]
+                if not re.search(
+                    r"\b(?:sin|ignora|ignorar|omite|omitir|excluye|excluir|evita|evitar)\b|"
+                    r"\bno\s+(?:(?:quiero|necesito)\s+que\s+)?(?:us\w*|inclu\w*|consult\w*|tom\w*|mir\w*|traig\w*|analiz\w*|analic\w*|revis\w*|mostr\w*)\b",
+                    prefix,
+                ):
+                    return True
+        return False
+
     def _messages(
         self,
         question: str,
@@ -1361,7 +1537,26 @@ class ConversationCore:
                 include_blocks = False
 
         context = self._context_text(
-            question, snapshot, history=history or [], include_document=include_doc, include_blocks=include_blocks
+            question,
+            snapshot,
+            history=history or [],
+            include_document=include_doc,
+            include_blocks=include_blocks,
+            include_notes=not free_mode
+            or self._requests_context(
+                question,
+                r"\b(?:mis|estas|esas|nuestras|tus)\s+(?:notas?|apuntes?)\b|"
+                r"\b(?:notas|apuntes)\s+guardad[oa]s\b|"
+                r"\b(?:analiz\w*|analic\w*|revis\w*|muestra\w*|mostr\w*|lee\w*|usa\w*|consult\w*|inclu\w*)\b"
+                r"[^.;?]{0,60}\b(?:notas?|apuntes?)\b",
+            ),
+            include_focus=not free_mode
+            or self._requests_context(
+                question,
+                r"\b(?:este|ese|mi)\s+foco\b|\bfoco\s+actual\b|"
+                r"\b(?:analiz\w*|analic\w*|revis\w*|muestra\w*|mostr\w*|lee\w*|usa\w*|consult\w*|inclu\w*|que\s+(?:dice|hay))\b"
+                r"[^.;?]{0,60}\bfoco\b|\b(?:este|ese|aquel|el)\s+bloque\b",
+            ),
         )
         persona_overlay = self._persona_overlay(
             reasoning_mode, dialogue=dialogue, profile=profile, free_mode=free_mode, veil=veil
@@ -1409,12 +1604,13 @@ class ConversationCore:
             ]
             lab_history = snapshot.get("laboratory_history")
             lab_context = self._laboratory_context_text(lab_history if isinstance(lab_history, list) else [])
+            lab_contents = set(self._laboratory_user_contents(lab_history if isinstance(lab_history, list) else []))
             if lab_context:
                 messages.append({"role": "user", "content": f"MATERIAL RECIENTE DEL LABORATORIO:\n{lab_context}"})
             for item in (history or [])[-6:]:
                 role = str(item.get("role") or "")
                 content = str(item.get("content") or "").strip()
-                if role in {"user", "assistant"} and content:
+                if role in {"user", "assistant"} and content and not (role == "user" and content in lab_contents):
                     messages.append({"role": role, "content": content})
             messages.append({"role": "user", "content": question})
             return messages
@@ -1455,25 +1651,27 @@ class ConversationCore:
             {"role": "user", "content": f"CONTEXTO DEL LECTOR:\n{context}"},
         ]
         lab_context = self._laboratory_context_text(history or [])
+        lab_contents = set(self._laboratory_user_contents(history or []))
         if lab_context:
             messages.append({"role": "user", "content": f"MATERIAL RECIENTE DEL LABORATORIO:\n{lab_context}"})
         for item in (history or [])[-8:]:
             role = str(item.get("role") or "")
             content = str(item.get("content") or "").strip()
-            if role in {"user", "assistant"} and content:
+            if role in {"user", "assistant"} and content and not (role == "user" and content in lab_contents):
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": question})
         return messages
 
+    @staticmethod
+    def _laboratory_user_contents(history: list[dict]) -> list[str]:
+        return [
+            str(item.get("content") or "").strip()
+            for item in history[-10:]
+            if item.get("role") == "user" and str(item.get("content") or "").strip()
+        ][-4:]
+
     def _laboratory_context_text(self, history: list[dict]) -> str:
-        user_items: list[str] = []
-        for item in history[-10:]:
-            if str(item.get("role") or "") != "user":
-                continue
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            user_items.append(content)
+        user_items = self._laboratory_user_contents(history)
         if not user_items:
             return ""
         clipped: list[str] = []
@@ -1490,6 +1688,8 @@ class ConversationCore:
         history: list[dict] | None = None,
         include_document: bool = True,
         include_blocks: bool = True,
+        include_notes: bool = True,
+        include_focus: bool = True,
     ) -> str:
         document_text = str(snapshot.get("document_text") or "")
         if len(document_text) > self.max_document_chars:
@@ -1501,20 +1701,26 @@ class ConversationCore:
         next_chunk = str(snapshot.get("next_chunk") or "")
         notes_value = snapshot.get("notes")
         notes = notes_value if isinstance(notes_value, list) else []
-        document_catalog = self._document_catalog_text(snapshot)
-        reference_catalog = self._reference_catalog_text(snapshot.get("reference_documents"))
-        laboratory_focus = self._laboratory_focus_text(snapshot.get("laboratory_focus"))
-        relevant_document_text = self._relevant_documents_text(question, snapshot, history=history or [])
+        document_catalog = self._document_catalog_text(snapshot) if include_blocks else ""
+        reference_catalog = self._reference_catalog_text(snapshot.get("reference_documents")) if include_blocks else ""
+        laboratory_focus = self._laboratory_focus_text(snapshot.get("laboratory_focus")) if include_focus else ""
+        relevant_document_text = (
+            self._relevant_documents_text(question, snapshot, history=history or []) if include_blocks else ""
+        )
         notes_text = "\n".join(
-            f"- Bloque {int(note.get('chunk_number') or 0)}: {str(note.get('text') or '').strip()}"
-            for note in notes[:40]
+            f"- Bloque {int(note.get('chunk_number') or 0)}: {self._clip_context(str(note.get('text') or '').strip(), 2000)}"
+            for note in (notes[:40] if include_notes else [])
             if str(note.get("text") or "").strip()
         )
-        lines = [
-            f"Titulo: {snapshot.get('title') or 'Sin titulo'}",
-            f"Documento ID: {snapshot.get('doc_id') or ''}",
-            f"Bloque visible: {snapshot.get('current') or 0} de {snapshot.get('total') or 0}",
-        ]
+        lines = (
+            [
+                f"Titulo: {snapshot.get('title') or 'Sin titulo'}",
+                f"Documento ID: {snapshot.get('doc_id') or ''}",
+                f"Bloque visible: {snapshot.get('current') or 0} de {snapshot.get('total') or 0}",
+            ]
+            if include_blocks or include_document
+            else []
+        )
 
         if include_blocks:
             lines.extend(
@@ -1534,13 +1740,8 @@ class ConversationCore:
                 ]
             )
 
-        lines.extend(
-            [
-                "",
-                "NOTAS DEL LECTOR:",
-                notes_text or "[No hay notas guardadas.]",
-            ]
-        )
+        if include_notes:
+            lines.extend(["", "NOTAS DEL LECTOR:", notes_text or "[No hay notas guardadas.]"])
 
         if reference_catalog:
             lines.extend(["", "DOCUMENTOS DE CONSULTA:", reference_catalog])
@@ -1628,7 +1829,7 @@ class ConversationCore:
         if reason:
             lines.append(f"  motivo: {reason}")
         if text:
-            lines.append(f"  texto: {text[:500].rstrip()}{' [recortado]' if len(text) > 500 else ''}")
+            lines.append(f"  texto: {self._matched_excerpt(text, query, 500)}")
         return "\n".join(lines).strip()
 
     def _relevant_documents_text(self, question: str, snapshot: dict, history: list[dict] | None = None) -> str:
@@ -1637,9 +1838,9 @@ class ConversationCore:
             return ""
         keyword_text = " ".join(
             [
-                str(question or ""),
+                self._clip_context(str(question or ""), 8000),
                 " ".join(
-                    str(item.get("content") or "")
+                    self._clip_context(str(item.get("content") or ""), 2000)
                     for item in (history or [])[-4:]
                     if isinstance(item, dict) and str(item.get("role") or "") == "user"
                 ),
@@ -1712,10 +1913,29 @@ class ConversationCore:
             text = str(item.get("text") or "").strip()
             if not text:
                 continue
-            if len(text) > 420:
-                text = text[:420].rstrip() + " [recortado]"
+            text = self._matched_excerpt(text, keyword_text, 420)
             lines.append(f"- Bloque {int(item.get('chunk_number') or index + 1)}: {text}")
         return "\n".join(lines)
+
+    def _matched_excerpt(self, text: str, keyword_text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        # Search token positions in the original source so casing, accents and
+        # decomposed Unicode survive. Prefer the window with most query terms.
+        keywords = {normalize("NFC", word).casefold() for word in self._meaningful_tokens(keyword_text)}
+        matches = [
+            m
+            for m in re.finditer(r"[^\W_]+(?:[\u0300-\u036f]+[^\W_]*)*", text)
+            if normalize("NFC", m.group()).casefold() in keywords
+        ]
+        positions = [m.start() for m in matches]
+        starts = [max(0, min(len(text) - limit, pos - limit // 4)) for pos in positions] or [0]
+        start = max(starts, key=lambda pos: bisect_left(positions, pos + limit) - bisect_left(positions, pos))
+        return (
+            ("[recortado] " if start else "")
+            + text[start : start + limit].strip()
+            + (" [recortado]" if start + limit < len(text) else "")
+        )
 
     def _select_chunk_indexes(self, record: dict, keyword_text: str, requested_chunk_numbers: list[int]) -> list[int]:
         chunks = record.get("chunks")

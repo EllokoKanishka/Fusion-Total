@@ -8,6 +8,7 @@ from fusion_reader_v2 import FusionReaderV2, import_document_bytes
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.routes.documents import load_imported_document, resolve_library_path
+from fusion_reader_v2.web.downloads import cached_audio_path
 
 
 class ReadingResponder(Protocol):
@@ -26,6 +27,19 @@ class ReadingResponder(Protocol):
 
 
 def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -> bool:
+    if path == "/api/read/timings":
+        audio_url = str(payload.get("audio_url") or "")
+        text = responder.app.session.current_chunk()
+        voice = responder.app.voice
+        audio = cached_audio_path(responder.context, audio_url) if audio_url.startswith("/audio/") else None
+        expected = responder.app.cache.path_for(text, voice.voice, voice.language)
+        if not text or audio is None or audio != expected:
+            responder._json(409, {"ok": False, "state": "unavailable", "error": "audio_identity_changed"})
+            return True
+        responder._json(
+            200, responder.context.reading_timings.start(audio, text, voice.language, retry=bool(payload.get("retry")))
+        )
+        return True
     if path == "/api/quick-text":
         text = str(payload.get("text") or "")
         if not text.strip():
@@ -111,8 +125,9 @@ def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -
             raise ValueError("invalid_base64") from exc
         if len(decoded) > responder.settings.limits.upload_max_bytes:
             raise ValueError("upload_too_large")
+        token = responder.context.reserve_import(role)
         imported = import_document_bytes(filename, decoded, mime=mime)
-        responder._json(200, load_imported_document(responder.context, imported, role=role))
+        responder._json(200, load_imported_document(responder.context, imported, role=role, import_token=token))
         return True
     if path == "/api/reference/promote":
         responder._json(

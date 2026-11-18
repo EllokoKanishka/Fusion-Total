@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import codecs
 import io
 import csv
 import functools
@@ -179,7 +180,7 @@ def import_document_path(
 
     if suffix in RTF_SUFFIXES:
         report_progress(progress, "converting", 0, 0, "Convirtiendo RTF a texto...")
-        return imported(safe_name, rtf_to_text(decode_text(read_data())), "rtf", "rtf convertido a texto")
+        return imported(safe_name, rtf_to_text(read_data().decode("latin-1")), "rtf", "rtf convertido a texto")
 
     if suffix in DOCX_SUFFIXES:
         report_progress(progress, "converting", 0, 0, "Extrayendo DOCX...")
@@ -218,7 +219,7 @@ def imported(filename: str, text: str, source_type: str, detail: str, raw_text: 
         text=clean,
         source_type=source_type,
         detail=detail,
-        raw_text=normalize_raw_text(raw_text),
+        raw_text=str(raw_text or ""),
     )
 
 
@@ -293,11 +294,109 @@ def html_to_text(text: str) -> str:
 
 
 def rtf_to_text(text: str) -> str:
-    text = re.sub(r"\\par[d]?", "\n", text)
-    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
-    text = re.sub(r"\\[a-zA-Z]+\d* ?", " ", text)
-    text = text.replace("{", " ").replace("}", " ")
-    return text
+    """Read RTF text runs, scoped destinations, code pages and Unicode fallbacks."""
+    output: list[str] = []
+    pending = bytearray()
+    stack: list[tuple[bool, int, str]] = []
+    ignored, fallback_count, encoding = False, 1, "cp1252"
+    skip = 0
+    destinations = {
+        "fonttbl",
+        "colortbl",
+        "stylesheet",
+        "info",
+        "pict",
+        "object",
+        "header",
+        "headerl",
+        "headerr",
+        "footer",
+        "footerl",
+        "footerr",
+        "annotation",
+        "datastore",
+        "themedata",
+        "colorschememapping",
+    }
+    symbols = {
+        "par": "\n",
+        "line": "\n",
+        "tab": "\t",
+        "emdash": "—",
+        "endash": "–",
+        "lquote": "‘",
+        "rquote": "’",
+        "ldblquote": "“",
+        "rdblquote": "”",
+        "bullet": "•",
+    }
+
+    def flush() -> None:
+        if pending:
+            output.append(pending.decode(encoding, errors="replace"))
+            pending.clear()
+
+    def emit(value: str) -> None:
+        nonlocal skip
+        for char in value:
+            if skip:
+                skip -= 1
+            elif not ignored:
+                if ord(char) <= 255:
+                    pending.append(ord(char))
+                else:
+                    flush()
+                    output.append(char)
+
+    token = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?|\\'([0-9a-fA-F]{2})|\\([^a-zA-Z])|([{}])|([^\\{}\r\n]+)|[\r\n]")
+    index = 0
+    while index < len(text):
+        match = token.match(text, index)
+        if match is None:
+            raise ValueError("invalid_rtf_control")
+        index = match.end()
+        word, number, hex_byte, escaped, brace, literal = match.groups()
+        if brace:
+            flush()
+            skip = 0
+            if brace == "{":
+                stack.append((ignored, fallback_count, encoding))
+            elif stack:
+                ignored, fallback_count, encoding = stack.pop()
+        elif hex_byte is not None:
+            emit(chr(int(hex_byte, 16)))
+        elif escaped is not None:
+            if escaped == "*":
+                flush()
+                ignored = True
+            else:
+                emit({"~": "\xa0", "-": "\xad", "_": "‑"}.get(escaped, escaped))
+        elif literal is not None:
+            emit(literal)
+        elif word:
+            flush()
+            if word in destinations:
+                ignored = True
+            elif word == "bin" and number is not None:
+                index += max(0, int(number))
+            elif word == "uc" and number is not None:
+                fallback_count = max(0, int(number))
+            elif word == "ansicpg" and number is not None:
+                encoding = f"cp{int(number)}"
+                try:
+                    codecs.lookup(encoding)
+                except LookupError as exc:
+                    raise ValueError("unsupported_rtf_codepage") from exc
+            elif word == "u" and number is not None:
+                if not ignored:
+                    output.append(chr(int(number) & 0xFFFF))
+                skip = fallback_count
+            elif word in symbols and not ignored:
+                output.append(symbols[word])
+            elif word in {"ansi", "mac", "pc", "pca"}:
+                encoding = {"ansi": "cp1252", "mac": "mac_roman", "pc": "cp437", "pca": "cp850"}[word]
+    flush()
+    return "".join(output).encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
 
 
 def _safe_archive_xml(data: bytes, required: str, limits: ArchiveLimits) -> bytes:
@@ -310,10 +409,14 @@ def _safe_archive_xml(data: bytes, required: str, limits: ArchiveLimits) -> byte
             required_info: zipfile.ZipInfo | None = None
             for info in entries:
                 path = Path(info.filename.replace("\\", "/"))
-                if info.is_dir() or path.is_absolute() or ".." in path.parts:
+                if path.is_absolute() or ".." in path.parts:
                     raise ValueError("document_archive_invalid")
                 if info.flag_bits & 0x1:
                     raise ValueError("document_archive_invalid")
+                if info.is_dir():
+                    if info.file_size:
+                        raise ValueError("document_archive_invalid")
+                    continue
                 if info.file_size > limits.max_entry_bytes:
                     raise ValueError("document_archive_too_large")
                 total += info.file_size
@@ -395,7 +498,7 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
     report_progress(progress, "ocr_start", 0, 0, "PDF escaneado detectado. Iniciando OCR...")
     ocr_text = ocr_pdf_to_text(path, progress=progress)
     report_progress(progress, "converted", 1, 1, "OCR terminado.")
-    return ocr_text, "pdf escaneado: OCR con Tesseract y marcas de pagina", ocr_text
+    return ocr_text, "pdf escaneado: OCR automático de página completa con Tesseract y marcas de pagina", ocr_text
 
 
 def mark_pdf_pages(text: str, *, clean: bool = True) -> str:
@@ -646,29 +749,73 @@ def ocr_pdf_page_to_text(path: Path, page: int, pdftoppm: str, tesseract: str) -
 
 
 def structured_ocr_image(image_path: Path, tesseract: str) -> str:
-    image = Image.open(image_path)
+    # Split only a strong, repeated gutter, keeping full-width text above and
+    # below it. Otherwise retain the engine's automatic full-page reading.
+    with Image.open(image_path) as image:
+        regions = _ocr_column_regions(image)
+        if regions is None:
+            return run_tesseract_plain(tesseract, image_path, psm=3).strip()
+        with tempfile.TemporaryDirectory(prefix="fusion_ocr_regions_") as tmp:
+            pieces = []
+            for index, box in enumerate(regions):
+                target = Path(tmp) / f"region-{index}.png"
+                save_ocr_crop(image, box, target)
+                recognized = run_tesseract_plain(tesseract, target).strip()
+                if recognized:
+                    pieces.append(recognized)
+            return "\n\n".join(pieces)
+
+
+def _ocr_column_regions(image: Image.Image) -> list[tuple[int, int, int, int]] | None:
     width, height = image.size
-    top_cut = max(420, int(height * 0.26))
-    gutter = max(10, int(width * 0.015))
-
-    with tempfile.TemporaryDirectory(prefix="fusion_ocr_crops_") as tmp:
-        root = Path(tmp)
-        top = root / "top.png"
-        left = root / "left.png"
-        right = root / "right.png"
-        save_ocr_crop(image, (0, 0, width, min(height, top_cut)), top, upscale=1.2)
-        save_ocr_crop(image, (0, top_cut, max(1, width // 2 - gutter), height), left, upscale=1.35)
-        save_ocr_crop(image, (min(width - 1, width // 2 + gutter), top_cut, width, height), right, upscale=1.35)
-
-        heading_text = structured_plain_ocr_text(run_tesseract_plain(tesseract, top), headings_only=True)
-        left_text = structured_plain_ocr_text(run_tesseract_plain(tesseract, left))
-        right_text = structured_plain_ocr_text(run_tesseract_plain(tesseract, right))
-
-    pieces = [piece for piece in (heading_text, left_text, right_text) if piece.strip()]
-    text = "\n\n".join(pieces)
-    if not enough_plain_page_signal(text):
-        return ""
-    return text
+    if width < 300 or height < 300:
+        return None
+    ink = image.convert("L").point(lambda value: 255 if value < 245 else 0)
+    body_top = int(height * 0.20)
+    body = ink.crop((0, body_top, width, height))
+    if body.getbbox() is None:
+        return None
+    # A genuine column gap stays blank across the lower page; ordinary gaps
+    # between words on one line do not justify imposing a page layout.
+    runs = []
+    start = None
+    for x in range(int(width * 0.30), int(width * 0.70)):
+        blank = body.crop((x, 0, x + 1, height - body_top)).getbbox() is None
+        if blank and start is None:
+            start = x
+        elif not blank and start is not None:
+            runs.append((start, x))
+            start = None
+    if start is not None:
+        runs.append((start, int(width * 0.70)))
+    runs = [(left, right) for left, right in runs if right - left >= max(15, width * 0.025)]
+    if len(runs) != 1:
+        return None
+    left, right = runs[0]
+    left_ink = sum(body.crop((0, 0, left, height - body_top)).getdata())
+    right_ink = sum(body.crop((right, 0, width, height - body_top)).getdata())
+    if min(left_ink, right_ink) < 0.15 * (left_ink + right_ink):
+        return None
+    occupied = [y for y in range(height) if ink.crop((0, y, width, y + 1)).getbbox() is not None]
+    bands: list[list[int]] = []
+    for y in occupied:
+        if bands and y - bands[-1][1] <= 3:
+            bands[-1][1] = y + 1
+        else:
+            bands.append([y, y + 1])
+    column_lines = [
+        (top, bottom)
+        for top, bottom in bands
+        if ink.crop((left, top, right, bottom)).getbbox() is None
+        and ink.crop((0, top, left, bottom)).getbbox() is not None
+        and ink.crop((right, top, width, bottom)).getbbox() is not None
+    ]
+    if len(column_lines) < 3:
+        return None
+    top = max(0, column_lines[0][0] - 4)
+    bottom = min(height, column_lines[-1][1] + 4)
+    candidates = [(0, 0, width, top), (0, top, left, bottom), (right, top, width, bottom), (0, bottom, width, height)]
+    return [box for box in candidates if box[3] > box[1] and ink.crop(box).getbbox() is not None]
 
 
 def save_ocr_crop(image: Image.Image, box: tuple[int, int, int, int], target: Path, upscale: float = 1.0) -> None:
@@ -681,9 +828,9 @@ def save_ocr_crop(image: Image.Image, box: tuple[int, int, int, int], target: Pa
     crop.save(target)
 
 
-def run_tesseract_plain(tesseract: str, image_path: Path) -> str:
+def run_tesseract_plain(tesseract: str, image_path: Path, *, psm: int = 6) -> str:
     result = run_owned(
-        [tesseract, str(image_path), "stdout", "-l", "spa+eng", "--oem", "1", "--psm", "6"],
+        [tesseract, str(image_path), "stdout", "-l", "spa+eng", "--oem", "1", "--psm", str(psm)],
         capture_output=True,
         text=True,
         timeout=180,

@@ -29,20 +29,22 @@ El diálogo usa exclusivamente el agente `fusion-dialogue`. No usa ni modifica:
 
 - `main`;
 - `fusion-research`;
-- canales, bindings, Telegram o gateway;
+- canales, bindings o Telegram; tampoco modifica la configuración del gateway;
 - búsqueda web.
 
 Fusion ofrece dos modos de ejecución explícitos:
 
-- `agent` (predeterminado): ejecuta `openclaw agent --local` con un
-  `--session-id` nuevo en cada turno;
+- `agent` (predeterminado): ejecuta `openclaw agent --agent fusion-dialogue`
+  con un `--session-id` nuevo en cada turno. Usa el gateway existente; no fuerza
+  `--local`, porque las versiones actuales rechazan abrir el mismo estado local
+  mientras el gateway lo posee;
 - `infer` (experimental): ejecuta `openclaw infer model run --local` sin
   sesión, herramientas, memoria ni archivos de bootstrap.
 
 Fusion ya envía la conversación completa serializada por `ConversationCore`.
 En modo `infer`, `OPENCLAW_AGENT_DIR` apunta al almacén exclusivo de
 `fusion-dialogue`, por lo que conserva su OAuth y su orden de autenticación sin
-usar `main`. Los errores fallan cerrados: nunca se vuelve silenciosamente a
+usar `main`; se pasa también `--agent fusion-dialogue` explícitamente. Los errores fallan cerrados: nunca se vuelve silenciosamente a
 `agent` ni al modelo local.
 
 OpenClaw no ofrece un argumento de archivo para el prompt de `infer model run`.
@@ -122,6 +124,36 @@ cambio sobre un `main` posterior, la comprobación integrada debe repetirse con
 el nuevo head antes de fusionarlo o activarlo de forma permanente.
 
 ## Diagnóstico
+
+Fusion prioriza `~/.npm-global/bin/openclaw` cuando está instalado, antes de la
+copia histórica de `~/.openclaw/bin`. Un `FUSION_READER_OPENCLAW_BIN` explícito
+siempre tiene prioridad. No mezclar una CLI antigua con una configuración o
+bases SQLite creadas por una versión nueva; no ejecutar `doctor --fix` con la
+copia antigua sobre el estado compartido.
+
+La corrección de noviembre identificó dos fallos independientes: CLI antigua
+incompatible y OAuth rechazado con `refresh_token_reused`. El adaptador informa
+errores específicos de autenticación, configuración, versión, red y límites;
+una CLI presente ya no oculta un fallo de conexión comprobado. El siguiente
+turno exitoso restablece el estado de conexión.
+
+Para renovar sólo la autorización del agente de Panda, completar personalmente:
+
+```bash
+~/.npm-global/bin/openclaw models auth login --provider openai --agent fusion-dialogue --profile-id openai:pandafusion
+```
+
+No copiar refresh tokens entre perfiles ni agentes. Una autorización revocada
+requiere iniciar sesión; no se corrige con reintentos ni con un cambio silencioso
+al modelo local.
+
+Si quedan perfiles antiguos copiados, fijar el orden **sólo para Fusion** después
+de guardar el orden anterior con `models auth order get --agent fusion-dialogue
+--provider openai --json`:
+
+```bash
+~/.npm-global/bin/openclaw models auth order set --provider openai --agent fusion-dialogue openai:pandafusion
+```
 
 `GET /api/status` y `GET /api/dialogue/status` publican `chat_provider`, que
 incluye selección, catálogo, modelo y disponibilidad. Si OpenClaw o la
