@@ -27,27 +27,21 @@ class SystemdUnitPathTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             systemd_unit_path.escape_systemd_path("Fusion Total")
 
-    def test_installer_uses_escaped_paths_for_path_only_systemd_directives(self):
+    def test_installer_lets_launcher_own_working_directory_and_dotenv(self):
         installer = (REPO_ROOT / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
-
-        self.assertIn('SYSTEMD_ROOT="$("$PYTHON_BIN" "$ROOT/scripts/systemd_unit_path.py" "$ROOT")"', installer)
-        self.assertIn("EnvironmentFile=$SYSTEMD_ROOT/.env", installer)
-        self.assertIn("WorkingDirectory=$SYSTEMD_ROOT", installer)
         self.assertIn('ExecStart=/usr/bin/bash "$ROOT/scripts/start_pandafusion_systemd.sh"', installer)
-        self.assertNotIn('EnvironmentFile="$ROOT/.env"', installer)
-        self.assertNotIn('WorkingDirectory="$ROOT"', installer)
+        self.assertNotIn("EnvironmentFile=", installer)
+        self.assertNotIn("WorkingDirectory=", installer)
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze unavailable")
     def test_systemd_analyze_accepts_generated_style_paths_with_spaces(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "Fusion Total"
             root.mkdir()
-            (root / ".env").write_text("FUSION_TEST=1\n", encoding="utf-8")
             start = root / "start.sh"
             start.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             start.chmod(0o755)
 
-            escaped_root = systemd_unit_path.escape_systemd_path(str(root))
             unit = Path(temp_dir) / "pandafusion-test.service"
             unit.write_text(
                 "\n".join(
@@ -56,9 +50,7 @@ class SystemdUnitPathTests(unittest.TestCase):
                         "Description=PandaFusion path escaping regression test",
                         "[Service]",
                         "Type=simple",
-                        f"EnvironmentFile={escaped_root}/.env",
-                        f"WorkingDirectory={escaped_root}",
-                        f'ExecStart="{root}/start.sh"',
+                        f'ExecStart=/usr/bin/bash "{root}/start.sh"',
                         "",
                     ]
                 ),

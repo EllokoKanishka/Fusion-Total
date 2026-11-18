@@ -483,3 +483,67 @@ test('Spanish accented imperatives and a final bare wake word work in mixed dict
   assert.equal(hasLucyInvocation('Lucí cambia azul por verde'), true);
   assert.equal(hasLucyInvocation('Lucyfer vive aquí'), false);
 });
+
+test('rejecting the last voice edit restores the draft and accepts a new order without Lucy', async () => {
+  const original = 'La casa es azul, la casa es verde y la pradera es azul.';
+  const spoken = [];
+  const replies = [
+    { transcript: 'Lucy cambia azul por verde y verde por azul', instruction: {
+      kind: 'replace_many', replacements: [['azul', 'verde'], ['verde', 'azul']]
+    } },
+    { transcript: 'No, quedó mal escrito.', instruction: { kind: 'dictate', text: 'No, quedó mal escrito.' } },
+    { transcript: 'cambia verde por blanca', instruction: { kind: 'dictate', text: 'cambia verde por blanca' } }
+  ];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => replies.shift() }),
+    api: async (route, body) => {
+      if (route === '/api/dictation/speak') {
+        spoken.push(body.text);
+        return { audio_url: '/confirmation.wav' };
+      }
+      assert.equal(route, '/api/dictation/interpret');
+      assert.equal(body.text, 'Lucy, cambia verde por blanca');
+      return { instruction: { kind: 'replace', target: 'verde', text: 'blanca' } };
+    }
+  });
+  await f.edit(original);
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde, la casa es azul y la pradera es verde.');
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, original);
+  assert.match(spoken[1], /Deshice el último cambio/);
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul, la casa es blanca y la pradera es azul.');
+  assert.equal(f.elements.dictationEditor.selectionStart, f.elements.dictationEditor.value.length);
+  f.controller.dispose();
+});
+
+test('a contextual rejection cannot undo text changed manually after the voice edit', async () => {
+  const replies = [
+    { transcript: 'Lucy cambia verde por azul', instruction: { kind: 'replace', target: 'verde', text: 'azul' } },
+    { transcript: 'No, quedó mal escrito.', instruction: { kind: 'dictate', text: 'No, quedó mal escrito.' } }
+  ];
+  const spoken = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => replies.shift() }),
+    api: async (_route, body) => { spoken.push(body.text); return { audio_url: '/confirmation.wav' }; }
+  });
+  await f.edit('verde');
+  await f.startRecording();
+  await f.finishRecording();
+  await f.edit('Texto revisado a mano.');
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'Texto revisado a mano. No, quedó mal escrito.');
+  assert.equal(spoken.length, 1);
+  f.controller.dispose();
+});

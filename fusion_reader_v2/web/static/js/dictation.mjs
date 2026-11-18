@@ -39,6 +39,13 @@ export function splitLucyUtterance(value) {
   return null;
 }
 
+function rejectsLastEdit(transcript) {
+  const words = transcript.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/^luc[iy]\s+/, '');
+  return /^(?:no (?:no )?)?(?:quedo mal(?: escrito)?|esta mal(?: escrito)?|asi no|eso no era(?: lo que pedi)?)$/.test(words) ||
+    /^(?:no )?no (?:quedo como queria|era eso|es lo que pedi)$/.test(words);
+}
+
 export function commandConfirmation(instruction, result) {
   if (!result?.changed) return String(result?.message || 'No hice cambios.').slice(0, 160);
   if (instruction.kind === 'replace_many') return `Listo. Apliqué ${result.changes} sustituciones.`;
@@ -481,6 +488,7 @@ export function createDictationController({
   let requestSequence = 0;
   let listenSequence = 0;
   let uploadOwner = null;
+  let lastVoiceCommand = null;
   let cancelPlayback = null;
   let dirty = false;
   let storageReadFailed = false;
@@ -1061,8 +1069,14 @@ export function createDictationController({
   }
 
   async function finishCommand(result, item, invoked, token) {
+    const canFollowUp = active && processing && invoked && ownsRequest(token) &&
+      !['dictate', 'undo', 'redo', 'read', 'stop_listening'].includes(item.kind);
+    const completedDraft = canFollowUp ? captureDraft() : null;
     if (invoked && ownsRequest(token) && !['dictate', 'read', 'stop_listening'].includes(item.kind)) {
       await speakText(commandConfirmation(item, result), 'confirmación', () => ownsRequest(token));
+    }
+    if (completedDraft && currentDraft(completedDraft)) {
+      lastVoiceCommand = { draft: completedDraft, changed: Boolean(result?.changed), expires: Date.now() + WAKE_COMMAND_WINDOW_MS };
     }
     return result;
   }
@@ -1105,7 +1119,11 @@ export function createDictationController({
       addActivity(result.message);
       return finishCommand(result, item, invoked, token);
     }
+    const atEnd = editor.selectionStart === editor.value.length && editor.selectionEnd === editor.value.length;
     const result = mutate(item);
+    if (active && invoked && atEnd && result.changed && item.kind !== 'dictate') {
+      editor.selectionStart = editor.selectionEnd = editor.value.length;
+    }
     if (!result.changed && allowAssistant && !assistantAttempted &&
         ['replace', 'delete', 'delete_from'].includes(String(item.kind || '')) &&
         elements.dictationAssistantSelect.value !== 'rules') {
@@ -1197,6 +1215,22 @@ export function createDictationController({
       if (discardStale(token)) return;
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
+      const recentCommand = lastVoiceCommand;
+      if (transcript) lastVoiceCommand = null;
+      // The microphone resumes after confirmation. Only the immediate reply can
+      // reject that edit, and only while the same draft revision is still open.
+      const rejecting = elements.dictationCommandsToggle.checked && rejectsLastEdit(transcript);
+      const recent = recentCommand && Date.now() <= recentCommand.expires;
+      if (rejecting && (recent || hasLucyInvocation(transcript) || reservedWakeCommand)) {
+        const edited = recentCommand?.draft;
+        const sameEdit = recent && recentCommand.changed && edited.sessionId === token.sessionId && edited.epoch === token.epoch &&
+          edited.revision === token.revision && edited.value === token.value;
+        const undone = sameEdit && undo()?.changed;
+        await speakText(undone ? 'Deshice el último cambio. Decime cómo querés que quede.' : 'Decime qué parte querés cambiar.',
+          'confirmación', () => ownsRequest(token));
+        if (ownsRequest(token) && active) armWakeCommand();
+        return;
+      }
       if (elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
         if (reservedWakeCommand) wakeGate.claim();
         addActivity(`Oí: “${transcript}”`);
@@ -1389,6 +1423,7 @@ export function createDictationController({
     processing = false;
     uploadOwner = null;
     active = false;
+    lastVoiceCommand = null;
     clearWakeCommand();
     stopRecorderCycle(true);
     recordingCycle = null;

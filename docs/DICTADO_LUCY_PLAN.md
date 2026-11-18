@@ -29,3 +29,11 @@ Chrome usó un MediaStream de tono propio y MediaRecorder real, transcripción d
 - Evidencia y continuidad privadas: carpeta local hermana Panda-Fusion-auditoria/dictado-lucy-20261118.
 
 **Siguiente etapa: auditoría general posterior solicitada por Diego. Pendiente; no confundir con los seis puntos de esta implementación, ya cerrados.** Revisar la integración final y el uso real, incluyendo micrófono físico y cierre desde la ventana habitual. No persistir memoria externa sin solicitud.
+
+## Seguimiento de la prueba con micrófono
+
+1. Confirmado en la API abierta que el proceso viejo devolvía una sola sustitución para la orden de dos colores, aunque el archivo JavaScript ya estaba actualizado.
+2. Implementado el rechazo inmediatamente después de una orden. «No, quedó mal escrito» deshace la última edición por voz si el borrador sigue en esa revisión, y Lucy escucha la corrección siguiente. Si la orden previa no aplicó cambios, pregunta qué debe cambiar. Las frases fuera de ese intercambio siguen siendo dictado.
+3. Agregada tolerancia a puntos y comas que la transcripción puede introducir entre pares, además del rechazo de una orden que termina en «y». Al editar desde el final del borrador, el cursor vuelve al final para seguir dictando.
+4. Terminado. Se reinició Panda y su API devolvió las dos sustituciones para la orden exacta y las variantes con punto o coma. El servidor entrega la interfaz actualizada. Pasaron 881 pruebas Python 3.12, 97 de JavaScript y 2 de Chrome. Las pruebas de seguimiento simulan la transcripción y el audio de respuesta.
+5. El servicio de usuario usaba rutas que systemd no resolvía. Ahora el lanzador compartido lee la configuración y entra en la carpeta del proyecto. Arranque real del servicio y cuatro pruebas del instalador aprobados.

@@ -54,3 +54,15 @@ class LucyCompoundCommandsTests(unittest.TestCase):
             with self.subTest(command=command[:100]):
                 instruction = interpret_dictation_transcript(command, require_wake_word=True)
                 self.assertEqual((instruction.kind, instruction.scope), ("noop", "ambiguous_replacement"))
+
+    def test_swap_survives_transcriber_punctuation_and_conjunction(self):
+        for separator in (" y ", ". ", " y, ", ", "):
+            with self.subTest(separator=separator):
+                instruction = interpret_dictation_transcript(
+                    f"Lucy, cambia azul por verde{separator}verde por azul.", require_wake_word=True
+                )
+                self.assertEqual(instruction.replacements, (("azul", "verde"), ("verde", "azul")))
+
+    def test_incomplete_conjunction_cannot_insert_a_piece_of_the_order(self):
+        instruction = interpret_dictation_transcript("Lucy, cambia azul por verde y.", require_wake_word=True)
+        self.assertEqual((instruction.kind, instruction.scope), ("noop", "ambiguous_replacement"))

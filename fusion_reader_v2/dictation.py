@@ -164,7 +164,7 @@ def _replacement_instruction(command: str) -> DictationInstruction | None:
     if len(body) > 20_000:
         return DictationInstruction("noop", scope="ambiguous_replacement")
     connector_pattern = re.compile(
-        rf"\s+y\s+(?=(?:{_REPLACE_VERB}\s+)?[^,;]+?\s+(?:por|con)\s+|"
+        rf"(?:\s+y(?:\s*[,.:;]\s*|\s+)|[.:]\s+)(?=(?:{_REPLACE_VERB}\s+)?[^,;]+?\s+(?:por|con)\s+|"
         r"(?:borr[aá]|borra|elimin[aá]|elimina|deshac[eé]|deshacer|rehac[eé]|rehacer)\b)",
         re.IGNORECASE,
     )
@@ -173,6 +173,8 @@ def _replacement_instruction(command: str) -> DictationInstruction | None:
     quote = ""
     pairs = {'"': '"', "'": "'", "«": "»", "“": "”"}
     for index, char in enumerate(body):
+        if index < start:
+            continue
         if quote:
             if char == quote:
                 quote = ""
@@ -181,13 +183,15 @@ def _replacement_instruction(command: str) -> DictationInstruction | None:
             quote = pairs[char]
             continue
         separator = char in ",;"
-        connector = connector_pattern.match(body, index) if char.isspace() else None
+        connector = connector_pattern.match(body, index) if char.isspace() or char in ".:" else None
         if separator or connector:
             clauses.append(body[start:index].strip())
             start = index + (len(connector.group()) if connector else 1)
     if quote:
         return DictationInstruction("noop", scope="ambiguous_replacement")
     clauses.append(body[start:].strip())
+    if re.search(r"\s+y[.!?]*$", clauses[-1], re.IGNORECASE):
+        return DictationInstruction("noop", scope="ambiguous_replacement")
 
     def unquote(value: str) -> str:
         value = value.strip()
