@@ -336,20 +336,25 @@ class DialogueTests(unittest.TestCase):
     def test_whisper_cli_fallback_uses_known_homebrew_path(self):
         from fusion_reader_v2.dialogue import WhisperCliSTTProvider
 
-        command = Path("/home/linuxbrew/.linuxbrew/bin/whisper")
-        if not command.exists():
-            self.skipTest("Homebrew whisper command is not installed on this host")
-        previous = os.environ.get("FUSION_READER_STT_COMMAND")
-        try:
+        from unittest.mock import patch
+
+        command = "/home/linuxbrew/.linuxbrew/bin/whisper"
+        with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FUSION_READER_STT_COMMAND", None)
-            provider = WhisperCliSTTProvider()
-            self.assertEqual(provider.command, str(command))
-            self.assertTrue(provider.health()["ok"])
-        finally:
-            if previous is None:
-                os.environ.pop("FUSION_READER_STT_COMMAND", None)
-            else:
-                os.environ["FUSION_READER_STT_COMMAND"] = previous
+            with (
+                patch(
+                    "fusion_reader_v2.dialogue.shutil.which",
+                    side_effect=lambda name: command if name == command else None,
+                ),
+                patch(
+                    "fusion_reader_v2.dialogue.Path.exists",
+                    autospec=True,
+                    side_effect=lambda path: str(path) == command,
+                ),
+            ):
+                provider = WhisperCliSTTProvider()
+                self.assertEqual(provider.command, command)
+                self.assertTrue(provider.health()["ok"])
 
     def test_auto_stt_does_not_fallback_for_hallucinated_primary(self):
         from fusion_reader_v2.dialogue import AutoSTTProvider

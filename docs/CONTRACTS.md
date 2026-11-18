@@ -98,8 +98,11 @@ Dictation routes:
   `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
   `delete_last_words`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.
 
-Audio dictation treats an utterance as a command only when it begins with the
-wake word `Lucy`; otherwise it remains literal dictation. Typed commands sent
+Audio dictation requires the wake word `Lucy` for commands. In the browser,
+a mixed utterance may contain dictated text followed by `Lucy` and an imperative:
+the prefix is inserted literally, then only the invoked tail is interpreted.
+Quoted dialogue and inline mentions of the name stay literal. `Lucy` alone arms
+the following utterance for twenty seconds. Typed commands sent
 through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
 
@@ -441,3 +444,23 @@ absolute audio URLs. Endpoint recognition does not relax API bind validation.
 ## Consolidación 9.11: fronteras
 
 HTTP exige Host local único; Origin, cuando existe, debe corresponder al origen local y puerto efectivo. JSON mutador requiere application/json; se rechaza framing ambiguo. Los textos de foco documental se crean como nodos de texto. El MCP curado aplica pertenencia por ruta resuelta tanto al listar/leer como al buscar. Cabeceras de descarga usan fallback ASCII y filename UTF-8. El workflow de higiene es sólo auditoría GET: compara SHA actuales y no borra refs por PR histórico. Tauri experimental admite únicamente micrófono sin cámara desde el origen actual del lector.
+
+## Lucy dictation command completion
+
+- `DictationInstruction` has an additive `replacements` array (empty by default).
+  The rule parser can return `kind=replace_many`, with 2–8 `[target, replacement]`
+  pairs, `all_matches=true`. Each target is bounded to 500 characters and each
+  replacement to 2000; replacement commands over 20000 characters are rejected.
+- Multiple replacements match the original draft and apply together. Missing or
+  overlapping targets reject the entire batch; one undo restores the full edit.
+  A comma/semicolon or `y` separates pairs; quote text containing those separators.
+  A single replacement keeps the existing nearest-occurrence behavior.
+- An ambiguous rule returns `noop` with `scope=ambiguous_replacement`; the browser
+  does not pass it to an LLM for a partial reinterpretation. Model assistants
+  continue to use their existing single-operation schema.
+- A completed explicit editing command requests one short confirmation through
+  `/api/dictation/speak`. It reports an actual edit, no match or refusal truthfully.
+  Plain dictation does not request confirmation. The recording cycle is suspended
+  during synthesis/playback and resumes afterwards, including TTS/playback errors.
+  Stop/close/new requests invalidate late confirmation audio; no system TTS or
+  Doctora port is used by the product.

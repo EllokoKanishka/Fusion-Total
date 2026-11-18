@@ -65,6 +65,16 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   expect(viewport).not.toBeNull();
   expect(dictationBox.width).toBeGreaterThanOrEqual(viewport.width - 1);
   expect(dictationBox.height).toBeGreaterThanOrEqual(viewport.height - 1);
+  await page.locator('#dictationEditor').fill('La casa es azul, la casa es verde y la pradera es azul.');
+  const confirmationsBefore = requestCounts.get('/api/dictation/speak') || 0;
+  await page.locator('#dictationCommandInput').fill('Lucy, cambia verde por azul, azul por verde');
+  await page.locator('#dictationCommandBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es verde, la casa es azul y la pradera es verde.');
+  await expect.poll(() => requestCounts.get('/api/dictation/speak') || 0).toBe(confirmationsBefore + 1);
+  await expect(page.locator('#log')).toContainText('Lectura terminada (confirmación)');
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul, la casa es verde y la pradera es azul.');
+
   await page.locator('#dictationEditor').fill('Primer párrafo.\n\nSegundo párrafo para la lectora.');
   await page.locator('#dictationCommandInput').fill('reemplazá lectora por voz');
   await page.locator('#dictationCommandBtn').click();
@@ -162,4 +172,60 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
 
   await expect(page.locator('#dropzone')).toHaveAttribute('role', 'button');
   await expect(page.locator('#chatLog')).toHaveAttribute('aria-live', 'polite');
+});
+
+test('Lucy edits captured dictation, suspends recording for confirmation and resumes', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__lucyRecorders = [];
+    const Recorder = window.MediaRecorder;
+    window.MediaRecorder = class extends Recorder {
+      constructor(...args) { super(...args); window.__lucyRecorders.push(this); }
+    };
+    navigator.mediaDevices.getUserMedia = async () => {
+      const context = new AudioContext();
+      await context.resume();
+      const destination = context.createMediaStreamDestination();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 220;
+      gain.gain.setValueAtTime(0.2, context.currentTime);
+      gain.gain.setValueAtTime(0, context.currentTime + 1);
+      oscillator.connect(gain).connect(destination);
+      oscillator.start();
+      // The fixture owns a synthesized input; it never opens the physical microphone.
+      window.__lucyInputContext = context;
+      return destination.stream;
+    };
+  });
+  let transcriptions = 0;
+  let confirmations = 0;
+  let spoken;
+  await page.route('**/api/dictation/transcribe?*', async route => {
+    transcriptions++;
+    expect((route.request().postDataBuffer() || Buffer.alloc(0)).length).toBeGreaterThan(900);
+    const response = await page.request.post(`${baseURL}/api/dictation/interpret`, {
+      data: { text: 'Lucy, cambia verde por azul, azul por verde', commands_enabled: true, require_wake_word: true },
+    });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(await response.json()) });
+  });
+  await page.route('**/api/dictation/speak', async route => {
+    confirmations++;
+    spoken = route.request().postDataJSON().text;
+    expect(await page.evaluate(() => window.__lucyRecorders.every(recorder => recorder.state !== 'recording'))).toBe(true);
+    await route.continue();
+  });
+  await page.goto(baseURL);
+  await page.locator('#dictationToggleBtn').click();
+  await page.locator('#dictationEditor').fill('La casa es azul, la casa es verde y la pradera es azul.');
+  await page.locator('#dictationMicBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es verde, la casa es azul y la pradera es verde.', { timeout: 15000 });
+  await expect.poll(() => page.locator('#dictationPlayer').evaluate(player => player.ended)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__lucyRecorders.at(-1)?.state)).toBe('recording');
+  expect(transcriptions).toBe(1);
+  expect(confirmations).toBe(1);
+  expect(spoken).toBe('Listo. Apliqué 3 sustituciones.');
+  await page.locator('#dictationMicBtn').click();
+  await page.evaluate(() => window.__lucyInputContext.close());
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul, la casa es verde y la pradera es azul.');
 });

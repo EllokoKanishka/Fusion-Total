@@ -14,6 +14,7 @@ class DictationInstruction:
     scope: str = ""
     number: int = 0
     all_matches: bool = False
+    replacements: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -152,6 +153,73 @@ def _read_instruction(command: str) -> DictationInstruction | None:
     return DictationInstruction("read", target=request, scope="paragraph_matching")
 
 
+_REPLACE_VERB = r"(?:reemplaz[aá]|reemplaza|cambi[aá]|cambia|sustitu[ií]|sustituye)"
+
+
+def _replacement_instruction(command: str) -> DictationInstruction | None:
+    match = re.match(rf"^{_REPLACE_VERB}\s+(.+)$", command, re.IGNORECASE)
+    if not match:
+        return None
+    body = match.group(1)
+    if len(body) > 20_000:
+        return DictationInstruction("noop", scope="ambiguous_replacement")
+    connector_pattern = re.compile(rf"\s+y\s+(?=(?:{_REPLACE_VERB}\s+)?[^,;]+?\s+(?:por|con)\s+)", re.IGNORECASE)
+    clauses = []
+    start = 0
+    quote = ""
+    pairs = {'"': '"', "'": "'", "«": "»", "“": "”"}
+    for index, char in enumerate(body):
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in pairs:
+            quote = pairs[char]
+            continue
+        separator = char in ",;"
+        connector = connector_pattern.match(body, index) if char.isspace() else None
+        if separator or connector:
+            clauses.append(body[start:index].strip())
+            start = index + (len(connector.group()) if connector else 1)
+    if quote:
+        return DictationInstruction("noop", scope="ambiguous_replacement")
+    clauses.append(body[start:].strip())
+
+    def unquote(value: str) -> str:
+        value = value.strip()
+        if len(value) > 1 and pairs.get(value[0]) == value[-1]:
+            return value[1:-1]
+        return value
+
+    replacements = []
+    for clause in clauses:
+        clause = re.sub(rf"^{_REPLACE_VERB}\s+", "", clause, flags=re.IGNORECASE)
+        quote = ""
+        pair_separator = None
+        for index, char in enumerate(clause):
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif char in pairs:
+                quote = pairs[char]
+            elif char.isspace():
+                pair_separator = re.compile(r"\s+(?:por|con)\s+", re.IGNORECASE).match(clause, index)
+                if pair_separator:
+                    break
+        if pair_separator is None:
+            return DictationInstruction("noop", scope="ambiguous_replacement")
+        target = unquote(clause[: pair_separator.start()].strip(" .,:;!?"))
+        replacement = unquote(clause[pair_separator.end() :].strip().rstrip(".!?"))
+        if not target or not replacement:
+            return DictationInstruction("noop", scope="ambiguous_replacement")
+        replacements.append((target, replacement))
+    if len(replacements) == 1:
+        return DictationInstruction("replace", target=replacements[0][0], text=replacements[0][1])
+    if len(replacements) > 8 or any(len(a) > 500 or len(b) > 2000 for a, b in replacements):
+        return DictationInstruction("noop", scope="ambiguous_replacement")
+    return DictationInstruction("replace_many", replacements=tuple(replacements), all_matches=True)
+
+
 def interpret_dictation_transcript(
     value: str,
     *,
@@ -265,17 +333,9 @@ def interpret_dictation_transcript(
     if read is not None:
         return read
 
-    replace_match = re.match(
-        r"^(?:reemplaz[aá]|reemplaza|cambi[aá]|cambia|sustitu[ií]|sustituye)\s+(.+?)\s+(?:por|con)\s+(.+)$",
-        command,
-        flags=re.IGNORECASE,
-    )
-    if replace_match:
-        return DictationInstruction(
-            "replace",
-            target=str(replace_match.group(1)).strip(" .,:;!?\"'"),
-            text=str(replace_match.group(2)).strip(),
-        )
+    replacement_instruction = _replacement_instruction(command)
+    if replacement_instruction is not None:
+        return replacement_instruction
 
     delete_from_match = re.match(
         r"^(?:borr[aá]|borra|elimin[aá]|elimina|quit[aá]|quita)\s+"

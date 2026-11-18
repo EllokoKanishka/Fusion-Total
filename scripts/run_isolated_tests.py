@@ -168,7 +168,7 @@ report = {
     "testsRun": result.testsRun,
     "failures": len(result.failures),
     "errors": len(result.errors),
-    "skipped": result.skipped,
+    "skipped": [{"test": test.id(), "reason": reason} for test, reason in result.skipped],
     "blocked": blocked,
     "log": stream.getvalue(),
 }

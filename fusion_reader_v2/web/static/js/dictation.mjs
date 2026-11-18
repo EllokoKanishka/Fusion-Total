@@ -16,7 +16,37 @@ export function isBareLucyInvocation(value) {
 }
 
 export function hasLucyInvocation(value) {
-  return /^l[uú]c(?:y|[ií])(?:\b|(?=[,.:;!?_\-…]))/iu.test(cleanText(value));
+  return /^l[uú]c(?:y|[ií])(?![\p{L}\p{N}_])/iu.test(cleanText(value));
+}
+
+// Inline invocations require an imperative; mentions and quoted dialogue stay literal.
+export function splitLucyUtterance(value) {
+  const text = cleanText(value);
+  if (hasLucyInvocation(text)) return { prefix: '', command: text };
+  const wake = /(?<![\p{L}\p{N}_])l[uú]c(?:y|[ií])(?=$|[\s,.:;!?])(?![\p{L}\p{N}_])/giu;
+  const imperative = /^(?:cambi[aá]|cambia|reemplaz[aá]|reemplaza|sustitu[ií]|sustituye|borr[aá]|borra|elimin[aá]|elimina|deshac[eé]|deshacer|rehac[eé]|rehacer|correg[ií]|corrige|revis[aá]|revisa|l[eé]eme|lee|par[aá]|para|detener|escrib[ií]|escribe|pon[eé]|pon|agreg[aá])(?=$|[^\p{L}\p{N}_])/iu;
+  let quote = '';
+  const closing = { '"': '"', "'": "'", '«': '»', '“': '”' };
+  for (const match of text.matchAll(wake)) {
+    quote = '';
+    for (const char of text.slice(0, match.index)) {
+      if (quote) { if (char === quote) quote = ''; }
+      else if (closing[char]) quote = closing[char];
+    }
+    const tail = text.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/u, '');
+    if (!quote && (!tail || imperative.test(tail))) return { prefix: text.slice(0, match.index).trim(), command: text.slice(match.index) };
+  }
+  return null;
+}
+
+export function commandConfirmation(instruction, result) {
+  if (!result?.changed) return String(result?.message || 'No hice cambios.').slice(0, 160);
+  if (instruction.kind === 'replace_many') return `Listo. Apliqué ${result.changes} sustituciones.`;
+  if (instruction.kind === 'replace' && String(instruction.target).length <= 40 && String(instruction.text).length <= 40) {
+    return `Listo. Cambié ${instruction.target} por ${instruction.text}.`;
+  }
+  const summary = { undo: 'Deshice el último cambio.', redo: 'Rehice el cambio.', delete: 'Borré el texto indicado.', clear: 'Limpié el borrador.', proofread: 'Corregí el tramo.' };
+  return `Listo. ${summary[instruction.kind] || 'Apliqué el cambio.'}`;
 }
 
 export function invokedInterpretationPayload(transcript) {
@@ -204,6 +234,33 @@ export function applyEditorInstruction(editor, instruction) {
     replaceRange(editor, text, editor.selectionStart, editor.selectionEnd);
     return { changed: Boolean(text), message: kind === 'dictate' ? 'Texto agregado.' : 'Inserción aplicada.' };
   }
+  if (kind === 'replace_many') {
+    const pairs = item.replacements;
+    if (!Array.isArray(pairs) || pairs.length < 2 || pairs.length > 8) return { changed: false, message: 'No reconocí una orden de cambios válida.' };
+    const edits = [];
+    for (const pair of pairs) {
+      if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== 'string' || typeof pair[1] !== 'string' || !pair[0].trim() || !pair[1].trim() || pair[0].length > 500 || pair[1].length > 2000) {
+        return { changed: false, message: 'No reconocí una orden de cambios válida.' };
+      }
+      const ranges = occurrenceRanges(editor.value, pair[0]);
+      if (!ranges.length) return { changed: false, message: `No encontré “${pair[0].slice(0, 80)}”. No hice cambios.` };
+      for (const [start, end] of ranges) edits.push({ start, end, text: pair[1] });
+    }
+    edits.sort((a, b) => a.start - b.start || a.end - b.end);
+    if (edits.some((edit, index) => index && edit.start < edits[index - 1].end)) return { changed: false, message: 'Los cambios se superponen. Pedilos por separado.' };
+    const changedEdits = edits.filter(edit => editor.value.slice(edit.start, edit.end) !== edit.text);
+    if (!changedEdits.length) return { changed: false, message: 'El texto ya estaba así. No hice cambios.' };
+    const source = editor.value;
+    const chunks = [];
+    let position = 0;
+    for (const edit of changedEdits) {
+      chunks.push(source.slice(position, edit.start), edit.text);
+      position = edit.end;
+    }
+    chunks.push(source.slice(position));
+    replaceRange(editor, chunks.join(''), 0, source.length);
+    return { changed: true, changes: changedEdits.length, message: `${changedEdits.length} sustituciones aplicadas.` };
+  }
   if (kind === 'replace_selection') {
     const start = Number(editor.selectionStart || 0);
     const end = Number(editor.selectionEnd || start);
@@ -242,6 +299,7 @@ export function applyEditorInstruction(editor, instruction) {
       return { changed: true, message: `${ranges.length} coincidencia${ranges.length === 1 ? '' : 's'} modificada${ranges.length === 1 ? '' : 's'}.` };
     }
     const range = preferredRange(ranges, Number(editor.selectionStart ?? editor.value.length));
+    if (editor.value.slice(range[0], range[1]) === replacement) return { changed: false, message: 'El texto ya estaba así. No hice cambios.' };
     replaceRange(editor, replacement, range[0], range[1]);
     return { changed: true, message: kind === 'replace' ? 'Corrección aplicada.' : 'Texto borrado.' };
   }
@@ -852,6 +910,7 @@ export function createDictationController({
     draftRevision += 1;
     schedulePersist();
     addActivity('Cambio deshecho.');
+    return { changed: true };
   }
 
   function redo() {
@@ -866,6 +925,7 @@ export function createDictationController({
     draftRevision += 1;
     schedulePersist();
     addActivity('Cambio rehecho.');
+    return { changed: true };
   }
 
   function stopSpeech(resumeRecording = true) {
@@ -906,7 +966,7 @@ export function createDictationController({
     });
   }
 
-  async function speakText(text, label = 'tramo') {
+  async function speakText(text, label = 'tramo', isCurrent = () => true) {
     const parts = splitSpeechText(text);
     if (!parts.length) return;
     stopSpeech(false);
@@ -914,11 +974,12 @@ export function createDictationController({
     speaking = true;
     speechSequence += 1;
     const sequence = speechSequence;
-    setStatus(`Leyendo ${label}: 1 de ${parts.length}…`, 'speaking');
+    setStatus(label === 'confirmación' ? 'Confirmando el cambio…' : `Leyendo ${label}: 1 de ${parts.length}…`, 'speaking');
     try {
       for (let index = 0; index < parts.length && sequence === speechSequence; index += 1) {
-        setStatus(`Leyendo ${label}: ${index + 1} de ${parts.length}…`, 'speaking');
+        setStatus(label === 'confirmación' ? 'Confirmando el cambio…' : `Leyendo ${label}: ${index + 1} de ${parts.length}…`, 'speaking');
         const data = await api('/api/dictation/speak', { text: parts[index] });
+        if (!isCurrent() || sequence !== speechSequence) return;
         if (!data.audio_url) throw new Error('La voz no devolvió un audio reproducible.');
         await playAudioUrl(data.audio_url, sequence);
       }
@@ -926,7 +987,7 @@ export function createDictationController({
     } catch (error) {
       if (sequence !== speechSequence) return;
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
-      addActivity(`No pude leer: ${detail}.`);
+      addActivity(label === 'confirmación' ? `No pude reproducir la confirmación: ${detail}. El resultado del cambio está en el editor.` : `No pude leer: ${detail}.`);
     } finally {
       if (sequence === speechSequence) {
         speaking = false;
@@ -993,9 +1054,17 @@ export function createDictationController({
     } catch (error) {
       if (!ownsRequest(token)) return;
       addActivity(assistantFailureActivity(error));
+      return finishCommand({ changed: false, message: 'No pude aplicar la orden. No cambié el texto.' }, { kind: 'noop' }, true, token);
     } finally {
       if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
+  }
+
+  async function finishCommand(result, item, invoked, token) {
+    if (invoked && ownsRequest(token) && !['dictate', 'read', 'stop_listening'].includes(item.kind)) {
+      await speakText(commandConfirmation(item, result), 'confirmación', () => ownsRequest(token));
+    }
+    return result;
   }
 
   async function applyInstruction(instruction, transcript = '', allowAssistant = false, assistantAttempted = false, token = beginRequest()) {
@@ -1005,14 +1074,15 @@ export function createDictationController({
     if (transcript && allowAssistant && item.kind !== 'noop' && item.kind !== 'dictate') {
       addActivity(`Lucy resolvió la orden con reglas instantáneas (${item.kind}).`);
     }
-    if (item.kind === 'undo') return undo();
-    if (item.kind === 'redo') return redo();
+    const invoked = allowAssistant || assistantAttempted || hasLucyInvocation(transcript);
+    if (item.kind === 'undo') return finishCommand(undo(), item, invoked, token);
+    if (item.kind === 'redo') return finishCommand(redo(), item, invoked, token);
     if (item.kind === 'stop_listening') {
       addActivity('Dictado detenido por voz.');
       return stopListening();
     }
     if (item.kind === 'proofread') {
-      return requestProofread(item, transcript, token);
+      return finishCommand(await requestProofread(item, transcript, token), item, invoked, token);
     }
     if (item.kind === 'read') {
       const selection = readTextForInstruction(editor, item);
@@ -1027,12 +1097,13 @@ export function createDictationController({
       editor.selectionEnd = selection.end;
       return speakText(selection.text, item.scope || 'selección');
     }
-    if (item.kind === 'noop' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
+    if (item.kind === 'noop' && item.scope !== 'ambiguous_replacement' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
     if (item.kind === 'noop' && (hasLucyInvocation(transcript) || assistantAttempted)) {
-      addActivity('Lucy oyó la invocación, pero no reconoció una orden segura. No cambié el texto.');
-      return;
+      const result = { changed: false, message: item.scope === 'ambiguous_replacement' ? 'No reconocí todos los cambios. Pedilos por separado.' : 'No reconocí la orden. No cambié el texto.' };
+      addActivity(result.message);
+      return finishCommand(result, item, invoked, token);
     }
     const result = mutate(item);
     if (!result.changed && allowAssistant && !assistantAttempted &&
@@ -1040,7 +1111,7 @@ export function createDictationController({
         elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
-    return result;
+    return finishCommand(result, item, invoked, token);
   }
 
   async function interpretTypedCommand() {
@@ -1107,7 +1178,7 @@ export function createDictationController({
   }
 
   async function uploadRecording(blob, mime, reservedWakeCommand = false, recordedDraft = captureDraft()) {
-    const token = beginRequest(recordedDraft);
+    let token = beginRequest(recordedDraft);
     if (discardStale(token)) return;
     uploadOwner = token;
     processing = true;
@@ -1136,9 +1207,24 @@ export function createDictationController({
       }
       let instruction = data.instruction;
       let appliedTranscript = transcript;
+      const split = elements.dictationCommandsToggle.checked ? splitLucyUtterance(transcript) : null;
+      if (split?.prefix) {
+        mutate({ kind: 'dictate', text: split.prefix });
+        token = beginRequest();
+        uploadOwner = token;
+        appliedTranscript = split.command;
+        if (isBareLucyInvocation(appliedTranscript)) {
+          if (!await prepareAssistantForWake() || discardStale(token)) return;
+          armWakeCommand();
+          return;
+        }
+        const interpreted = await api('/api/dictation/interpret', invokedInterpretationPayload(appliedTranscript));
+        if (discardStale(token)) return;
+        instruction = interpreted.instruction;
+      }
       const claimedWakeCommand = reservedWakeCommand && wakeGate.claim();
       if (claimedWakeCommand) {
-        const payload = invokedInterpretationPayload(transcript);
+        const payload = invokedInterpretationPayload(appliedTranscript);
         appliedTranscript = payload.text;
         const interpreted = await api('/api/dictation/interpret', payload);
         if (discardStale(token)) return;

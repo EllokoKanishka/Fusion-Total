@@ -75,6 +75,7 @@ async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOve
       await elements.dictationMicBtn.emit('click');
       for (let i = 0; i < 3; i++) { now += 100; const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn()); }
     },
+    async detectSpeech() { for (let i = 0; i < 3; i++) { now += 100; const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn()); } },
     async finishRecording() { recorders.at(-1).stop(); await tick(); },
     async upload() { await this.startRecording(); await this.finishRecording(); },
   };
@@ -309,4 +310,176 @@ test('dictation byte limit discards capture and releases the microphone', async 
   assert.match(f.elements.dictationStatus.textContent, /límite/i);
   assert.equal(f.elements.dictationEditor.value, 'Texto original');
   f.controller.dispose();
+});
+
+
+test('Lucy swaps colours simultaneously and missing or overlapping targets change nothing', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const editor = new Element(); editor.value = 'La casa es azul, la casa es verde y la pradera es azul.';
+  editor.selectionStart = editor.selectionEnd = editor.value.length;
+  const batch = { kind: 'replace_many', replacements: [['verde', 'azul'], ['azul', 'verde']] };
+  const result = applyEditorInstruction(editor, batch);
+  assert.equal(editor.value, 'La casa es verde, la casa es azul y la pradera es verde.');
+  assert.equal(result.changes, 3);
+  const before = editor.value;
+  assert.equal(applyEditorInstruction(editor, { ...batch, replacements: [['verde', 'azul'], ['rojo', 'gris']] }).changed, false);
+  assert.equal(editor.value, before);
+  editor.value = 'casa azul';
+  assert.equal(applyEditorInstruction(editor, { ...batch, replacements: [['casa', 'hogar'], ['casa azul', 'pradera']] }).changed, false);
+  assert.equal(editor.value, 'casa azul');
+});
+
+test('Lucy inside a recorded sentence separates dictation from an imperative but keeps names and quotes literal', async () => {
+  const { splitLucyUtterance } = await import(moduleUrl);
+  assert.deepEqual(splitLucyUtterance('La casa es azul. Lucy, cambia azul por verde.'), { prefix: 'La casa es azul.', command: 'Lucy, cambia azul por verde.' });
+  assert.deepEqual(splitLucyUtterance('La casa es azul Lucy cambia azul por verde'), { prefix: 'La casa es azul', command: 'Lucy cambia azul por verde' });
+  assert.equal(splitLucyUtterance('Lucy vive en una casa azul.').prefix, '');
+  assert.equal(splitLucyUtterance('Mi amiga Lucy vive aquí.'), null);
+  assert.equal(splitLucyUtterance('El cuento dice «Lucy, cambia azul por verde». '), null);
+});
+
+test('voice command confirms once, pauses capture, resumes after audio and has one undo', async () => {
+  const calls = []; let f;
+  f = await fixture({ api: async (route, body) => {
+    if (route === '/api/dictation/speak') {
+      calls.push(body.text);
+      assert.notEqual(f.recorders.at(-1)?.state, 'recording');
+      return { audio_url: '/confirmation.wav' };
+    }
+    return { instruction: { kind: 'noop' } };
+  }, fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'Lucy, cambia verde por azul, azul por verde', instruction: { kind: 'replace_many', replacements: [['verde', 'azul'], ['azul', 'verde']] } }) }) });
+  await f.edit('La casa es azul y la pradera es verde.');
+  await f.startRecording(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde y la pradera es azul.');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /^Listo/); assert.ok(calls[0].length <= 160);
+  assert.notEqual(f.recorders.at(-1).state, 'recording');
+  await f.elements.dictationPlayer.emit('ended'); await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording');
+  await f.elements.dictationUndoBtn.emit('click');
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul y la pradera es verde.');
+  f.controller.dispose();
+});
+
+test('Lucy alone arms the next phrase and confirms its edit without inserting the wake word', async () => {
+  const transcripts = ['Lucy.', 'cambia verde por azul']; const requests = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: transcripts.shift(), instruction: { kind: 'noop' } }) }),
+    api: async (route, body) => {
+      requests.push([route, body]);
+      if (route === '/api/dictation/interpret') { assert.equal(body.require_wake_word, true); return { instruction: { kind: 'replace', target: 'verde', text: 'azul' } }; }
+      return { audio_url: '/confirmation.wav' };
+    }
+  });
+  await f.edit('La casa es verde.'); await f.startRecording(); await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde.');
+  assert.equal(requests.length, 0);
+  await f.detectSpeech(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul.');
+  assert.equal(requests.filter(([route]) => route === '/api/dictation/speak').length, 1);
+  await f.elements.dictationPlayer.emit('ended'); await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording'); f.controller.dispose();
+});
+
+test('mixed utterance keeps its dictated prefix and applies only the invoked command', async () => {
+  const calls = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'La casa es verde. Lucy, cambia verde por azul.', instruction: { kind: 'dictate', text: 'La casa es verde. Lucy, cambia verde por azul.' } }) }),
+    api: async (route, body) => {
+      calls.push([route, body]);
+      if (route === '/api/dictation/interpret') return { instruction: { kind: 'replace', target: 'verde', text: 'azul' } };
+      return { audio_url: '/confirmation.wav' };
+    }
+  });
+  await f.edit(''); await f.startRecording(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul.');
+  assert.equal(calls.find(([route]) => route === '/api/dictation/interpret')[1].text, 'Lucy, cambia verde por azul.');
+  await f.elements.dictationPlayer.emit('ended'); await tick();
+  await f.elements.dictationUndoBtn.emit('click');
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde.'); f.controller.dispose();
+});
+
+test('failed confirmation preserves the applied edit and resumes recording', async () => {
+  const f = await fixture({
+    api: async () => { throw new Error('tts unavailable'); },
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'Lucy cambia verde por azul', instruction: { kind: 'replace', target: 'verde', text: 'azul' } }) })
+  });
+  await f.edit('verde'); await f.startRecording(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'azul');
+  assert.equal(f.recorders.at(-1).state, 'recording');
+  assert.ok(f.logs.some(line => /No pude reproducir la confirmación/.test(line))); f.controller.dispose();
+});
+
+test('closing during confirmation synthesis suppresses late playback and capture', async () => {
+  const pending = deferred();
+  const f = await fixture({ api: async () => pending.promise,
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'Lucy cambia verde por azul', instruction: { kind: 'replace', target: 'verde', text: 'azul' } }) })
+  });
+  await f.edit('verde'); await f.startRecording(); await f.finishRecording();
+  f.controller.close(); pending.resolve({ audio_url: '/too-late.wav' }); await tick();
+  assert.equal(f.elements.dictationPlayer.playCalls || 0, 0);
+  assert.notEqual(f.recorders.at(-1).state, 'recording'); f.controller.dispose();
+});
+
+test('ambiguous compound order cannot be reinterpreted by a model or reported as successful', async () => {
+  const calls = [];
+  const f = await fixture({ api: async (route, body) => { calls.push([route, body]); return {}; } });
+  f.elements.dictationAssistantSelect.value = 'local14b';
+  await f.controller.applyInstruction({ kind: 'noop', scope: 'ambiguous_replacement' }, 'Lucy, cambia verde por azul, borra todo', true);
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  assert.equal(calls.some(([route]) => route === '/api/dictation/assist'), false);
+  assert.match(calls[0][1].text, /Pedilos por separado/); f.controller.dispose();
+});
+
+test('ordinary dictation and disabled commands do not request a spoken confirmation', async () => {
+  const calls = [];
+  const f = await fixture({ api: async route => { calls.push(route); return {}; },
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'Lucy cambia verde por azul', instruction: { kind: 'dictate', text: 'Lucy cambia verde por azul' } }) })
+  });
+  f.elements.dictationCommandsToggle.checked = false;
+  await f.edit(''); await f.startRecording(); await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'Lucy cambia verde por azul');
+  assert.equal(calls.length, 0); f.controller.dispose();
+});
+
+test('an assistant edit receives exactly one short confirmation', async () => {
+  const calls = [];
+  const f = await fixture({ api: async (route, body) => {
+    calls.push([route, body]);
+    if (route === '/api/dictation/assist') return { instruction: { kind: 'replace', target: 'original', text: 'nuevo' } };
+    return {};
+  } });
+  f.elements.dictationAssistantSelect.value = 'local14b';
+  await f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, modificá el texto', true);
+  assert.equal(f.elements.dictationEditor.value, 'Texto nuevo');
+  assert.equal(calls.filter(([route]) => route === '/api/dictation/speak').length, 1); f.controller.dispose();
+});
+
+
+test('a dictated prefix followed by bare Lucy is saved and arms the next recording', async () => {
+  const texts = ['La casa es verde. Lucy.', 'cambia verde por azul'];
+  const f = await fixture({ fetchFn: async () => ({ ok: true, json: async () => ({ transcript: texts.shift(), instruction: { kind: 'noop' } }) }),
+    api: async route => route === '/api/dictation/interpret' ? { instruction: { kind: 'replace', target: 'verde', text: 'azul' } } : {} });
+  await f.edit(''); await f.startRecording(); await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde.');
+  await f.detectSpeech(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul.'); f.controller.dispose();
+});
+
+test('playback rejection resumes capture without reverting the edit', async () => {
+  const f = await fixture({ api: async () => ({ audio_url: '/confirmation.wav' }),
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'Lucy cambia verde por azul', instruction: { kind: 'replace', target: 'verde', text: 'azul' } }) }) });
+  f.elements.dictationPlayer.play = () => Promise.reject(new Error('NotAllowedError'));
+  await f.edit('verde'); await f.startRecording(); await f.finishRecording(); await tick();
+  assert.equal(f.elements.dictationEditor.value, 'azul');
+  assert.equal(f.recorders.at(-1).state, 'recording'); f.controller.dispose();
+});
+
+
+test('Spanish accented imperatives and a final bare wake word work in mixed dictation', async () => {
+  const { splitLucyUtterance, hasLucyInvocation } = await import(moduleUrl);
+  assert.equal(splitLucyUtterance('Una casa azul. Lucy, cambiá azul por verde').command, 'Lucy, cambiá azul por verde');
+  assert.deepEqual(splitLucyUtterance('Una casa azul. Lucy'), { prefix: 'Una casa azul.', command: 'Lucy' });
+  assert.equal(hasLucyInvocation('Lucí cambia azul por verde'), true);
+  assert.equal(hasLucyInvocation('Lucyfer vive aquí'), false);
 });
