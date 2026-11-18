@@ -35,4 +35,4 @@ contrato que en navegador.
 
 ## Uso actual (consolidación 17/11/2026)
 
-El acceso diario usa Chrome/Chromium en modo aplicación y respeta FUSION_READER_V2_PORT. Tauri requiere PANDA_FUSION_NATIVE_EXPERIMENTAL=1; permanece experimental por diferencias de captura y renderizado en WebKitGTK. Su permiso automático se limita al micrófono, sin cámara, desde el origen local actual de Panda.
+El acceso diario usa Chrome/Chromium en modo aplicación. Chromium y Tauri respetan `FUSION_READER_BIND_HOST` y `FUSION_READER_V2_PORT` para la dirección local. Tauri requiere PANDA_FUSION_NATIVE_EXPERIMENTAL=1; permanece experimental por diferencias de captura y renderizado en WebKitGTK. Su permiso automático se limita al micrófono, sin cámara, desde el origen local actual de Panda.

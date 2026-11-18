@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     process::Command,
     thread,
     time::Duration,
@@ -13,44 +13,58 @@ use webkit2gtk::{
     glib::prelude::*, PermissionRequestExt, SettingsExt, WebViewExt, UserMediaPermissionRequestExt,
 };
 
-fn fusion_address() -> String {
-    let port = std::env::var("FUSION_READER_V2_PORT").ok()
-        .and_then(|value| value.parse::<u16>().ok()).filter(|port| *port > 0).unwrap_or(8010);
-    format!("127.0.0.1:{port}")
-}
-fn fusion_url() -> String { format!("http://{}", fusion_address()) }
-
-fn fusion_is_ready() -> bool {
-    let address: SocketAddr = match fusion_address().parse() {
-        Ok(address) => address,
-        Err(_) => return false,
+fn fusion_address() -> SocketAddr {
+    let port = std::env::var("FUSION_READER_V2_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(8010);
+    let host = std::env::var("FUSION_READER_BIND_HOST").unwrap_or_else(|_| "localhost".into());
+    let host = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        host.parse::<IpAddr>()
+            .ok()
+            .filter(IpAddr::is_loopback)
+            .expect("Panda Fusión requires a loopback address")
     };
+    SocketAddr::new(host, port)
+}
+
+fn fusion_is_ready(address: SocketAddr) -> bool {
     let mut stream = match TcpStream::connect_timeout(&address, Duration::from_millis(400)) {
         Ok(stream) => stream,
         Err(_) => return false,
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(900)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(900)));
-    if stream
-        .write_all(b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
+    let request = format!(
+        "GET /health/live HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
     let mut response = String::new();
-    stream.read_to_string(&mut response).is_ok()
-        && (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+    stream.take(1024).read_to_string(&mut response).is_ok()
+        && (response.starts_with("HTTP/1.1 200 ") || response.starts_with("HTTP/1.0 200 "))
+        && response
+            .split_once("\r\n\r\n")
+            .and_then(|(_, body)| serde_json::from_str::<serde_json::Value>(body).ok())
+            .is_some_and(|body| body["ok"] == true && body["status"] == "live")
 }
 
-fn start_fusion_if_needed() {
-    if !fusion_is_ready() {
-        let _ = Command::new("fusionctl").arg("start").spawn();
+fn start_fusion_if_needed(address: SocketAddr) {
+    if !fusion_is_ready(address) {
+        thread::spawn(|| {
+            let _ = Command::new("fusionctl").arg("start").status();
+        });
     }
 }
 
 fn main() {
+    let address = fusion_address();
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             WebviewWindowBuilder::new(
                 app,
                 "panda-fusion-loading",
@@ -63,12 +77,13 @@ fn main() {
 
             let handle = app.handle().clone();
             thread::spawn(move || {
-                start_fusion_if_needed();
+                start_fusion_if_needed(address);
                 for _ in 0..150 {
-                    if fusion_is_ready() {
+                    if fusion_is_ready(address) {
                         let app_handle = handle.clone();
                         let _ = handle.run_on_main_thread(move || {
-                            let url = fusion_url().parse().expect("Fusion loopback URL must be valid");
+                            let origin = format!("http://{address}");
+                            let url = origin.parse().expect("Fusion loopback URL must be valid");
                             if WebviewWindowBuilder::new(
                                 &app_handle,
                                 "panda-fusion",
@@ -89,11 +104,10 @@ fn main() {
                                         settings.set_enable_media_stream(true);
                                         settings.set_enable_webrtc(true);
                                     }
-                                    native_webview.connect_permission_request(|view, request| {
+                                    native_webview.connect_permission_request(move |view, request| {
                                         if let Some(media) = request.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>() {
-                                            let expected = fusion_url();
                                             let trusted = view.uri().and_then(|uri| tauri::Url::parse(uri.as_str()).ok())
-                                                .map(|uri| uri.origin().ascii_serialization() == expected).unwrap_or(false);
+                                                .map(|uri| uri.origin().ascii_serialization() == origin).unwrap_or(false);
                                             if trusted && media.is_for_audio_device() && !media.is_for_video_device() {
                                                 request.allow();
                                             } else {
