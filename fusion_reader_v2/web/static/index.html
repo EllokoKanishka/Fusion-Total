@@ -289,6 +289,7 @@
         <label class="dictation-voice-label" for="dictationVoiceSelect">Voz</label>
         <select id="dictationVoiceSelect" class="compact-select dictation-voice-select" aria-label="Voz de lectura en dictado"></select>
         <label class="toggle compact-toggle"><input id="dictationCommandsToggle" type="checkbox" checked> Órdenes con «Lucy»</label>
+        <button id="dictationVoiceCommandBtn" class="compact-btn" type="button" title="Escuchar la próxima orden sin decir Lucy">Orden por voz</button>
         <label class="dictation-assistant-label" for="dictationAssistantSelect">Asistente</label>
         <select id="dictationAssistantSelect" class="compact-select dictation-assistant-select" aria-label="Asistente de escritura"></select>
         <span id="dictationAssistantStatus" class="dictation-assistant-status" aria-live="polite"></span>
@@ -303,7 +304,7 @@
         <button id="dictationStatus" class="dictation-status-chip" type="button" disabled aria-live="polite" title="Dictado en pausa.">En pausa</button>
         <details class="dictation-help dictation-help-compact">
           <summary title="Ver órdenes de voz y escritura">Órdenes</summary>
-          <p>El dictado normal se escribe literalmente. Para ejecutar una acción, podés decir la frase completa —“Lucy, borrá X”— o decir sólo “Lucy”, hacer una pausa y dictar la orden. También entiende “Lucy, borrá toda la frase” (la que está en el cursor), “Lucy, borrá la última frase”, “Lucy, borrá 10 palabras”, “Lucy, cambiá las últimas 20 palabras por Y”, “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. También podés decir “Lucy, cambiá verde por azul, azul por verde”: las sustituciones se hacen juntas sobre el texto original. Lucy confirma el resultado con una frase breve y vuelve a escuchar; durante esa respuesta el micrófono no transcribe. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
+          <p>El dictado normal se escribe literalmente. Para ejecutar una acción, podés decir la frase completa —“Lucy, borrá X”— o decir sólo “Lucy”, hacer una pausa y dictar la orden. Si el nombre no se reconoce, tocá <em>Orden por voz</em> para decir la orden directamente. También entiende “Lucy, borrá toda la frase” (la que está en el cursor), “Lucy, borrá la última frase”, “Lucy, borrá 10 palabras”, “Lucy, cambiá las últimas 20 palabras por Y”, “Lucy, reemplazá X por Y”, “Lucy, deshacer”, “Lucy, pará acá”, “Lucy, léeme el último párrafo”, “Lucy, léeme la última hoja” o “Lucy, léeme desde X”. También podés decir “Lucy, cambiá verde por azul, azul por verde”: las sustituciones se hacen juntas sobre el texto original. Lucy confirma el resultado con una frase breve y vuelve a escuchar; durante esa respuesta el micrófono no transcribe. Si desactivás <em>Órdenes con «Lucy»</em>, todo lo oído entra como texto.</p>
         </details>
       </div>
       <label class="dictation-title-label" for="dictationTitleInput">Título del borrador</label>

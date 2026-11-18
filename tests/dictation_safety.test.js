@@ -288,7 +288,7 @@ test('dictation recording has a deadline independent of animation frames', async
   const timer = [...f.timers.values()].find(entry => entry.ms === 10000);
   assert.ok(timer, 'capture owns a wall-clock timer');
   timer.fn();
-  assert.equal(f.recorders.at(-1).state, 'inactive');
+  assert.equal(f.recorders[0].state, 'inactive');
   f.controller.dispose();
 });
 
@@ -333,8 +333,11 @@ test('Lucy inside a recorded sentence separates dictation from an imperative but
   const { splitLucyUtterance } = await import(moduleUrl);
   assert.deepEqual(splitLucyUtterance('La casa es azul. Lucy, cambia azul por verde.'), { prefix: 'La casa es azul.', command: 'Lucy, cambia azul por verde.' });
   assert.deepEqual(splitLucyUtterance('La casa es azul Lucy cambia azul por verde'), { prefix: 'La casa es azul', command: 'Lucy cambia azul por verde' });
-  assert.equal(splitLucyUtterance('Lucy vive en una casa azul.').prefix, '');
+  assert.equal(splitLucyUtterance('Lucy vive en una casa azul.'), null);
   assert.equal(splitLucyUtterance('Mi amiga Lucy vive aquí.'), null);
+  assert.equal(splitLucyUtterance('Mi amiga Lucy ponía música.'), null);
+  assert.equal(splitLucyUtterance('Lucy cambió su horario.'), null);
+  assert.equal(splitLucyUtterance('Lucy, podrías dejarlo más claro').prefix, '');
   assert.equal(splitLucyUtterance('El cuento dice «Lucy, cambia azul por verde». '), null);
 });
 
@@ -680,5 +683,123 @@ test('a deletion with a literal match still uses the selected editor to repair t
   await f.finishRecording();
   await tick();
   assert.equal(f.elements.dictationEditor.value, 'La casa es verde. El caballo nada.');
+  f.controller.dispose();
+});
+
+test('an order spoken before the bare wake transcription returns is buffered and interpreted once', async () => {
+  const first = deferred();
+  let uploads = 0;
+  const f = await fixture({
+    fetchFn: async () => {
+      uploads++;
+      if (uploads === 1) return first.promise;
+      return { ok: true, json: async () => ({ transcript: 'cambia azul por verde', instruction: { kind: 'dictate' } }) };
+    },
+    api: async (route, body) => {
+      if (route === '/api/dictation/interpret') {
+        assert.equal(body.text, 'Lucy, cambia azul por verde');
+        return { instruction: { kind: 'replace', target: 'azul', text: 'verde' } };
+      }
+      return {};
+    },
+  });
+  await f.edit('La casa es azul.');
+  await f.startRecording();
+  await f.finishRecording();
+  const followUp = f.recorders.at(-1);
+  assert.equal(followUp.state, 'recording');
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(uploads, 1);
+  first.resolve({ ok: true, json: async () => ({ transcript: 'Che, Lusi.', instruction: { kind: 'noop' } }) });
+  await tick();
+  assert.equal(uploads, 2);
+  assert.equal(f.elements.dictationEditor.value, 'La casa es verde.');
+  f.controller.dispose();
+});
+
+test('short quiet speech is submitted with float PCM detection', async () => {
+  let uploads = 0;
+  class QuietAudio {
+    createAnalyser() {
+      return { fftSize: 1024, getFloatTimeDomainData(data) { data.fill(0.0048); } };
+    }
+    createMediaStreamSource() { return { connect() {} }; }
+    close() { return Promise.resolve(); }
+  }
+  const f = await fixture({
+    ContextOverride: QuietAudio,
+    fetchFn: async () => {
+      uploads++;
+      return { ok: true, json: async () => ({ transcript: 'Lucy.', instruction: { kind: 'noop' } }) };
+    },
+  });
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(uploads, 1);
+  assert.equal(f.elements.dictationStatus.dataset.mode, 'armed');
+  f.controller.dispose();
+});
+
+test('the voice order button arms the next clip without requiring the name', async () => {
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: 'borrá la última frase', instruction: { kind: 'dictate' } }) }),
+    api: async (route, body) => {
+      if (route !== '/api/dictation/interpret') return {};
+      assert.equal(body.text, 'Lucy, borrá la última frase');
+      return { instruction: { kind: 'delete_sentence', scope: 'last' } };
+    },
+  });
+  await f.edit('Primera frase. Segunda frase.');
+  await f.elements.dictationVoiceCommandBtn.emit('click');
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'Primera frase.');
+  f.controller.dispose();
+});
+
+test('instructions the local grammar would treat as literal insertion go to the selected editor', async () => {
+  const original = 'El bosque estaba oscuro.';
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({
+      transcript: 'Lucy, agregá muy antes de oscuro', instruction: { kind: 'insert', text: 'muy antes de oscuro' },
+    }) }),
+    api: async (route) => route === '/api/dictation/assist'
+      ? { instruction: { kind: 'edit', edits: [{ start: 17, end: 23, before: 'oscuro', after: 'muy oscuro' }] } }
+      : {},
+  });
+  f.elements.dictationAssistantSelect.value = 'openai';
+  await f.edit(original);
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'El bosque estaba muy oscuro.');
+  f.controller.dispose();
+});
+
+test('an immediate spoken refinement keeps the prior instruction and does not append the feedback', async () => {
+  const replies = ['Lucy, poné por la tarde', 'No, me refería a por la mañana'];
+  const commands = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({ transcript: replies.shift(), instruction: { kind: 'noop' } }) }),
+    api: async (route, body) => {
+      if (route === '/api/dictation/speak') return { audio_url: '/short.wav' };
+      commands.push(body.text);
+      const before = commands.length === 1 ? 'Vuelvo.' : 'por la tarde';
+      const start = body.draft.indexOf(before);
+      return { instruction: { kind: 'edit', edits: [
+        { start, end: start + before.length, before, after: commands.length === 1 ? 'Vuelvo por la tarde.' : 'por la mañana' }
+      ] } };
+    },
+  });
+  f.elements.dictationAssistantSelect.value = 'openai';
+  await f.edit('Vuelvo.');
+  await f.startRecording();
+  await f.finishRecording();
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.match(commands[1], /anterior.*poné por la tarde.*Ajuste.*por la mañana/s);
+  assert.equal(f.elements.dictationEditor.value, 'Vuelvo por la mañana.');
   f.controller.dispose();
 });

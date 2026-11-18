@@ -107,8 +107,12 @@ Dictation routes:
 Audio dictation requires the wake word `Lucy` for commands. In the browser,
 a mixed utterance may contain dictated text followed by `Lucy` and an imperative:
 the prefix is inserted literally, then only the invoked tail is interpreted.
-Quoted dialogue and inline mentions of the name stay literal. `Lucy` alone arms
-the following utterance for twenty seconds. Typed commands sent
+Quoted dialogue and ordinary mentions of the name stay literal. Short greetings
+before the name and close STT spellings are accepted when the name is used as an
+address. `Lucy` alone and the voice-order button arm the following utterance for
+twenty seconds. The microphone can buffer one following clip while STT is in
+flight. That clip is released after a bare wake or ordinary dictation, and is
+discarded when the prior request is stale or is an order that may speak. Typed commands sent
 through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
 

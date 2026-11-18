@@ -3,6 +3,7 @@ const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const WAKE_COMMAND_WINDOW_MS = 20000;
 const MAX_DICTATION_UTTERANCE_MS = 10000;
 const END_OF_UTTERANCE_SILENCE_MS = 1000;
+const MIN_CAPTURE_BYTES = 256;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 const SESSION_SCHEMA_VERSION = 2;
 const MAX_SAVED_SESSIONS = 30;
@@ -11,32 +12,52 @@ function cleanText(value) {
   return String(value || '').trim();
 }
 
+// Limit spelling aliases to close renderings of the name. A name in prose is
+// only a wake when there is evidence the speaker is addressing the assistant.
+const LUCY = String.raw`l[uú][cs](?:y|[ií])`;
+const WAKE_START = new RegExp(String.raw`^[¡¿]*(?:(?:che|hola|oye|bueno)[ ,.:]+)?${LUCY}(?![\p{L}\p{N}_])`, 'iu');
+const WAKE_MARK = /^[\s,.:;!?_\-…]+/u;
+const REQUEST_START = /^(?:(?:quiero|necesito) que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr[aáe]|borralo|elimin[aáe]|quit[aáe]|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
+
+function isAddressed(tail) {
+  return /^[\s]*[,.:;!?…]/u.test(tail) || REQUEST_START.test(tail.trimStart());
+}
+
 export function isBareLucyInvocation(value) {
-  return /^l[uú]c(?:y|[ií])(?:[\s,.:;!?_\-…]*)$/iu.test(cleanText(value));
+  const text = cleanText(value);
+  const wake = WAKE_START.exec(text);
+  return Boolean(wake && !text.slice(wake[0].length).replace(WAKE_MARK, ''));
 }
 
 export function hasLucyInvocation(value) {
-  return /^l[uú]c(?:y|[ií])(?![\p{L}\p{N}_])/iu.test(cleanText(value));
+  return WAKE_START.test(cleanText(value));
 }
 
-// Inline invocations require an imperative; mentions and quoted dialogue stay literal.
 export function splitLucyUtterance(value) {
   const text = cleanText(value);
-  if (hasLucyInvocation(text)) return { prefix: '', command: text };
-  const wake = /(?<![\p{L}\p{N}_])l[uú]c(?:y|[ií])(?=$|[\s,.:;!?])(?![\p{L}\p{N}_])/giu;
-  const imperative = /^(?:(?:quiero\s+)?que\s+)?(?:cambi[aá]|cambia|reemplaz[aá]|reemplaza|sustitu[ií]|sustituye|borr[aáe]|borres|elimin[aáe]|elimines|quit[aáe]|quites|deshac[eé]|deshacer|rehac[eé]|rehacer|correg[ií]|corrige|revis[aá]|revisa|l[eé]eme|lee|par[aá]|para|detener|escrib[ií]|escribe|pon[eé]|pon|agreg[aá])(?=$|[^\p{L}\p{N}_])/iu;
-  let quote = '';
+  const leading = WAKE_START.exec(text);
+  if (leading && (isBareLucyInvocation(text) || isAddressed(text.slice(leading[0].length)))) {
+    return { prefix: '', command: text };
+  }
+  const wake = new RegExp(String.raw`(?<![\p{L}\p{N}_])${LUCY}(?=$|[\s,.:;!?…-])`, 'giu');
   const closing = { '"': '"', "'": "'", '«': '»', '“': '”' };
   for (const match of text.matchAll(wake)) {
-    quote = '';
-    for (const char of text.slice(0, match.index)) {
+    let quote = '';
+    const head = text.slice(0, match.index);
+    for (const char of head) {
       if (quote) { if (char === quote) quote = ''; }
       else if (closing[char]) quote = closing[char];
     }
-    const tail = text.slice(match.index + match[0].length).replace(/^[\s,.:;!?]+/u, '');
-    const prefix = text.slice(0, match.index).trim();
-    const addressedAfterSentence = /[.?!…]$/u.test(prefix) && /^\s*,/u.test(text.slice(match.index + match[0].length));
-    if (!quote && (!tail || imperative.test(tail) || addressedAfterSentence)) return { prefix, command: text.slice(match.index) };
+    if (quote || !head.trim()) continue;
+    const tail = text.slice(match.index + match[0].length);
+    const prefix = head.trim();
+    const sentenceBreak = /[.?!…]$/u.test(prefix) || /\n\s*$/u.test(head);
+    // An unpunctuated command can follow prose when it starts with a request.
+    // A bare trailing name without a pause marker could be part of the prose.
+    if (REQUEST_START.test(tail.replace(WAKE_MARK, '')) ||
+        (sentenceBreak && (!tail.replace(WAKE_MARK, '') || isAddressed(tail)))) {
+      return { prefix, command: text.slice(match.index) };
+    }
   }
   return null;
 }
@@ -46,6 +67,10 @@ function rejectsLastEdit(transcript) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/^luc[iy]\s+/, '');
   return /^(?:no (?:no )?)?(?:quedo mal(?: escrito)?|esta mal(?: escrito)?|asi no|eso no era(?: lo que pedi)?)$/.test(words) ||
     /^(?:no )?no (?:quedo como queria|era eso|es lo que pedi)$/.test(words);
+}
+
+function revisesLastOrder(transcript) {
+  return /^no[\s,.;:]+(?:me refer[ií]a\b|quer[ií]a decir\b|quise decir\b|mejor\b|m[aá]s\s+(?:corto|largo|claro|formal)\b|menos\s+formal\b)/iu.test(transcript);
 }
 
 export function commandConfirmation(instruction, result) {
@@ -547,6 +572,7 @@ export function createDictationController({
   let stream = null;
   let audioContext = null;
   let analyser = null;
+  let micSamples = null;
   let recorder = null;
   let monitorId = 0;
   let active = false;
@@ -559,6 +585,7 @@ export function createDictationController({
   let requestSequence = 0;
   let listenSequence = 0;
   let uploadOwner = null;
+  let bufferedRecording = null;
   let lastVoiceCommand = null;
   let pendingClarification = null;
   let cancelPlayback = null;
@@ -572,7 +599,7 @@ export function createDictationController({
   let silenceMs = 0;
   let speechMs = 0;
   let lastTick = 0;
-  let noiseFloor = 0.012;
+  let noiseFloor = 0.002;
   const wakeGate = createWakeCommandGate({ now: () => Date.now() });
 
   function captureDraft() {
@@ -613,6 +640,10 @@ export function createDictationController({
       : (labels[mode] || 'En pausa');
     elements.dictationStatus.title = message;
     elements.dictationStatus.dataset.mode = mode;
+    if (elements.dictationVoiceCommandBtn) {
+      elements.dictationVoiceCommandBtn.disabled = !elements.dictationCommandsToggle.checked ||
+        mode === 'processing' || mode === 'speaking';
+    }
   }
 
   function addActivity(message) {
@@ -1125,9 +1156,11 @@ export function createDictationController({
     const { context_start, ...context } = dictationAssistantContext(editor);
     setStatus('Lucy está interpretando la orden…', 'processing');
     try {
-      const text = prior
-        ? `Orden que estaba pendiente: ${prior.command}\nLucy preguntó: ${prior.question}\nEl usuario aclaró: ${transcript}`
-        : transcript;
+      const text = prior?.isRevision
+        ? `Orden anterior ya aplicada al borrador actual: ${prior.command}\nAjuste que pide el usuario ahora: ${transcript}`
+        : prior
+          ? `Orden que estaba pendiente: ${prior.command}\nLucy preguntó: ${prior.question}\nEl usuario aclaró: ${transcript}`
+          : transcript;
       const data = await api('/api/dictation/assist', { text, ...context });
       if (discardStale(token)) return;
       const model = data.assistant_model || data.assistant_provider || 'asistente';
@@ -1145,7 +1178,7 @@ export function createDictationController({
           return { ...edit, start: edit.start + context_start, end: edit.end + context_start };
         });
       }
-      return await applyInstruction(instruction, '', false, true, token);
+      return await applyInstruction(instruction, transcript, false, true, token);
     } catch (error) {
       if (!ownsRequest(token)) return;
       addActivity(assistantFailureActivity(error));
@@ -1173,7 +1206,7 @@ export function createDictationController({
     }
   }
 
-  async function finishCommand(result, item, invoked, token) {
+  async function finishCommand(result, item, invoked, token, transcript = '') {
     const canFollowUp = active && processing && invoked && ownsRequest(token) &&
       !['dictate', 'undo', 'redo', 'read', 'stop_listening'].includes(item.kind);
     const completedDraft = canFollowUp ? captureDraft() : null;
@@ -1181,7 +1214,7 @@ export function createDictationController({
       await speakText(commandConfirmation(item, result), 'confirmación', () => ownsRequest(token));
     }
     if (completedDraft && currentDraft(completedDraft)) {
-      lastVoiceCommand = { draft: completedDraft, changed: Boolean(result?.changed), expires: Date.now() + WAKE_COMMAND_WINDOW_MS };
+      lastVoiceCommand = { draft: completedDraft, command: transcript.slice(0, 1200), changed: Boolean(result?.changed), expires: Date.now() + WAKE_COMMAND_WINDOW_MS };
     }
     return result;
   }
@@ -1190,9 +1223,6 @@ export function createDictationController({
     if (discardStale(token)) return;
     const item = instruction && typeof instruction === 'object' ? instruction : { kind: 'noop' };
     if (transcript) addActivity(`Oí: “${transcript}”`);
-    if (transcript && allowAssistant && item.kind !== 'noop' && item.kind !== 'dictate') {
-      addActivity(`Lucy resolvió la orden con reglas instantáneas (${item.kind}).`);
-    }
     const invoked = allowAssistant || assistantAttempted || hasLucyInvocation(transcript);
     if (item.kind === 'clarify') return clarifyCommand(item.text, token);
     if (item.kind === 'undo') return finishCommand(undo(), item, invoked, token);
@@ -1217,9 +1247,9 @@ export function createDictationController({
       editor.selectionEnd = selection.end;
       return speakText(selection.text, item.scope || 'selección');
     }
-    // A literal deletion can leave the surrounding grammar broken even when its
-    // target matches. Let the selected editor consider the whole sentence.
-    if (item.kind === 'delete' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
+    const contextualEdit = ['delete', 'replace'].includes(item.kind) ||
+      (item.kind === 'insert' && cleanText(item.text));
+    if (contextualEdit && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
     if (item.kind === 'noop' && item.scope !== 'ambiguous_replacement' && allowAssistant && !assistantAttempted && elements.dictationAssistantSelect.value !== 'rules') {
@@ -1228,7 +1258,7 @@ export function createDictationController({
     if (item.kind === 'noop' && (hasLucyInvocation(transcript) || assistantAttempted)) {
       const result = { changed: false, message: item.scope === 'ambiguous_replacement' ? 'No reconocí todos los cambios. Pedilos por separado.' : 'No reconocí la orden. No cambié el texto.' };
       addActivity(result.message);
-      return finishCommand(result, item, invoked, token);
+      return finishCommand(result, item, invoked, token, transcript);
     }
     const atEnd = editor.selectionStart === editor.value.length && editor.selectionEnd === editor.value.length;
     const result = mutate(item);
@@ -1236,11 +1266,11 @@ export function createDictationController({
       editor.selectionStart = editor.selectionEnd = editor.value.length;
     }
     if (!result.changed && allowAssistant && !assistantAttempted &&
-        ['replace', 'delete_from'].includes(String(item.kind || '')) &&
+        ['delete_from'].includes(String(item.kind || '')) &&
         elements.dictationAssistantSelect.value !== 'rules') {
       return requestAssistant(transcript, token);
     }
-    return finishCommand(result, item, invoked, token);
+    return finishCommand(result, item, invoked, token, transcript);
   }
 
   async function interpretTypedCommand() {
@@ -1260,15 +1290,16 @@ export function createDictationController({
   }
 
   function micLevel() {
-    if (!analyser) return 0;
-    const data = new Uint8Array(analyser.fftSize);
-    analyser.getByteTimeDomainData(data);
+    if (!analyser || !micSamples) return 0;
+    const floatSamples = micSamples instanceof Float32Array;
+    if (floatSamples) analyser.getFloatTimeDomainData(micSamples);
+    else analyser.getByteTimeDomainData(micSamples);
     let sum = 0;
-    for (const value of data) {
-      const centered = (value - 128) / 128;
-      sum += centered * centered;
+    for (const value of micSamples) {
+      const sample = floatSamples ? value : (value - 128) / 128;
+      sum += sample * sample;
     }
-    return Math.sqrt(sum / data.length);
+    return Math.sqrt(sum / micSamples.length);
   }
 
   function monitorRecorder() {
@@ -1279,7 +1310,7 @@ export function createDictationController({
     const level = micLevel();
     // Un umbral fijo alto volvía invisible a micrófonos de bajo volumen y
     // retenía la frase hasta el límite largo de la grabación.
-    const threshold = Math.max(0.010, noiseFloor * 2.15);
+    const threshold = Math.max(0.003, noiseFloor * 2.15);
     if (level >= threshold) {
       speechMs += delta;
       silenceMs = 0;
@@ -1311,6 +1342,8 @@ export function createDictationController({
     if (discardStale(token)) return;
     uploadOwner = token;
     processing = true;
+    let preserveNextRecording = false;
+    startRecorderCycle(token);
     setStatus(reservedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
     try {
       const params = new URLSearchParams({
@@ -1326,23 +1359,34 @@ export function createDictationController({
       if (discardStale(token)) return;
       if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
+      const commandsEnabled = elements.dictationCommandsToggle.checked;
+      const split = commandsEnabled ? splitLucyUtterance(transcript) : null;
+      const bareWake = commandsEnabled && isBareLucyInvocation(transcript);
+      const rejection = commandsEnabled && rejectsLastEdit(transcript);
       const recentCommand = lastVoiceCommand;
       if (transcript) lastVoiceCommand = null;
-      // The microphone resumes after confirmation. Only the immediate reply can
-      // reject that edit, and only while the same draft revision is still open.
-      const rejecting = elements.dictationCommandsToggle.checked && rejectsLastEdit(transcript);
       const recent = recentCommand && Date.now() <= recentCommand.expires;
-      if (rejecting && (recent || hasLucyInvocation(transcript) || reservedWakeCommand)) {
-        const edited = recentCommand?.draft;
-        const sameEdit = recent && recentCommand.changed && edited.sessionId === token.sessionId && edited.epoch === token.epoch &&
-          edited.revision === token.revision && edited.value === token.value;
+      const edited = recentCommand?.draft;
+      const sameEdit = recent && recentCommand.changed && edited.sessionId === token.sessionId && edited.epoch === token.epoch &&
+        edited.revision === token.revision && edited.value === token.value;
+      const revision = commandsEnabled && sameEdit && recentCommand.command && revisesLastOrder(transcript) &&
+        elements.dictationAssistantSelect.value !== 'rules';
+      // Keep one following clip while STT is in flight. Hand it over only
+      // after plain dictation or a bare wake. Processing an edit may speak.
+      preserveNextRecording = bareWake || (!reservedWakeCommand && !split && !rejection && !revision);
+      if (!preserveNextRecording && recordingCycle?.overlapOwner === token) stopRecorderCycle(true);
+      if (revision) {
+        await requestAssistant(transcript, token, { command: recentCommand.command, isRevision: true });
+        return;
+      }
+      if (rejection && (recent || hasLucyInvocation(transcript) || reservedWakeCommand)) {
         const undone = sameEdit && undo()?.changed;
         await speakText(undone ? 'Deshice el último cambio. Decime cómo querés que quede.' : 'Decime qué parte querés cambiar.',
           'confirmación', () => ownsRequest(token));
         if (ownsRequest(token) && active) armWakeCommand();
         return;
       }
-      if (elements.dictationCommandsToggle.checked && isBareLucyInvocation(transcript)) {
+      if (bareWake) {
         if (reservedWakeCommand) wakeGate.claim();
         pendingClarification = null;
         addActivity(`Oí: “${transcript}”`);
@@ -1353,7 +1397,6 @@ export function createDictationController({
       }
       let instruction = data.instruction;
       let appliedTranscript = transcript;
-      const split = elements.dictationCommandsToggle.checked ? splitLucyUtterance(transcript) : null;
       if (split?.prefix) {
         mutate({ kind: 'dictate', text: split.prefix });
         token = beginRequest();
@@ -1383,7 +1426,10 @@ export function createDictationController({
         if (discardStale(token)) return;
         instruction = interpreted.instruction;
       }
-      const invoked = claimedWakeCommand || hasLucyInvocation(appliedTranscript);
+      const invoked = claimedWakeCommand || Boolean(split);
+      if (elements.dictationCommandsToggle.checked && !invoked && hasLucyInvocation(transcript)) {
+        instruction = { kind: 'dictate', text: transcript };
+      }
       await applyInstruction(instruction, appliedTranscript, invoked, false, token);
       log(`Dictado: ${appliedTranscript || 'sin texto'} (${data.stt_provider || 'STT'}).`);
     } catch (error) {
@@ -1396,9 +1442,22 @@ export function createDictationController({
       }
     } finally {
       if (uploadOwner === token) {
+        const buffered = bufferedRecording?.owner === token ? bufferedRecording : null;
+        bufferedRecording = null;
         uploadOwner = null;
         processing = false;
-        if (active && !speaking) startRecorderCycle();
+        const next = recordingCycle?.overlapOwner === token ? recordingCycle : null;
+        const canCarry = preserveNextRecording && ownsRequest(token) && active && !speaking;
+        if (next && canCarry) {
+          next.overlapOwner = null;
+          next.draft = captureDraft();
+          showRecorderStatus();
+        } else if (next) {
+          stopRecorderCycle(true);
+        }
+        if (buffered && canCarry) {
+          void uploadRecording(buffered.blob, buffered.mime, wakeGate.reserve(), captureDraft());
+        } else if (active && !speaking) startRecorderCycle();
       }
     }
   }
@@ -1414,8 +1473,15 @@ export function createDictationController({
     try { recorder.stop(); } catch (_) {}
   }
 
-  function startRecorderCycle() {
-    if (!active || processing || speaking || !stream || (recorder && recorder.state === 'recording')) return;
+  function showRecorderStatus() {
+    const armed = wakeGate.isArmed();
+    setStatus(armed ? 'Lucy está escuchando tu orden…' : 'Escuchando… hacé una pausa y aplico el tramo.',
+      armed ? 'armed' : 'listening');
+  }
+
+  function startRecorderCycle(overlapOwner = null) {
+    if (!active || (processing && overlapOwner !== uploadOwner) || speaking || !stream ||
+        (recorder && recorder.state === 'recording')) return;
     const mime = recorderMimeType(windowRef);
     try {
       recorder = mime ? new windowRef.MediaRecorder(stream, { mimeType: mime }) : new windowRef.MediaRecorder(stream);
@@ -1424,12 +1490,12 @@ export function createDictationController({
       stopListening();
       return;
     }
-    const cycle = { recorder, chunks: [], bytes: 0, deadlineTimer: 0, discard: false, draft: captureDraft() };
+    const cycle = { recorder, chunks: [], bytes: 0, deadlineTimer: 0, discard: false, draft: captureDraft(), overlapOwner };
     recordingCycle = cycle;
     voiceDetected = false;
     silenceMs = 0;
     speechMs = 0;
-    noiseFloor = 0.012;
+    noiseFloor = 0.002;
     recorderStartedAt = windowRef.performance.now();
     lastTick = recorderStartedAt;
     recorder.addEventListener('dataavailable', event => {
@@ -1451,12 +1517,16 @@ export function createDictationController({
       const blob = new windowRef.Blob(cycle.chunks, { type: cycle.recorder.mimeType || mime || 'audio/webm' });
       recordingCycle = null;
       recorder = null;
-      if (shouldDiscard || blob.size < 900) {
+      if (shouldDiscard || blob.size < MIN_CAPTURE_BYTES) {
         if (wakeGate.isArmed() && !wakeExpiryTimer) {
           wakeGate.arm();
           scheduleWakeExpiry();
         }
         if (active && !processing && !speaking) windowRef.setTimeout(startRecorderCycle, 180);
+        return;
+      }
+      if (cycle.overlapOwner && cycle.overlapOwner === uploadOwner) {
+        bufferedRecording = { owner: cycle.overlapOwner, blob, mime: blob.type || mime };
         return;
       }
       const reservedWakeCommand = wakeGate.reserve();
@@ -1476,10 +1546,7 @@ export function createDictationController({
       setStatus(`No pude iniciar la grabación: ${error.message}.`, 'error');
       return;
     }
-    setStatus(
-      wakeGate.isArmed() ? 'Lucy está escuchando tu orden…' : 'Escuchando… hacé una pausa y aplico el tramo.',
-      wakeGate.isArmed() ? 'armed' : 'listening'
-    );
+    if (!overlapOwner) showRecorderStatus();
     monitorId = windowRef.requestAnimationFrame(monitorRecorder);
   }
 
@@ -1515,6 +1582,8 @@ export function createDictationController({
       audioContext = new AudioContext();
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 1024;
+      micSamples = typeof analyser.getFloatTimeDomainData === 'function'
+        ? new Float32Array(analyser.fftSize) : new Uint8Array(analyser.fftSize);
       audioContext.createMediaStreamSource(stream).connect(analyser);
       active = true;
       elements.dictationMicBtn.textContent = 'Detener dictado';
@@ -1534,6 +1603,23 @@ export function createDictationController({
     }
   }
 
+  async function listenForOrder() {
+    if (!elements.dictationCommandsToggle.checked || starting || processing || speaking) return;
+    if (active && voiceDetected) {
+      setStatus('Hacé una pausa para terminar el dictado y volvé a tocar Orden por voz.', 'listening');
+      return;
+    }
+    pendingClarification = null;
+    armWakeCommand();
+    if (active) {
+      stopRecorderCycle(true);
+      startRecorderCycle();
+    } else {
+      await startListening();
+      if (!active) clearWakeCommand();
+    }
+  }
+
   function stopListening() {
     starting = false;
     workEpoch += 1;
@@ -1541,6 +1627,7 @@ export function createDictationController({
     requestSequence += 1;
     processing = false;
     uploadOwner = null;
+    bufferedRecording = null;
     active = false;
     lastVoiceCommand = null;
     clearWakeCommand();
@@ -1552,6 +1639,7 @@ export function createDictationController({
     stream = null;
     audioContext = null;
     analyser = null;
+    micSamples = null;
     elements.dictationMicBtn.textContent = 'Iniciar dictado';
     elements.dictationMicBtn.classList.remove('recording');
     setStatus('Dictado en pausa.', '');
@@ -1667,6 +1755,7 @@ export function createDictationController({
     if (!approved || discardStale(token)) return;
     mutate({ kind: 'clear' });
   });
+  elements.dictationVoiceCommandBtn?.addEventListener('click', listenForOrder);
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
   elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
   elements.dictationAssistantInstallBtn.addEventListener('click', installAssistantModel);
@@ -1674,6 +1763,9 @@ export function createDictationController({
     workEpoch += 1;
     requestSequence += 1;
     clearWakeCommand();
+    if (elements.dictationVoiceCommandBtn) {
+      elements.dictationVoiceCommandBtn.disabled = !elements.dictationCommandsToggle.checked || processing || speaking;
+    }
   });
   elements.dictationCommandInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') {

@@ -49,3 +49,15 @@ Chrome usó un MediaStream de tono propio y MediaRecorder real, transcripción d
 El modelo recibe el pedido y una ventana de hasta 12.000 caracteres. Podés seleccionar otro tramo si lo que querés editar queda lejos del cursor. Para órdenes ambiguas, Lucy pide precisión y conserva el pedido original mientras escucha la respuesta. Las pruebas cubren variaciones de edición; el acierto de una orden nueva depende de que la transcripción y el modelo la interpreten correctamente.
 
 Referencia técnica de salida con esquema para el modelo local: [Ollama Structured Outputs](https://docs.ollama.com/capabilities/structured-outputs).
+
+
+## Segunda auditoría de dictado
+
+1. Diagnóstico comprobado. Mientras transcribía un tramo, el grabador estaba detenido. La detección de amplitud usaba muestras de 8 bits y podía descartar tramos cortos o de volumen bajo. El reconocimiento del nombre separaba mal saludos e invocaciones y podía tomar algunas menciones como órdenes. La gramática de edición podía convertir instrucciones de ubicación en texto a insertar.
+2. Cambios implementados. Se conserva un tramo adicional durante la transcripción, sin permitir que se aplique sobre un borrador que cambió. El reconocimiento de amplitud usa muestras de punto flotante cuando están disponibles. Se admiten saludos cortos y variantes cercanas del nombre, se protegen menciones y citas, y se agregó el botón Orden por voz. El asistente seleccionado interpreta inserciones y reemplazos contextuales.
+3. Terminado. 887 pruebas Python 3.12, 108 JavaScript y dos recorridos E2E en Chrome. Con diez clips generados y Whisper real, cinco de seis activaciones pasaron a seis de seis. Los cuatro negativos (mención, dos muestras de prosa y silencio) no dispararon órdenes. Se compararon pista de vocabulario y prompt; con estos audios no aportaron más aciertos, por eso se conserva la transcripción general. En Chrome con audio generado, Whisper y OpenAI reales, un retraso impuesto de 2,5 s en la primera respuesta no perdió la orden siguiente. Se aplicó «Agrégale la palabra muy justo antes de oscuro» al borrador de prueba. En cuatro pedidos adicionales, OpenAI pluralizó una oración, separó un título, entendió una corrección después de editar y pidió aclaración ante una referencia ambigua.
+4. Terminado. Se reinició Panda y se verificó el recorrido sobre el servidor activo. La ventana existente necesita una recarga para leer la interfaz nueva. Ninguna prueba abrió ni midió el micrófono físico. Los cambios se guardaron en GitHub.
+
+Las ediciones contextuales de inserción, reemplazo y borrado pasan al asistente elegido. Después de una edición, frases como «No, me refería a…» pueden retomar esa orden durante veinte segundos si el borrador sigue en la misma revisión. Las pruebas de voz usan entrada sintética para comparar resultados reproducibles. Evidencia local en Panda-Fusion-auditoria/dictado-lucy-20261118/auditoria-activacion.
+
+Referencia de las opciones de transcripción comparadas: [faster-whisper](https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/transcribe.py).

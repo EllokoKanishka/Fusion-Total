@@ -108,6 +108,12 @@ class DictationInstructionTests(unittest.TestCase):
 
         self.assertEqual((instruction.kind, instruction.target), ("delete_from", "O"))
 
+    def test_short_salutations_and_phonetic_spellings_can_precede_wake_commands(self):
+        for utterance in ("Che, Lucy, borrá piedra", "Hola Lusi, borrá piedra", "Lúsy, borrá piedra"):
+            with self.subTest(utterance=utterance):
+                instruction = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((instruction.kind, instruction.target), ("delete", "piedra"))
+
     def test_replace_delete_undo_and_redo_commands(self):
         replace = interpret_dictation_transcript("Reemplazá Borges por Spinoza")
         delete = interpret_dictation_transcript("Borrá todas las veces que aparece quizá")

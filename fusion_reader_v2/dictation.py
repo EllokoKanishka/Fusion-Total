@@ -32,11 +32,11 @@ class DictationInstruction:
 
 
 _LEADING_FILLER = re.compile(
-    r"^(?:(?:no|bueno|a ver|l[uú]c(?:y|[ií])|che)\s*[,.:;-]?\s*)+",
+    r"^(?:(?:no|bueno|a ver|l[uú][cs](?:y|[ií])|che)\s*[,.:;-]?\s*)+",
     flags=re.IGNORECASE,
 )
 _WAKE_WORD = re.compile(
-    r"^l[uú]c(?:y|[ií])(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$",
+    r"^(?:(?:che|hola|oye|bueno)[ ,.:]+)?l[uú][cs](?:y|[ií])(?:\b|(?=[,.:;!?_-]))\s*[,.:;!?_-]*\s*(.*)$",
     flags=re.IGNORECASE,
 )
 _JOINED_COMMAND_SEPARATOR = re.compile(r"(?<=\w)[.:;]+(?=\w)")
