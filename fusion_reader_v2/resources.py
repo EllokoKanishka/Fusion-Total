@@ -14,12 +14,12 @@ from urllib.request import Request, urlopen
 from .gpu_budget import GPUBudget, read_gpu_budget
 from .resource_scheduling import PriorityGate
 
-WORK_CONTEXT = ContextVar("panda_resource_work", default=(0, None))
+WORK_CONTEXT = ContextVar("panda_resource_work", default=(0, None, True))
 
 
 @contextmanager
-def resource_work(priority, cancel=None):
-    token = WORK_CONTEXT.set((priority, cancel))
+def resource_work(priority, cancel=None, *, wait_for_gpu=True):
+    token = WORK_CONTEXT.set((priority, cancel, wait_for_gpu))
     try:
         yield
     finally:
@@ -124,7 +124,7 @@ class ResourceController:
 
     @contextmanager
     def inference(self, model, timeout=120):
-        priority, cancel = WORK_CONTEXT.get()
+        priority, cancel, wait_for_gpu = WORK_CONTEXT.get()
         deadline = min(time.monotonic() + timeout, getattr(cancel, "deadline", float("inf")))
 
         class Signal:
@@ -181,6 +181,8 @@ class ResourceController:
                         self.budget_at = 0.0
                     return
                 self.last_admission = "waiting_for_gpu_budget" if budget.measured else "gpu_measurement_unavailable"
+                if not wait_for_gpu:
+                    raise RuntimeError("gpu_budget_insufficient" if budget.measured else "gpu_measurement_unavailable")
             # Don't hold the inference gate while waiting for memory: a queued
             # dialogue can overtake a long job at the next admission boundary.
             time.sleep(min(0.1, max(0.001, deadline - time.monotonic())))

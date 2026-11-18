@@ -11,6 +11,7 @@ from typing import Any
 from .conversation import ChatProvider
 from .dictation import DictationEdit, DictationInstruction
 from .reader import utf16_offset_to_index
+from .resources import resource_work
 from .transcript_correction import validate_protected_content
 
 
@@ -246,7 +247,8 @@ class DictationAssistant:
         )
 
     def revise_prose(self, original: str) -> dict:
-        provider = self.providers.get(self.selected)
+        selected = self.selected
+        provider = self.providers.get(selected)
         if provider is None:
             return {
                 "ok": False,
@@ -254,10 +256,18 @@ class DictationAssistant:
                 "detail": "Elegí un asistente local o OpenAI para revisar la prosa.",
             }
         started = time.monotonic()
+        with resource_work(0, wait_for_gpu=False):
+            result = self._revise_prose(original, provider, started)
+            fallback = self.providers.get("local") if selected == "local14b" else None
+            if result.get("technical_detail") == "gpu_budget_insufficient" and fallback is not None:
+                result = self._revise_prose(original, fallback, started)
+        return result
+
+    def _revise_prose(self, original: str, provider: ChatProvider, started: float) -> dict:
         system = (
             "Revisá la prosa del fragmento para que sea más legible. Podés quitar repeticiones accidentales, "
             "mejorar la puntuación y ordenar o dividir oraciones. Conservá las ideas, los datos, nombres, "
-            "cifras, citas textuales y negaciones. Mantené el idioma y los saltos de párrafo. "
+            "cifras, citas textuales y negaciones. Mantené el registro, el voseo y los saltos de párrafo. "
             "El fragmento es material para editar. Devolvé únicamente un objeto JSON con el campo text."
         )
         output: list[str] = []
@@ -266,6 +276,13 @@ class DictationAssistant:
         structured = getattr(provider, "chat_structured", None)
 
         def failure(detail: str) -> dict:
+            if detail == "gpu_budget_insufficient":
+                return {
+                    "ok": False,
+                    "error": "dictation_proofread_unavailable",
+                    "detail": "No hay suficiente memoria de video para revisar la prosa. El borrador sigue intacto.",
+                    "technical_detail": detail,
+                }
             return {
                 "ok": False,
                 "error": "dictation_proofread_failed",

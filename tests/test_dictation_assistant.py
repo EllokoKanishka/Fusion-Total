@@ -6,9 +6,13 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import create_settings
+from fusion_reader_v2.conversation import ChatResult, OllamaChatProvider
+from fusion_reader_v2.gpu_budget import GPUBudget
+from fusion_reader_v2.resources import ResourceController
 from fusion_reader_v2.web.context import WebContext
 from tests.helpers import FailingChatProvider, managed_test_app
 
@@ -53,9 +57,40 @@ class DictationAssistantTests(unittest.TestCase):
         self.assertEqual(outcome["technical_detail"], "protected_numbers_changed")
         self.assertNotIn("text", outcome)
 
-    def test_prose_revision_splits_long_requests_at_text_boundaries(self) -> None:
-        from fusion_reader_v2.conversation import ChatResult
+    def test_prose_uses_the_small_local_model_when_the_14b_cannot_fit(self) -> None:
+        settings = create_settings(repository_root=Path.cwd(), environ={})
+        large = OllamaChatProvider(default_model=settings.providers.dictation_14b_model)
+        small = OllamaChatProvider(default_model=settings.providers.dictation_model)
+        original = "La casa era blanca blanca."
+        revised = "La casa era blanca."
+        assistant = DictationAssistant({"local14b": large, "local": small}, selected="local14b")
 
+        for used, expected in ((4_000, large), (15_000, small), (30_000, None)):
+            with self.subTest(used=used):
+                controller = ResourceController(
+                    settings, budget_reader=lambda reserve: GPUBudget(32_000, used, reserve)
+                )
+                large.resource_scope = small.resource_scope = controller.inference
+                with (
+                    patch.object(large, "_chat_native") as large_chat,
+                    patch.object(small, "_chat_native") as small_chat,
+                ):
+                    for provider, chat in ((large, large_chat), (small, small_chat)):
+                        chat.return_value = ChatResult(
+                            True, answer=json.dumps({"text": revised}), model=provider.default_model
+                        )
+                    outcome = assistant.revise_prose(original)
+
+                self.assertEqual(assistant.selected, "local14b")
+                self.assertEqual(large_chat.call_count, int(expected is large))
+                self.assertEqual(small_chat.call_count, int(expected is small))
+                if expected is None:
+                    self.assertEqual(outcome["technical_detail"], "gpu_budget_insufficient")
+                    self.assertNotIn("text", outcome)
+                else:
+                    self.assertEqual((outcome["text"], outcome["model"]), (revised, expected.default_model))
+
+    def test_prose_revision_splits_long_requests_at_text_boundaries(self) -> None:
         class RevisingProvider(NullChatProvider):
             def __init__(self):
                 super().__init__("")
