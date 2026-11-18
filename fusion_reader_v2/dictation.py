@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -99,13 +99,23 @@ def _positive_count(value: str) -> int:
     return max(0, min(number, 10_000))
 
 
+_READ_VERB = r"(?:l[eé][eé](?:me|l[oa])?|reproduc[ií]|reproduce)"
+_READ_THEN_EDIT = re.compile(
+    rf"^(?P<read>{_READ_VERB}\b.*?)\s+(?:y\s+(?:(?:luego|despu[eé]s)\s+)?|para\s+|luego\s+|despu[eé]s\s+)(?P<edit>.+)$",
+    flags=re.IGNORECASE,
+)
+_IMPROVEMENT_VERB = r"(?:mej[oó]r(?:[aáe]|ar(?:l[oa])?|[aá]l[oa])|reescr[ií]b(?:[iíea]|ir(?:l[oa])?|as|[iíe]l[oa])|pul(?:[iíe]|ir(?:l[oa])?|[iíe]l[oa]))"
 _PROSE_REQUEST = re.compile(
     r"^(?:(?:esc[uú]chame|por\s+favor)\b[ ,.:]*)?"
     r"(?:(?:lo\s+que\s+te\s+pido\s+es\s+que|(?:quiero|necesito|te\s+pido)\s+que|"
     r"pod[eé]s|podr[ií]as|que)\s+)?"
-    r"(?:revis(?:[aáe]|ar|es)|correg[ií]|corregir|corrig(?:e|as)|corrijas|"
-    r"mejor(?:[aáe]|ar|es)|reescrib(?:[iíea]|ir|as)|pul[ií]|pulir|"
+    rf"(?P<verb>{_IMPROVEMENT_VERB}|revis(?:[aáe]|ar|es)|correg[ií]|corregir|corrig(?:e|as)|corrijas|"
     r"hac[eé]|hacer|hagas|dej(?:[aáe]|ar|es))\b",
+    flags=re.IGNORECASE,
+)
+_IMPROVEMENT = re.compile(_IMPROVEMENT_VERB, flags=re.IGNORECASE)
+_TEXT_TARGET = re.compile(
+    r"\b(?:texto|borrador|documento|selecci[oó]n|fragmento|tramo|p[aá]rrafo|redacci[oó]n|prosa)\b",
     flags=re.IGNORECASE,
 )
 _PROSE_GOAL = re.compile(
@@ -115,26 +125,36 @@ _PROSE_GOAL = re.compile(
 
 
 def _prose_instruction(command: str) -> DictationInstruction | None:
-    if not _PROSE_REQUEST.match(command):
-        return None
-    goal = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", command)
+    goal = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', lambda match: " " * len(match[0]), command)
     goal = re.sub(
         r"\b(?:sin|no)\s+(?:cambi(?:ar|es)|alter(?:ar|es)|modific(?:ar|ues)|toc(?:ar|ques))"
         r"\s+(?:(?:la|el|su)\s+)?(?:prosa|redacci[oó]n|estilo)",
-        " ",
+        lambda match: " " * len(match[0]),
         goal,
         flags=re.IGNORECASE,
     )
-    if not _PROSE_GOAL.search(goal):
+    sequence = _READ_THEN_EDIT.fullmatch(goal)
+    directive = sequence.group("edit") if sequence else goal
+    request = _PROSE_REQUEST.match(directive)
+    if request is None:
         return None
-    scope = "all"
-    if re.search(r"\b(?:la\s+selecci[oó]n|lo\s+seleccionado|este\s+(?:fragmento|tramo))\b", command, re.I):
-        scope = "selection"
-    elif re.search(r"\b(?:[uú]ltimo|final)\s+p[aá]rrafo\b", command, re.I):
-        scope = "last_paragraph"
-    elif re.search(r"\b(?:este\s+p[aá]rrafo|p[aá]rrafo\s+actual)\b", command, re.I):
-        scope = "current_paragraph"
-    return DictationInstruction("revise_prose", scope=scope)
+    verb = request.group("verb").lower()
+    explicit_improvement = _IMPROVEMENT.fullmatch(verb) and (
+        sequence is not None or _TEXT_TARGET.search(directive) or verb.endswith(("lo", "la"))
+    )
+    if not (_PROSE_GOAL.search(directive) or explicit_improvement):
+        return None
+    if re.search(r"\b(?:la\s+selecci[oó]n|lo\s+seleccionado|este\s+(?:fragmento|tramo))\b", directive, re.I):
+        return DictationInstruction("revise_prose", scope="selection")
+    if re.search(r"\b(?:[uú]ltimo|final)\s+p[aá]rrafo\b", directive, re.I):
+        return DictationInstruction("revise_prose", scope="last_paragraph")
+    if re.search(r"\b(?:este\s+p[aá]rrafo|p[aá]rrafo\s+actual)\b", directive, re.I):
+        return DictationInstruction("revise_prose", scope="current_paragraph")
+    if sequence:
+        read = _read_instruction(command[sequence.start("read") : sequence.end("read")])
+        if read:
+            return replace(read, kind="revise_prose")
+    return DictationInstruction("revise_prose", scope="all")
 
 
 def _proofread_instruction(command: str) -> DictationInstruction | None:
@@ -171,7 +191,7 @@ def _proofread_instruction(command: str) -> DictationInstruction | None:
 
 def _read_instruction(command: str) -> DictationInstruction | None:
     read_match = re.match(
-        r"^(?:l[eé]eme|lee(?:me)?|leeme|reproduc[ií]|reproduce)\b\s*(.*)$",
+        rf"^{_READ_VERB}\b\s*(.*)$",
         command,
         flags=re.IGNORECASE,
     )
@@ -179,7 +199,15 @@ def _read_instruction(command: str) -> DictationInstruction | None:
         return None
     request = str(read_match.group(1) or "").strip(" .,:;!?")
     lowered = request.lower()
-    if not request or lowered in {"todo", "el texto", "el documento", "completo", "todo el texto"}:
+    if not request or lowered in {
+        "todo",
+        "el texto",
+        "el borrador",
+        "el documento",
+        "completo",
+        "todo el texto",
+        "todo el borrador",
+    }:
         return DictationInstruction("read", scope="all")
     if re.search(r"\b(?:la\s+)?selecci[oó]n\b", request, flags=re.IGNORECASE):
         return DictationInstruction("read", scope="selection")

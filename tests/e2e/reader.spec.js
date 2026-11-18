@@ -260,6 +260,12 @@ async function checkCapturedEdit(page, sample) {
     });
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(await response.json()) });
   });
+  if (sample.review) {
+    await page.route('**/api/dictation/proofread', async route => {
+      expect(route.request().postDataJSON()).toEqual({ mode: 'prose', text: sample.original });
+      await route.fulfill({ json: { ok: true, text: sample.expected, changed_parts: 1 } });
+    });
+  }
   await page.route('**/api/dictation/speak', async route => {
     confirmations++;
     spoken = route.request().postDataJSON().text;
@@ -311,5 +317,15 @@ test('Lucy clears the restored draft by voice and can undo it', async ({ page })
     expected: '',
     confirmation: 'Listo. Limpié el borrador.',
     reopen: true,
+  });
+});
+
+test('Lucy revises the draft when asked to read it and improve it', async ({ page }) => {
+  await checkCapturedEdit(page, {
+    command: 'Lucy, lee el texto y mejoralo.',
+    original: 'La casa era blanco blanco y tenía un patio con plantas.',
+    expected: 'La casa era blanca y tenía un patio con plantas.',
+    confirmation: 'Listo. Revisé la prosa.',
+    review: true,
   });
 });

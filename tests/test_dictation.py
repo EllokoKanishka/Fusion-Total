@@ -96,6 +96,27 @@ class DictationInstructionTests(unittest.TestCase):
         ):
             self.assertNotEqual(interpret_dictation_transcript(utterance, require_wake_word=True).kind, "revise_prose")
 
+    def test_read_then_edit_respects_editorial_intent_and_the_requested_scope(self):
+        for utterance, scope in (
+            ("Lucy, lee el texto y mejoralo", "all"),
+            ("Lucy, leé el borrador y mejóralo.", "all"),
+            ("Lucy léelo para mejorarlo.", "all"),
+            ("Lucy, leé el párrafo anterior y después pulilo.", "previous_paragraph"),
+            ("Lucy, leé el párrafo 2 y reescribilo para que sea más claro.", "paragraph_number"),
+            ("Lucy, leé la selección y mejorala.", "selection"),
+            ("Lucy, mejorá este párrafo.", "current_paragraph"),
+            ("Lucy, reescribí el borrador.", "all"),
+        ):
+            with self.subTest(utterance=utterance):
+                action = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((action.kind, action.scope), ("revise_prose", scope))
+        self.assertEqual(interpret_dictation_transcript("Lucy, leé el texto.").kind, "read")
+        self.assertEqual(interpret_dictation_transcript("Lucy, leé desde «Ella dijo y mejoralo»").kind, "read")
+        self.assertEqual(
+            interpret_dictation_transcript("Leé el texto y mejoralo", require_wake_word=True).kind,
+            "dictate",
+        )
+
     def test_lucy_can_stop_dictation_with_natural_spanish(self):
         for utterance in ("Lucy, pará acá", "Lucy, paramos acá", "Lucy, detener el dictado"):
             with self.subTest(utterance=utterance):

@@ -20,7 +20,7 @@ function cleanText(value) {
 const LUCY = String.raw`l[uú][cs](?:y|[ií])`;
 const WAKE_START = new RegExp(String.raw`^[¡¿]*(?:(?:che|hola|oye|bueno)[ ,.:]+)?${LUCY}(?![\p{L}\p{N}_])`, 'iu');
 const WAKE_MARK = /^[\s,.:;!?_\-…]+/u;
-const REQUEST_START = /^(?:esc[uú]chame[ ,.:]+)?(?:(?:quiero|necesito) que |lo que te pido es que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|mejor[aáe]|reescrib[iíe]|pul[ií]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|hagas|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
+const REQUEST_START = /^(?:esc[uú]chame[ ,.:]+)?(?:(?:quiero|necesito) que |lo que te pido es que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|mej[oó]r(?:[aáe]|[aá]l[oa])|reescr[ií]b(?:[iíe]|[iíe]l[oa])|pul[ií](?:l[oa])?|l[eé][eé](?:me|l[oa])?|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|hagas|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
 
 function isAddressed(tail) {
   return /^[\s]*[,.:;!?…]/u.test(tail) || REQUEST_START.test(tail.trimStart());
