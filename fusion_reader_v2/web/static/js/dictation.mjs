@@ -24,7 +24,7 @@ export function splitLucyUtterance(value) {
   const text = cleanText(value);
   if (hasLucyInvocation(text)) return { prefix: '', command: text };
   const wake = /(?<![\p{L}\p{N}_])l[uú]c(?:y|[ií])(?=$|[\s,.:;!?])(?![\p{L}\p{N}_])/giu;
-  const imperative = /^(?:cambi[aá]|cambia|reemplaz[aá]|reemplaza|sustitu[ií]|sustituye|borr[aá]|borra|elimin[aá]|elimina|deshac[eé]|deshacer|rehac[eé]|rehacer|correg[ií]|corrige|revis[aá]|revisa|l[eé]eme|lee|par[aá]|para|detener|escrib[ií]|escribe|pon[eé]|pon|agreg[aá])(?=$|[^\p{L}\p{N}_])/iu;
+  const imperative = /^(?:(?:quiero\s+)?que\s+)?(?:cambi[aá]|cambia|reemplaz[aá]|reemplaza|sustitu[ií]|sustituye|borr[aáe]|borres|elimin[aáe]|elimines|quit[aáe]|quites|deshac[eé]|deshacer|rehac[eé]|rehacer|correg[ií]|corrige|revis[aá]|revisa|l[eé]eme|lee|par[aá]|para|detener|escrib[ií]|escribe|pon[eé]|pon|agreg[aá])(?=$|[^\p{L}\p{N}_])/iu;
   let quote = '';
   const closing = { '"': '"', "'": "'", '«': '»', '“': '”' };
   for (const match of text.matchAll(wake)) {
@@ -52,7 +52,7 @@ export function commandConfirmation(instruction, result) {
   if (instruction.kind === 'replace' && String(instruction.target).length <= 40 && String(instruction.text).length <= 40) {
     return `Listo. Cambié ${instruction.target} por ${instruction.text}.`;
   }
-  const summary = { undo: 'Deshice el último cambio.', redo: 'Rehice el cambio.', delete: 'Borré el texto indicado.', clear: 'Limpié el borrador.', proofread: 'Corregí el tramo.' };
+  const summary = { undo: 'Deshice el último cambio.', redo: 'Rehice el cambio.', delete: 'Borré el texto indicado.', delete_sentence: 'Borré la frase.', clear: 'Limpié el borrador.', proofread: 'Corregí el tramo.' };
   return `Listo. ${summary[instruction.kind] || 'Apliqué el cambio.'}`;
 }
 
@@ -233,6 +233,44 @@ function preferredRange(ranges, caret) {
   return (before.length ? before[before.length - 1] : ranges[ranges.length - 1]);
 }
 
+function sentenceRanges(text) {
+  const ranges = [];
+  let start = 0;
+  const boundaries = /[.!?…]+["'»”’)\]]*(?=\s|$)|\r?\n|$/gu;
+  for (const boundary of text.matchAll(boundaries)) {
+    const end = boundary.index + boundary[0].trimEnd().length;
+    const raw = text.slice(start, end);
+    // Keep common abbreviated titles with the name that follows.
+    if (boundary[0] === '.' && /(?:^|\s)(?:sr|sra|srta|dr|dra|prof|ud|uds)\.$/iu.test(raw)) continue;
+    const leading = raw.search(/\S/u);
+    if (leading >= 0) ranges.push({ start: start + leading, end: start + raw.trimEnd().length });
+    start = boundary.index + boundary[0].length;
+  }
+  return ranges;
+}
+
+function deleteSentence(editor, scope) {
+  const text = editor.value;
+  const ranges = sentenceRanges(text);
+  const range = scope === 'last' ? ranges.at(-1) : rangeForCaret(ranges, editor.selectionStart);
+  if (!range) return { changed: false, message: 'No hay una frase para borrar.' };
+
+  let { start, end } = range;
+  const trailing = text.slice(end).match(/^[ \t]+/u)?.[0].length ?? 0;
+  if (/^[^\r\n]/u.test(text.slice(end + trailing))) {
+    end += trailing;
+  } else {
+    start -= text.slice(0, start).match(/[ \t]+$/u)?.[0].length ?? 0;
+    end += trailing;
+  }
+  if (!(text.slice(0, start) + text.slice(end)).trim()) {
+    start = 0;
+    end = text.length;
+  }
+  replaceRange(editor, '', start, end);
+  return { changed: true, message: 'Frase borrada.' };
+}
+
 export function applyEditorInstruction(editor, instruction) {
   const item = instruction && typeof instruction === 'object' ? instruction : {};
   const kind = String(item.kind || 'noop');
@@ -276,6 +314,7 @@ export function applyEditorInstruction(editor, instruction) {
     replaceRange(editor, replacement, start, end);
     return { changed: true, message: 'Selección reescrita.' };
   }
+  if (kind === 'delete_sentence') return deleteSentence(editor, item.scope);
   if (kind === 'delete_from') {
     const ranges = occurrenceRanges(editor.value, item.target);
     if (!ranges.length) return { changed: false, message: `No encontré “${item.target || ''}”.` };

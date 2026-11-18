@@ -36,6 +36,24 @@ class DictationInstructionTests(unittest.TestCase):
         self.assertEqual((command.kind, command.target), ("delete", "la palabra memoria"))
         self.assertEqual(unknown.kind, "noop")
 
+    def test_lucy_removes_one_sentence_with_local_rules(self):
+        for text, scope in (
+            ("Lucy, borrá toda la frase.", "current"),
+            ("Lucy, que borre toda la frase", "current"),
+            ("Lucy, quiero que borres esta oración completa", "current"),
+            ("Lucy, eliminá la última oración.", "last"),
+        ):
+            with self.subTest(text=text):
+                instruction = interpret_dictation_transcript(text, require_wake_word=True)
+                self.assertEqual(
+                    (instruction.kind, instruction.scope, instruction.target), ("delete_sentence", scope, "")
+                )
+        self.assertEqual(
+            interpret_dictation_transcript("Lucy, borrá toda la frase", commands_enabled=False).kind, "dictate"
+        )
+        literal = interpret_dictation_transcript('Lucy, borrá "toda la frase"')
+        self.assertEqual((literal.kind, literal.target), ("delete", "toda la frase"))
+
     def test_lucy_can_stop_dictation_with_natural_spanish(self):
         for utterance in ("Lucy, pará acá", "Lucy, paramos acá", "Lucy, detener el dictado"):
             with self.subTest(utterance=utterance):

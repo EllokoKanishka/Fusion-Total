@@ -75,6 +75,18 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await page.locator('#dictationUndoBtn').click();
   await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul, la casa es verde y la pradera es azul.');
 
+  await page.locator('#dictationEditor').fill('La casa es azul. La pradera es verde.');
+  const deleteConfirmation = page.waitForRequest(request =>
+    new URL(request.url()).pathname === '/api/dictation/speak' &&
+    request.postDataJSON().text === 'Listo. Borré la frase.');
+  await page.locator('#dictationCommandInput').fill('Lucy, borrá toda la frase');
+  await page.locator('#dictationCommandBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul.');
+  await deleteConfirmation;
+  await expect.poll(() => page.locator('#dictationPlayer').evaluate(player => player.ended)).toBe(true);
+  await page.locator('#dictationUndoBtn').click();
+  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul. La pradera es verde.');
+
   await page.locator('#dictationEditor').fill('Primer párrafo.\n\nSegundo párrafo para la lectora.');
   await page.locator('#dictationCommandInput').fill('reemplazá lectora por voz');
   await page.locator('#dictationCommandBtn').click();

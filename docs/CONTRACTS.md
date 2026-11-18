@@ -96,7 +96,7 @@ Dictation routes:
   draft excerpt and selection offsets, and returns one validated instruction;
 - instruction kinds are additive and currently include `dictate`, `insert`,
   `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
-  `delete_last_words`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.
+  `delete_last_words`, `delete_sentence`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.
 
 Audio dictation requires the wake word `Lucy` for commands. In the browser,
 a mixed utterance may contain dictated text followed by `Lucy` and an imperative:
@@ -105,6 +105,8 @@ Quoted dialogue and inline mentions of the name stay literal. `Lucy` alone arms
 the following utterance for twenty seconds. Typed commands sent
 through `/api/dictation/interpret` remain explicit and do not need the wake
 word.
+
+`delete_sentence` deletes one sentence at the caret (`scope=current`) or at the end of the draft (`scope=last`). It uses the editor undo stack and works without the assistant model.
 
 A bare `Lucy` utterance arms the next recorded utterance as its command for a
 bounded time window. When the local assistant is selected, the browser first

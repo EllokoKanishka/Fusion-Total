@@ -369,6 +369,17 @@ def interpret_dictation_transcript(
             text=str(delete_and_write.group(2)).strip(),
         )
 
+    sentence_delete = re.fullmatch(
+        r"(?:(?:quiero\s+)?que\s+)?"
+        r"(?:borr[aáe]|borres|borrar|elimin[aáe]|elimines|eliminar|quit[aáe]|quites|quitar)\s+"
+        r"(?:toda\s+)?(?:la\s+|esta\s+|esa\s+)(?:(?P<last>[uú]ltima)\s+)?"
+        r"(?:frase|oraci[oó]n)(?:\s+(?:entera|completa))?[ .,!?:;]*",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if sentence_delete:
+        return DictationInstruction("delete_sentence", scope="last" if sentence_delete.group("last") else "current")
+
     delete_match = re.match(
         r"^(?:borr[aá]|borra|elimin[aá]|elimina|quit[aá]|quita)\s+(?:(todas?)\s+(?:las\s+)?(?:veces\s+)?(?:que\s+aparece\s+)?)?(.+)$",
         command,

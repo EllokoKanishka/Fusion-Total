@@ -547,3 +547,48 @@ test('a contextual rejection cannot undo text changed manually after the voice e
   assert.equal(spoken.length, 1);
   f.controller.dispose();
 });
+
+test('sentence deletion preserves neighboring sentences, paragraph breaks and decimal points', async () => {
+  const { applyEditorInstruction } = await import(moduleUrl);
+  const cases = [
+    ['Primera. La Dra. García anotó 3.14. Tercera.', '3.14', 'current', 'Primera. Tercera.'],
+    ['Primera. ¿La querés borrar? Tercera.', 'querés', 'current', 'Primera. Tercera.'],
+    ['Primera. segunda frase sin punto', '', 'last', 'Primera.'],
+    ['Primera. Segunda.\n\nTercera.', 'Segunda', 'current', 'Primera.\n\nTercera.'],
+    ['Frase única sin punto', 'única', 'current', ''],
+  ];
+  for (const [value, caret, scope, expected] of cases) {
+    const editor = new Element();
+    editor.value = value;
+    editor.selectionStart = editor.selectionEnd = value.indexOf(caret);
+    assert.equal(applyEditorInstruction(editor, { kind: 'delete_sentence', scope }).changed, true);
+    assert.equal(editor.value, expected);
+  }
+  assert.equal(applyEditorInstruction(new Element(), { kind: 'delete_sentence', scope: 'current' }).changed, false);
+});
+
+test('voice removes the sentence and confirms locally even if the selected model is unavailable', async () => {
+  const calls = [];
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({
+      transcript: 'Lucy, borrá toda la frase.', instruction: { kind: 'delete_sentence', scope: 'current' },
+    }) }),
+    api: async (route, body) => {
+      calls.push([route, body.text]);
+      assert.equal(route, '/api/dictation/speak');
+      return { audio_url: '/confirmation.wav' };
+    },
+  });
+  f.elements.dictationAssistantSelect.value = 'openai';
+  await f.edit('La casa es azul. La pradera es verde.');
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul.');
+  assert.deepEqual(calls, [['/api/dictation/speak', 'Listo. Borré la frase.']]);
+  await f.elements.dictationPlayer.emit('ended');
+  await tick();
+  assert.equal(f.recorders.at(-1).state, 'recording');
+  await f.elements.dictationUndoBtn.emit('click');
+  assert.equal(f.elements.dictationEditor.value, 'La casa es azul. La pradera es verde.');
+  f.controller.dispose();
+});
