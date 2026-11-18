@@ -11,9 +11,10 @@ export PATH="$HOME/.local/bin:$HOME/Miniforge3/bin:$PATH"
 source "$project_root/scripts/lib/env_helper.sh"
 load_env_safe
 
-server_url="${PANDA_FUSION_URL:-http://127.0.0.1:${FUSION_READER_V2_PORT:-8010}/}"
+PANDA_FUSION_URL_OVERRIDE="${PANDA_FUSION_URL:-}"
+server_url="${PANDA_FUSION_URL_OVERRIDE:-$(fusion_api_base_url)/}"
 export PANDA_FUSION_URL="$server_url"
-status_url="${server_url%/}/api/status"
+status_url="${server_url%/}/health/live"
 
 # La carcasa Tauri/WebKitGTK todavía no ofrece getUserMedia estable en Linux:
 # puede perder el micrófono y renderizar una superficie gris al redimensionar.
@@ -41,25 +42,12 @@ if [[ "${PANDA_FUSION_NATIVE_EXPERIMENTAL:-0}" == "1" ]] && is_appimage_running;
 fi
 
 ensure_server_ready() {
-  if curl --fail --silent --max-time 2 "$status_url" >/dev/null 2>&1; then
-    echo "Servidor de Panda Fusión activo en ${server_url}."
-    return 0
+  if [[ -n "${PANDA_FUSION_URL_OVERRIDE:-}" ]]; then
+    curl --noproxy '*' --fail --silent --max-time 2 "$status_url" >/dev/null
+    return $?
   fi
 
-  echo "Iniciando servidor de Panda Fusión..."
-  fusionctl start || true
-
-  local deadline=$(( $(date +%s) + 40 ))
-  while (( $(date +%s) < deadline )); do
-    if curl --fail --silent --max-time 2 "$status_url" >/dev/null 2>&1; then
-      echo "Servidor de Panda Fusión listo."
-      return 0
-    fi
-    sleep 1
-  done
-
-  echo "ERROR: El servidor de Panda Fusión no respondió a tiempo." >&2
-  return 1
+  bash "$project_root/scripts/start_fusion_reader_v2.sh"
 }
 
 

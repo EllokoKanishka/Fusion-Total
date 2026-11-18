@@ -23,15 +23,16 @@ sys.path.insert(0, str(CODE))
 os.chdir(CODE)
 tempfile.tempdir = str(TMP)
 os.environ["TMPDIR"] = str(TMP)
-ports = set()
+endpoints = set()
+loopback = ("127.0.0.1", "::1")
 blocked = []
 real_bind = socket.socket.bind
 
 
 def bind(sock, address):
-    if isinstance(address, tuple) and address[0] == "127.0.0.1" and (address[1] == 0 or address[1] in ports):
+    if isinstance(address, tuple) and address[0] in loopback and (address[1] == 0 or address[:2] in endpoints):
         r = real_bind(sock, address)
-        ports.add(sock.getsockname()[1])
+        endpoints.add(sock.getsockname()[:2])
         return r
     raise RuntimeError("Test isolation: only owned ephemeral loopback binds allowed")
 
@@ -42,7 +43,7 @@ socket.socket.bind = bind
 def guard(event, args):
     if event == "socket.connect":
         address = args[1]
-        if not isinstance(address, tuple) or address[0] != "127.0.0.1" or address[1] not in ports:
+        if not isinstance(address, tuple) or address[:2] not in endpoints:
             blocked.append(
                 "network:"
                 + str(

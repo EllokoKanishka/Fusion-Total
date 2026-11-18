@@ -46,7 +46,7 @@ cat << EOF > "$LAUNCHER_PATH"
 # Lanzador de escritorio para Fusion Reader v2 generado por el instalador.
 set -euo pipefail
 
-# Abrir la carcasa nativa; el script inicia Fusion si hace falta.
+# Abrir Panda en modo aplicación e iniciar el servidor si hace falta.
 exec bash "$ROOT/scripts/start_pandafusion_desktop.sh" "\$@"
 EOF
 

@@ -103,6 +103,8 @@ usa principalmente biblioteca estándar:
 - `curl`
   - healthchecks y launchers (`start_fusion_reader_v2.sh`,
     `open_fusion_reader.sh`)
+- `flock` (util-linux)
+  - evita arranques concurrentes en la misma carpeta de runtime
 - `ss`
   - verificador de puertos y checks de listeners
 - `ffmpeg`
@@ -124,7 +126,7 @@ usa principalmente biblioteca estándar:
 ### Optional but operationally useful
 
 - `lsof`
-  - fallback para detectar listeners en `start_fusion_reader_v2.sh`
+  - identifica listeners en los diagnósticos de voz
 - `xdg-open` o `sensible-browser`
   - usados por `scripts/open_fusion_reader.sh`
 - `whisper`
@@ -357,15 +359,13 @@ Su auditoría consolidada vive en `docs/LOCAL_DEFAULTS_V2.md`.
 
 ### `scripts/open_fusion_reader.sh`
 
-- wrapper de escritorio;
-- intenta levantar STT, TTS y server si faltan;
-- abre `http://127.0.0.1:8010/` en navegador;
-- usa GPU TTS si `7853` está listo con owner válido; si no, puede arrancar
-  fallback CPU.
+- wrapper compatible para abrir la URL local configurada en el navegador;
+- delega el arranque en el servicio systemd o en el script compartido.
 
 ### `scripts/start_fusion_reader_v2.sh`
 
-- levanta solo la UI/API de Fusion en `8010`;
+- comprueba primero que el puerto de la UI/API esté libre o pertenezca a esta instancia;
+- inicia los motores opcionales y la UI/API de Fusion;
 - selecciona `FUSION_READER_ALLTALK_URL` entre `7853` y `7851`;
 - valida owner de `7853`;
 - registra commit, PID y log persistente;

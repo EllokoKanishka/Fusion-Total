@@ -365,7 +365,8 @@ Bohemia usa un modelo abliterated/uncensored (`huihui_ai/qwen3-abliterated:14b-v
 
 Aclaración:
 - Académica conserva `qwen3:14b-q8_0`.
-- Bohemia cambia de modelo solo si la variable `FUSION_READER_BOHEMIA_CHAT_MODEL` está definida.
+- Bohemia usa `FUSION_READER_BOHEMIA_CHAT_MODEL` cuando está definida.
+- Los perfiles se aplican al iniciar una instancia nueva. El diagnóstico del modelo usa el Ollama configurado para Panda.
 
 ## Recuperación rápida
 

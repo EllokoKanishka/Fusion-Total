@@ -38,59 +38,28 @@ class ResearchService:
         if not request:
             return False
         verb, target = request.groups()
-        # Normalize imperative/subjunctive/infinitive forms for the markers below.
-        if verb.startswith("bus"):
-            clean = "busca" + target
-        elif verb.startswith("invest"):
-            clean = "investiga" + target
-        elif verb.startswith("tra"):
-            clean = "trae" + target
-        else:
-            clean = verb + target
-        explicit = (
-            "busca en internet",
-            "buscar en internet",
-            "busca en la red",
-            "buscar en la red",
-            "busca en web",
-            "buscar en web",
-            "busca afuera",
-            "buscar afuera",
-            "investiga en internet",
-            "investigar en internet",
-            "investiga afuera",
-            "investigar afuera",
-            "trae fuentes externas",
-            "trae fuentes de internet",
-            "busca fuentes externas",
-            "googlea",
-            "googlealo",
-            "googleala",
-            "busca online",
-        )
-        if any(marker in clean for marker in explicit):
+        target = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", target)
+        target = re.sub(r"(?<!\w)'[^']*'(?!\w)", " ", target)
+        if verb.startswith("googlea"):
             return True
-        academic = (
-            "tesis",
-            "tesis doctoral",
-            "tesis de doctorado",
-            "paper",
-            "papers",
-            "articulo",
-            "articulos",
-            "fuente",
-            "fuentes",
-            "repositorio",
-            "repositorios",
-            "universidad",
-            "universidades",
-            "bibliografia",
-            "journal",
-            "revista academica",
-            "revistas academicas",
+        local_scope = re.search(
+            r"\b(?:en|dentro del?|sin salir del?|del|de)\s+(?:(?:el|la|los|las|este|esta|estos|estas|mi|mis)\s+)?"
+            r"(?:texto|documento|bloque|capitulo|pdf|archivo|libro|parrafo|lectura|referencias|notas)\b",
+            target,
         )
-        verbs = ("busca", "buscar", "buscame", "investiga", "investigar", "trae", "traer", "revisa")
-        return any(clean.startswith(verb + " ") for verb in verbs) and any(marker in clean for marker in academic)
+        if local_scope and not target[: local_scope.start()].strip():
+            return False
+        if re.search(r"\b(?:en (?:internet|la red|(?:la )?web|linea)|online|afuera)\b", target):
+            return True
+        if local_scope:
+            return False
+        return bool(
+            re.search(
+                r"\b(?:tesis|papers?|articulos?|fuentes?|repositorios?|universidad(?:es)?|bibliografia|"
+                r"journals?|revistas? academicas?)\b",
+                target,
+            )
+        )
 
     def research(self, message: str) -> ExternalResearchResult:
         return self.bridge.research(message, snapshot=self.snapshot())

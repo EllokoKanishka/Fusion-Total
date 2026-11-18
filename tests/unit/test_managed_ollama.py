@@ -210,7 +210,9 @@ class ManagedOllamaTests(unittest.TestCase):
             stop=Mock(return_value={"ok": True, "released": True}),
             cancel=Mock(),
         )
-        server = SimpleNamespace(serve_forever=Mock(), server_close=Mock(), shutdown=Mock())
+        server = SimpleNamespace(
+            serve_forever=Mock(), server_close=Mock(), shutdown=Mock(), server_port=settings.ports.api
+        )
         lifetime = SimpleNamespace(start=Mock(), stop=Mock())
         with (
             patch.object(web_server, "create_settings", return_value=settings),

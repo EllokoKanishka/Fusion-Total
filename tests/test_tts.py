@@ -250,7 +250,6 @@ class TTSTests(unittest.TestCase):
         for rel in (
             "scripts/start_reader_neural_tts_gpu_5090.sh",
             "scripts/start_fusion_reader_v2.sh",
-            "scripts/open_fusion_reader.sh",
         ):
             text = (root / rel).read_text(encoding="utf-8")
             self.assertIn("FUSION_READER_TTS_OWNER_FILE", text)

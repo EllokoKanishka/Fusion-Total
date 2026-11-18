@@ -29,6 +29,14 @@ load_env_safe() {
   fi
 }
 
+fusion_api_base_url() {
+  local host="${FUSION_READER_BIND_HOST:-127.0.0.1}"
+  if [[ "$host" == *:* ]]; then
+    host="[$host]"
+  fi
+  printf 'http://%s:%s' "$host" "${FUSION_READER_V2_PORT:-8010}"
+}
+
 verify_python() {
   local py="$1"
   if [[ -x "$py" ]]; then

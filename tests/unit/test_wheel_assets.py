@@ -5,7 +5,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from scripts.check_wheel_assets import REQUIRED_ASSETS, discover_static_assets, missing_assets
+from scripts.check_wheel_assets import REQUIRED_ASSETS, discover_static_assets, wheel_issues
 
 
 class WheelAssetTests(unittest.TestCase):
@@ -38,7 +38,7 @@ class WheelAssetTests(unittest.TestCase):
             with zipfile.ZipFile(wheel, "w") as archive:
                 for name in REQUIRED_ASSETS:
                     archive.writestr(name, b"asset")
-            self.assertEqual(missing_assets(wheel), [])
+            self.assertEqual(wheel_issues(wheel), [])
 
     def test_missing_nested_module_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,16 +47,27 @@ class WheelAssetTests(unittest.TestCase):
             with zipfile.ZipFile(wheel, "w") as archive:
                 for name in REQUIRED_ASSETS - {missing}:
                     archive.writestr(name, b"asset")
-            self.assertEqual(missing_assets(wheel), [missing])
+            self.assertEqual(wheel_issues(wheel), [missing])
+
+    def test_rejects_stale_files_from_build_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wheel = Path(tmp) / "fusion_reader_v2-test.whl"
+            obsolete = "scripts/removed_module.py"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                for name in REQUIRED_ASSETS:
+                    archive.writestr(name, b"asset")
+                archive.writestr(obsolete, b"")
+                archive.writestr("fusion_reader_v2-test.dist-info/METADATA", b"")
+            self.assertEqual(wheel_issues(wheel), [f"unexpected_wheel_entry:{obsolete}"])
 
     def test_invalid_or_missing_wheel_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             missing = root / "missing.whl"
-            self.assertEqual(missing_assets(missing), [f"wheel_missing:{missing}"])
+            self.assertEqual(wheel_issues(missing), [f"wheel_missing:{missing}"])
             invalid = root / "invalid.whl"
             invalid.write_text("not a zip", encoding="utf-8")
-            self.assertEqual(missing_assets(invalid), [f"wheel_invalid:{invalid}:BadZipFile"])
+            self.assertEqual(wheel_issues(invalid), [f"wheel_invalid:{invalid}:BadZipFile"])
 
 
 if __name__ == "__main__":

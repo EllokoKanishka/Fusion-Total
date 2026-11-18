@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/lib/env_helper.sh"
+load_env_safe
 
 export FUSION_READER_CHAT_MODEL="${FUSION_READER_CHAT_MODEL:-qwen3:14b-q8_0}"
 export FUSION_READER_CHAT_THINK="${FUSION_READER_CHAT_THINK:-1}"
@@ -15,4 +17,4 @@ echo "Thinking: ${FUSION_READER_CHAT_THINK}"
 echo "Num predict: ${FUSION_READER_CHAT_NUM_PREDICT}"
 echo "Modo razonamiento: ${FUSION_READER_REASONING_MODE}"
 
-exec "${SCRIPT_DIR}/start_fusion_reader_v2.sh"
+exec "$ROOT/scripts/start_fusion_reader_v2.sh" "$@"

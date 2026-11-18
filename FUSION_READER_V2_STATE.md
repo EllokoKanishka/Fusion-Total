@@ -61,8 +61,8 @@ y laboratorio, no como dependencia del producto v2.
   `localStorage`; comparte la voz del lector y elimina el audio temporal después
   de cada turno.
 - las órdenes conocidas de Dictado son instantáneas; las desconocidas pueden
-  escalar, por elección explícita, a Qwen3 4B local, Qwen3 14B Q8 local o GPT-5
-  nano mediante `fusion-dialogue`. Sólo reciben una ventana acotada del borrador
+  escalar, por elección explícita, a Qwen3 4B local, Qwen3 14B Q8 local o el modelo
+  OpenAI configurado mediante `fusion-dialogue`. Sólo reciben una ventana acotada del borrador
   y proponen ediciones que Panda verifica y aplica juntas con un solo Deshacer.
 - “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden.
   El grabador se reabre mientras la precarga local sigue en segundo plano. Si el

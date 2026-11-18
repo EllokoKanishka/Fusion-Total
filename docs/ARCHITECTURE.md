@@ -103,17 +103,16 @@ Propiedades:
 - usa pausas para cerrar cada tramo y no depende de `SpeechRecognition`;
 - distingue dictado de órdenes mediante la invocación explícita “Lucy”; el
   control puede desactivarse para que absolutamente todo entre como texto;
-- “Lucy” sola arma una ventana acotada para la siguiente frase y el navegador
-  no anuncia ese estado hasta que el modelo local, si fue elegido, confirmó su
-  precarga y el nuevo grabador ya está activo; una vez detectada voz, reserva la
-  invocación hasta obtener una transcripción válida para que el transporte no la
-  consuma antes de interpretar la orden;
+- “Lucy” sola arma una ventana de veinte segundos para la siguiente frase.
+  La captura continúa mientras se prepara el modelo local en segundo plano.
+  Al detectar voz, el navegador reserva la invocación hasta recibir una
+  transcripción válida;
 - comparte el catálogo y la voz TTS seleccionada con el lector principal;
 - la transcripción literal usa el STT especializado local (default operativo:
   faster-whisper `small`, idioma `es`); no hace pasar cada frase por el modelo
   conversacional 14B ni por OpenAI;
 - el selector de asistente ofrece reglas instantáneas (default), Qwen3 4B local,
-  Qwen3 14B Q8 local y OpenAI GPT-5 nano mediante el agente aislado
+  Qwen3 14B Q8 local y el modelo OpenAI configurado mediante el agente aislado
   `fusion-dialogue`; los modelos sólo se invocan cuando una orden con “Lucy”
   escapa a la gramática;
 - si el Qwen seleccionado falta, una acción explícita inicia `ollama pull` como

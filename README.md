@@ -65,14 +65,17 @@ fusionctl stop
 ```
 
 `fusionctl doctor`, `status` y los modos dry-run no crean roots ni cambian
-servicios ajenos.
+servicios ajenos. `fusionctl start` reutiliza una instancia propia activa.
+Usá `fusionctl restart` para cargar cambios del código o la configuración.
+En una instalación desde wheel, `fusionctl smoke` consulta la salud de la API.
+`fusionctl test` se ejecuta desde el checkout del repositorio.
 
 ## Validación
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py' -v
-python -m unittest discover -s tests/stress -p 'stress_*.py' -v
-coverage run --branch -m unittest discover -s tests -p 'test_*.py'
+fusionctl test
+python scripts/run_isolated_tests.py stress
+coverage run --branch scripts/run_isolated_tests.py
 ruff check .
 ruff format --check .
 mypy fusion_reader_v2

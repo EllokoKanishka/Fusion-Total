@@ -210,6 +210,9 @@ exit 1
 if [[ "$*" == *"-c"* ]]; then
   exit 0
 fi
+if [[ "${{!#}}" == "_probe-startup" ]]; then
+  exit 3
+fi
 echo "python-started-fallback" >> "{self.side_effects_log}"
 touch "{self.healthy_marker}"
 sleep 1
@@ -268,6 +271,9 @@ exit 0
     def test_systemd_entrypoint_selects_ready_cpu_fallback_before_web_server(self):
         self.mock_python.write_text(
             f'''#!/usr/bin/env bash
+if [[ "${{!#}}" == "_probe-startup" ]]; then
+  exit 3
+fi
 echo "tts-url=$FUSION_READER_ALLTALK_URL args=$*" >> "{self.side_effects_log}"
 exit 0
 ''',

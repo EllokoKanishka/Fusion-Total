@@ -27,3 +27,8 @@ def is_local_endpoint_host(host: str | None) -> bool:
             return address.is_loopback or address.is_unspecified
         except (OSError, ValueError):
             return False
+
+
+def http_base_url(host: str, port: int) -> str:
+    authority = f"[{host}]" if ":" in host else host
+    return f"http://{authority}:{port}"

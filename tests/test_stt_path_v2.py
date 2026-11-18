@@ -34,10 +34,10 @@ class SttPathV2Tests(unittest.TestCase):
             self.assertEqual(WhisperCliSTTProvider().command, "/tmp/custom-whisper")
 
     def test_launchers_and_env_resolution_are_structurally_consistent(self):
-        launcher = Path("scripts/open_fusion_reader.sh").read_text(encoding="utf-8")
-        self.assertIn('"$STT_PROVIDER" == "cli" || "$STT_PROVIDER" == "none"', launcher)
-        self.assertIn("inicio omitido porque el provider es cli", launcher)
-        self.assertIn("intentando iniciar para provider", launcher)
+        launcher = Path("scripts/start_fusion_reader_v2.sh").read_text(encoding="utf-8")
+        self.assertIn("0:*|1:none|1:cli)", launcher)
+        self.assertIn("STT server omitido por configuración", launcher)
+        self.assertIn("ensure_fusion_gpu_stt ||", launcher)
         server = Path("scripts/start_fusion_reader_v2_stt.sh").read_text(encoding="utf-8")
         self.assertIn("FUSION_READER_STT_ENV:-${FUSION_READER_GPU_ENV:-", server)
         self.assertIn("Set FUSION_READER_STT_ENV to a valid STT environment", server)

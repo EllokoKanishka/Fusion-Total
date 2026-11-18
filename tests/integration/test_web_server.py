@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -40,11 +41,14 @@ class WebServerIntegrationTests(unittest.TestCase):
         settings = replace(settings, ports=replace(settings.ports, api=0))
         return settings
 
-    def _start(self, root: Path, *, synthetic_tts: bool = False, stt=None, dictation_assistant=None):
+    def _start(
+        self, root: Path, *, synthetic_tts: bool = False, stt=None, dictation_assistant=None, bind_host="127.0.0.1"
+    ):
         tts = SyntheticWavTTSProvider() if synthetic_tts else None
         app_context = managed_test_app(root=root / "app", tts=tts, stt=stt, dictation_assistant=dictation_assistant)
         app = app_context.__enter__()
-        server = web_server.create_http_server(app, self._settings(root))
+        settings = replace(self._settings(root), security=SecuritySettings(bind_host=bind_host))
+        server = web_server.create_http_server(app, settings)
         thread = threading.Thread(target=server.serve_forever, name="fusion-test-http")
         thread.start()
         self.addCleanup(app_context.__exit__, None, None, None)
@@ -65,6 +69,17 @@ class WebServerIntegrationTests(unittest.TestCase):
             raw = response.read()
             content_type = response.headers.get("Content-Type", "")
             return response.status, json.loads(raw) if "application/json" in content_type and raw else raw
+
+    def test_ipv6_loopback_serves_health_and_reports_effective_port(self) -> None:
+        if not socket.has_ipv6:
+            self.skipTest("IPv6 unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), bind_host="::1")
+            base = f"http://[::1]:{server.server_port}"
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(base + "/health/live", timeout=3) as response:
+                self.assertEqual(json.load(response)["pid"], os.getpid())
+            self.assertEqual(server.context.runtime_info["port"], server.server_port)
 
     def test_importing_compatibility_server_has_no_runtime_side_effect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -610,7 +625,14 @@ class WebServerIntegrationTests(unittest.TestCase):
 
             self.assertEqual(self._request(base, "/api/voice/test", {"text": "Voz", "play": False})[0], 200)
             self.assertEqual(self._request(base, "/api/chat", {"message": "Resume el bloque"})[0], 200)
-            self.assertEqual(self._request(base, "/api/dialogue/turn", {"text": "Resume"})[0], 200)
+            dialogue = urllib.request.Request(
+                base + "/api/dialogue/turn",
+                data=b'{"text": "Resume"}',
+                headers={"Content-Type": "Application/JSON; charset=UTF-8"},
+            )
+            with urllib.request.urlopen(dialogue, timeout=5.0) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.load(response).get("transcript"), "Resume")
 
             _, note = self._request(base, "/api/notes/create", {"text": "Nota matrix", "chunk_index": 0})
             note_id = note["note"]["note_id"]

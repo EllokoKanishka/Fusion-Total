@@ -75,6 +75,12 @@ class ConversationSafetyTests(unittest.TestCase):
                 "Explicá la frase «busca en internet»",
                 "¿Qué significa buscar en internet?",
                 "No quiero que busques fuentes externas",
+                "Buscá en el documento la frase «buscar en internet»",
+                "Buscá en este documento la frase buscar en internet",
+                "Buscá las fuentes en este PDF",
+                "Revisá en mis notas las referencias",
+                'Buscá la frase "papers sobre Kant"',
+                "Buscá la antítesis",
             ):
                 with self.subTest(method=method, text=text):
                     bridge = NullExternalResearchBridge()
@@ -91,6 +97,9 @@ class ConversationSafetyTests(unittest.TestCase):
             "Por favor, buscá fuentes sobre Kant",
             "¿Podés buscar en internet sobre Hegel?",
             "quiero que investigues afuera sobre Hegel",
+            "Buscá en internet las fuentes citadas en este PDF",
+            "Buscá fuentes en la web",
+            "Buscame una bibliografía externa sobre Kant",
         ):
             with self.subTest(text=text):
                 self.assertTrue(service.is_explicit_request(text))

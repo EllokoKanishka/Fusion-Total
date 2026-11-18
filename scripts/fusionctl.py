@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import re
 import shutil
 import signal
 import socket
@@ -15,6 +17,7 @@ from pathlib import Path
 from subprocess import TimeoutExpired
 
 from fusion_reader_v2.config import Settings, create_settings
+from fusion_reader_v2.network import http_base_url
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.tts import AudioCache
 from fusion_reader_v2.version import __version__
@@ -25,7 +28,8 @@ def _json(payload: dict) -> None:
 
 
 def _request_json(url: str, timeout: float = 3.0) -> dict:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("invalid_status_payload")
@@ -33,10 +37,34 @@ def _request_json(url: str, timeout: float = 3.0) -> dict:
 
 
 def _base_url(settings: Settings) -> str:
-    host = (
-        settings.security.bind_host if settings.security.bind_host in {"127.0.0.1", "localhost", "::1"} else "127.0.0.1"
-    )
-    return f"http://{host}:{settings.ports.api}"
+    return http_base_url(settings.security.bind_host, settings.ports.api)
+
+
+def _project_environment(repository: Path, inherited: dict[str, str]) -> dict[str, str]:
+    """Match the shared Bash loader without evaluating shell expressions."""
+    environment = inherited.copy()
+    if environment.get("FUSION_READER_IGNORE_ENV_FILE") == "1":
+        return environment
+    try:
+        lines = (repository / ".env").read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return environment
+    for line in lines:
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
+        if match:
+            key, value = match.groups()
+            if not environment.get(key):
+                environment[key] = value.removeprefix('"').removesuffix('"').removeprefix("'").removesuffix("'")
+    return environment
+
+
+def _run_visible(command: list[str], *, cwd: Path, timeout: float, env: dict[str, str] | None = None) -> int:
+    result = run_owned(command, cwd=cwd, env=env, timeout=timeout, text=True, check=False)
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    return result.returncode
 
 
 def command_start(settings: Settings, _args: argparse.Namespace) -> int:
@@ -44,7 +72,7 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
     if not script.is_file():
         _json({"ok": False, "error": "start_script_missing", "path": str(script)})
         return 1
-    environment = dict(os.environ)
+    environment = _project_environment(settings.paths.repository, dict(os.environ))
     if getattr(_args, "no_engines", False):
         environment["FUSION_READER_START_ENGINES"] = "0"
     project_python = settings.paths.repository / ".venv/bin/python"
@@ -96,43 +124,78 @@ def command_start(settings: Settings, _args: argparse.Namespace) -> int:
     environment["FUSION_READER_BIND_HOST"] = settings.security.bind_host
     defaults = {
         "TTS_GPU_START_WAIT_SECONDS": environment.get("FUSION_READER_GPU_TTS_WAIT_SECONDS", "90"),
-        "TTS_CPU_START_WAIT_SECONDS": 60,
-        "STT_GPU_START_WAIT_SECONDS": 120,
-        "STARTUP_WAIT_SECONDS": 40,
+        "TTS_CPU_START_WAIT_SECONDS": "60",
+        "STT_GPU_START_WAIT_SECONDS": "120",
+        "STARTUP_WAIT_SECONDS": "40",
     }
-    import math
-
     waits = [float(environment.get("FUSION_READER_" + key, default)) for key, default in defaults.items()]
     if any(not math.isfinite(value) or value <= 0 for value in waits):
         raise ValueError("invalid_startup_wait")
-    result = run_owned(
-        ["bash", str(script)], cwd=settings.paths.repository, env=environment, timeout=sum(waits) + 60, check=False
-    )
-    return int(result.returncode)
+    return _run_visible(["bash", str(script)], cwd=settings.paths.repository, env=environment, timeout=sum(waits) + 60)
+
+
+def _pid_path(settings: Settings) -> Path:
+    environment = _project_environment(settings.paths.repository, dict(os.environ))
+    configured = environment.get("FUSION_READER_PID_FILE")
+    return settings.paths.repository / configured if configured else settings.paths.runtime / "fusion_reader_v2.pid"
 
 
 def _owned_server_pid(settings: Settings) -> tuple[int | None, str]:
-    pid_path = settings.paths.runtime / "fusion_reader_v2.pid"
+    pid_path = _pid_path(settings)
     try:
         pid = int(pid_path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
         return None, "pid_file_missing"
     except (OSError, ValueError):
         return None, "pid_file_invalid"
+    if pid <= 1:
+        return None, "pid_file_invalid"
     proc = Path("/proc") / str(pid)
-    if not proc.exists():
-        return None, "pid_stale"
     try:
-        command = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if proc.stat().st_uid != os.getuid() or (proc / "cwd").resolve(strict=True) != settings.paths.repository:
+            return None, "pid_owner_mismatch"
+        command = (proc / "cmdline").read_bytes().split(b"\x00")
+        module = b"scripts.fusion_reader_v2_server"
+        if not any(arg == b"-m" and following == module for arg, following in zip(command, command[1:])):
+            return None, "pid_owner_mismatch"
+        env = (proc / "environ").read_bytes().split(b"\x00")
+        runtime_key = b"FUSION_READER_RUNTIME_ROOT="
+        runtime = next((item[len(runtime_key) :] for item in env if item.startswith(runtime_key)), None)
+        if runtime is None or Path(os.fsdecode(runtime)).expanduser().resolve() != settings.paths.runtime:
+            return None, "pid_owner_mismatch"
+    except FileNotFoundError:
+        return None, "pid_stale"
     except OSError:
         return None, "pid_unreadable"
-    if "fusion_reader_v2_server" not in command:
-        return None, "pid_owner_mismatch"
     return pid, "owned"
 
 
+def probe_startup(settings: Settings, _args: argparse.Namespace) -> int:
+    """Return 3 for a free endpoint, 0 for our server and 2 for a conflict."""
+    try:
+        with socket.create_connection((settings.security.bind_host, settings.ports.api), timeout=0.5):
+            pass
+    except ConnectionRefusedError:
+        return 3
+    except OSError as exc:
+        _json({"ok": False, "error": "listener_unknown", "detail": type(exc).__name__})
+        return 2
+
+    pid, _detail = _owned_server_pid(settings)
+    if pid is not None:
+        try:
+            health = _request_json(f"{_base_url(settings)}/health/live", timeout=2)
+        except (OSError, ValueError):
+            health = {}
+        if health == {"ok": True, "status": "live", "pid": pid}:
+            _json({"ok": True, "state": "already_running", "pid": pid})
+            return 0
+    _json({"ok": False, "error": "port_occupied", "port": settings.ports.api})
+    return 2
+
+
 def command_stop(settings: Settings, _args: argparse.Namespace) -> int:
-    pid_path = settings.paths.runtime / "fusion_reader_v2.pid"
+    pid_path = _pid_path(settings)
     pid, detail = _owned_server_pid(settings)
     if pid is None:
         if detail == "pid_stale":
@@ -171,10 +234,12 @@ def command_status(settings: Settings, _args: argparse.Namespace) -> int:
     return 0 if payload.get("ok") else 1
 
 
-def _port_open(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-        client.settimeout(0.25)
-        return client.connect_ex(("127.0.0.1", int(port))) == 0
+def _port_open(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.25):
+            return True
+    except OSError:
+        return False
 
 
 def _git_commit(repository: Path) -> str:
@@ -200,15 +265,19 @@ def command_doctor(settings: Settings, _args: argparse.Namespace) -> int:
         "tts_gpu": settings.ports.tts_gpu,
         "tts_external_doctora": 7854,
         "stt": settings.ports.stt,
-        "ollama": settings.ports.ollama,
+        "ollama": settings.resources.private_ollama_port
+        if settings.resources.ollama_mode == "dedicated"
+        else settings.ports.ollama,
         "searxng": settings.ports.searxng,
     }
-    owner = {"state": "missing"}
+    owner: dict[str, object] = {"state": "missing"}
     try:
         raw_owner = json.loads(settings.providers.tts_owner_file.read_text(encoding="utf-8"))
+        if not isinstance(raw_owner, dict):
+            raise ValueError("invalid_tts_owner")
         owner = {
             "state": "valid"
-            if raw_owner.get("owner") == "fusion_reader_v2" and int(raw_owner.get("port")) == 7853
+            if raw_owner.get("owner") == "fusion_reader_v2" and int(raw_owner.get("port", 0)) == settings.ports.tts_gpu
             else "mismatch",
             "owner": str(raw_owner.get("owner") or ""),
             "port": raw_owner.get("port"),
@@ -229,7 +298,7 @@ def command_doctor(settings: Settings, _args: argparse.Namespace) -> int:
             "logs": settings.paths.logs,
         }.items()
     }
-    session = {"state": "missing"}
+    session: dict[str, object] = {"state": "missing"}
     try:
         session_size = settings.paths.session.stat().st_size
         session = {
@@ -247,7 +316,13 @@ def command_doctor(settings: Settings, _args: argparse.Namespace) -> int:
         "python": sys.version.split()[0],
         "executable": sys.executable,
         "roots": roots,
-        "ports": {name: {"port": port, "listening": _port_open(port)} for name, port in ports.items()},
+        "ports": {
+            name: {
+                "port": port,
+                "listening": _port_open(port, settings.security.bind_host if name == "api" else "127.0.0.1"),
+            }
+            for name, port in ports.items()
+        },
         "tts_owner": owner,
         "binaries": {name: bool(shutil.which(name)) for name in ("ffmpeg", "pdftotext", "pdfinfo", "tesseract", "git")},
         "session": session,
@@ -263,20 +338,32 @@ def _run_script(settings: Settings, relative: str, timeout: float) -> int:
     if not script.is_file():
         _json({"ok": False, "error": "script_missing", "path": str(script)})
         return 1
-    return run_owned([str(script)], cwd=settings.paths.repository, timeout=timeout, check=False).returncode
+    return _run_visible(
+        ["bash", str(script)],
+        cwd=settings.paths.repository,
+        env=_project_environment(settings.paths.repository, dict(os.environ)),
+        timeout=timeout,
+    )
 
 
 def command_smoke(settings: Settings, _args: argparse.Namespace) -> int:
-    return _run_script(settings, "scripts/smoke_fusion_reader_v2.sh", 120.0)
+    if (settings.paths.repository / "pyproject.toml").is_file():
+        return _run_script(settings, "scripts/smoke_fusion_reader_v2.sh", 120.0)
+    try:
+        payload = _request_json(f"{_base_url(settings)}/health/ready")
+    except (OSError, ValueError) as exc:
+        _json({"ok": False, "error": "reader_unavailable", "detail": type(exc).__name__})
+        return 1
+    _json(payload)
+    return 0 if payload.get("reader_ready") else 1
 
 
 def command_test(settings: Settings, _args: argparse.Namespace) -> int:
-    return run_owned(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py", "-v"],
-        cwd=settings.paths.repository,
-        timeout=600.0,
-        check=False,
-    ).returncode
+    runner = settings.paths.repository / "scripts/run_isolated_tests.py"
+    if not runner.is_file() or not (settings.paths.repository / "tests").is_dir():
+        _json({"ok": False, "error": "tests_require_source_checkout"})
+        return 1
+    return _run_visible([sys.executable, str(runner)], cwd=settings.paths.repository, timeout=600.0)
 
 
 def command_logs(settings: Settings, args: argparse.Namespace) -> int:
@@ -335,6 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
             subparser.add_argument(
                 "--no-engines", action="store_true", help="start only API/UI; use existing or unavailable providers"
             )
+    probe = subparsers.add_parser("_probe-startup")
+    probe.set_defaults(handler=probe_startup)
     logs = subparsers.add_parser("logs")
     logs.add_argument("--lines", type=int, default=100)
     logs.set_defaults(handler=command_logs)
@@ -353,7 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        settings = create_settings()
+        repository = Path(__file__).resolve().parents[1]
+        settings = create_settings(environ=_project_environment(repository, dict(os.environ)))
         return int(args.handler(settings, args))
     except (OSError, RuntimeError, ValueError, TimeoutExpired) as exc:
         _json({"ok": False, "error": type(exc).__name__, "detail": str(exc)})

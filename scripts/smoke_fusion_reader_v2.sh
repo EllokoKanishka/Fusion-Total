@@ -2,19 +2,27 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$ROOT/runtime/fusion_reader_v2/tts_owner.json}"
+source "$ROOT/scripts/lib/env_helper.sh"
+set +e
+load_env_safe
+RUNTIME_DIR="${FUSION_READER_RUNTIME_ROOT:-${FUSION_READER_RUNTIME_DIR:-$ROOT/runtime/fusion_reader_v2}}"
+OWNER_FILE="${FUSION_READER_TTS_OWNER_FILE:-$RUNTIME_DIR/tts_owner.json}"
 UI_PORT="${FUSION_READER_V2_PORT:-8010}"
 GPU_TTS_PORT="${FUSION_READER_GPU_TTS_PORT:-7853}"
 CPU_TTS_PORT="${FUSION_READER_CPU_TTS_PORT:-${DIRECT_CHAT_ALLTALK_PORT:-7851}}"
 STT_PORT="${FUSION_READER_STT_PORT:-8021}"
+STT_URL="${FUSION_READER_STT_URL:-http://127.0.0.1:${STT_PORT}}"
 STT_PROVIDER_RAW="${FUSION_READER_STT_PROVIDER:-auto}"
 case "${STT_PROVIDER_RAW,,}" in
-  cli) STT_PROVIDER="cli" ;;
+  cli|none) STT_PROVIDER="${STT_PROVIDER_RAW,,}" ;;
   server|faster_whisper|faster-whisper) STT_PROVIDER="server" ;;
   *) STT_PROVIDER="auto" ;;
 esac
 STT_COMMAND="${FUSION_READER_STT_COMMAND:-whisper}"
 OLLAMA_PORT="${FUSION_READER_OLLAMA_PORT:-11434}"
+if [[ "${FUSION_READER_OLLAMA_MODE:-dedicated}" == "dedicated" ]]; then
+  OLLAMA_PORT="${FUSION_READER_PRIVATE_OLLAMA_PORT:-11435}"
+fi
 SEARXNG_URL="${FUSION_READER_SEARXNG_URL:-http://127.0.0.1:8080}"
 HISTORIC_PORT=7852
 DOCTORA_PORT="${LUCY_TTS_PORT:-7854}"
@@ -49,7 +57,7 @@ port_is_listening() {
 
 curl_json_ok() {
   local url="$1"
-  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+  curl --noproxy "*" -fsS --max-time 2 "$url" >/dev/null 2>&1
 }
 
 owner_file_matches_fusion() {
@@ -110,7 +118,7 @@ echo
 echo "FUSION PORT CHECKS"
 
 if port_is_listening "$UI_PORT"; then
-  if curl_json_ok "http://127.0.0.1:${UI_PORT}/api/status"; then
+  if curl_json_ok "$(fusion_api_base_url)/api/status"; then
     ok "UI/API ${UI_PORT} is listening and /api/status responds"
   else
     warn "UI/API ${UI_PORT} is listening but /api/status did not respond cleanly"
@@ -147,12 +155,10 @@ if [[ "$STT_PROVIDER" == "cli" ]]; then
   else
     info "STT server ${STT_PORT} is not listening and is not required in cli mode"
   fi
-elif port_is_listening "$STT_PORT"; then
-  if curl_json_ok "http://127.0.0.1:${STT_PORT}/health"; then
-    ok "STT ${STT_PORT} is listening and /health responds"
-  else
-    warn "STT ${STT_PORT} is listening but /health did not respond cleanly"
-  fi
+elif [[ "$STT_PROVIDER" == "none" ]]; then
+  info "STT disabled by configuration"
+elif curl_json_ok "${STT_URL%/}/health"; then
+  ok "STT /health responds at ${STT_URL}"
 else
   warn "STT ${STT_PORT} is not listening for provider ${STT_PROVIDER}"
   if [[ "$STT_PROVIDER" == "auto" ]]; then

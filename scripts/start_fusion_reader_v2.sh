@@ -46,7 +46,7 @@ export FUSION_READER_CACHE_ROOT="${FUSION_READER_CACHE_ROOT:-$RUNTIME_DIR/audio_
 
 cd "$ROOT"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR"
 
 timestamp() {
   date +"%Y-%m-%d %H:%M:%S"
@@ -58,18 +58,25 @@ log_msg() {
   echo "$line" | tee -a "$LOG_FILE"
 }
 
-listening_pid() {
-  local pid=""
-  if command -v lsof >/dev/null 2>&1; then
-    pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
-  fi
-  if [[ -z "$pid" ]] && command -v ss >/dev/null 2>&1; then
-    pid="$(ss -ltnp 2>/dev/null | grep -F ":$PORT" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
-  fi
-  [[ -n "$pid" ]] && echo "$pid"
-}
+# Serialize launchers that share this runtime until readiness is confirmed.
+exec 9>"$RUNTIME_DIR/startup.lock"
+if ! flock -n 9; then
+  log_msg "ERROR: ya hay un arranque de Panda Fusión en curso."
+  exit 1
+fi
 
-startup_status_url="http://127.0.0.1:${PORT}/api/status"
+startup_status_url="$(fusion_api_base_url)/health/live"
+
+if startup_probe="$("$PYTHON_BIN" -m scripts.fusionctl _probe-startup)"; then
+  log_msg "Panda Fusión ya está activo para esta instalación."
+  exit 0
+else
+  probe_status=$?
+  if [[ "$probe_status" != "3" ]]; then
+    log_msg "ERROR: no se puede usar el puerto ${PORT}: ${startup_probe}"
+    exit 1
+  fi
+fi
 
 current_commit() {
   git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown"
@@ -170,7 +177,7 @@ ensure_fusion_gpu_stt() {
     export FUSION_READER_STT_COMPUTE_TYPE="${FUSION_READER_STT_COMPUTE_TYPE:-int8}"
   fi
   log_msg "Iniciando STT opcional; dispositivo ${FUSION_READER_STT_DEVICE:-cuda}."
-  nohup "$ROOT/scripts/start_fusion_reader_v2_stt.sh" >>"$STT_LOG_FILE" 2>&1 &
+  nohup "$ROOT/scripts/start_fusion_reader_v2_stt.sh" >>"$STT_LOG_FILE" 2>&1 9>&- &
   STT_CHILD_PID="$!"
   if wait_until_stt_ready "$STT_CHILD_PID"; then
     log_msg "Fusion STT GPU listo en ${STT_URL}."
@@ -183,12 +190,12 @@ ensure_fusion_gpu_stt() {
 }
 
 start_fusion_gpu_tts() {
-  nohup "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" >>"$GPU_TTS_LOG_FILE" 2>&1 &
+  nohup "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" >>"$GPU_TTS_LOG_FILE" 2>&1 9>&- &
   TTS_CHILD_PID="$!"
 }
 
 start_fusion_cpu_tts() {
-  nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 &
+  nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 9>&- &
   TTS_CHILD_PID="$!"
 }
 
@@ -271,55 +278,8 @@ case "${FUSION_READER_START_ENGINES:-1}:${FUSION_READER_STT_PROVIDER:-auto}" in
 esac
 
 current_commit="$(current_commit)"
-existing_pid="$(listening_pid || true)"
-
-if [[ -n "$existing_pid" ]]; then
-  log_msg "Puerto ${PORT} ocupado por PID ${existing_pid}. Verificando instancia..."
-  
-  status_raw=$(curl -fsS --max-time 2 "$startup_status_url" 2>/dev/null || echo "")
-  
-  if [[ -n "$status_raw" ]]; then
-    runtime_data=$(python3 -c "import json, sys; data=json.load(sys.stdin); rt=data.get('runtime', {}); print('|'.join([str(rt.get(k, '')) for k in ['app', 'commit', 'pid']]))" <<< "$status_raw")
-    IFS='|' read -r rt_app rt_commit _rt_pid <<< "$runtime_data"
-    
-    if [[ "$rt_app" == "fusion_reader_v2" ]]; then
-      if [[ "$rt_commit" == "$current_commit" ]]; then
-        log_msg "Fusion Reader v2 ya está vivo con commit actual (${current_commit}). No se relanza."
-        echo "$existing_pid" > "$PID_FILE"
-        exit 0
-      else
-        log_msg "Instancia vieja detectada (commit: ${rt_commit:-unknown}, actual: ${current_commit}). Reiniciando..."
-        kill "$existing_pid" 2>/dev/null || true
-        sleep 2
-        if listening_pid >/dev/null 2>&1; then
-           log_msg "Esperando que el puerto ${PORT} se libere..."
-           sleep 3
-        fi
-      fi
-    else
-      log_msg "ERROR: El puerto ${PORT} está ocupado por otra aplicación que no parece ser Fusion Reader v2."
-      exit 1
-    fi
-  else
-    if [[ -r "/proc/${existing_pid}/cmdline" ]]; then
-      cmdline=$(tr '\0' ' ' <"/proc/${existing_pid}/cmdline")
-      if [[ "$cmdline" == *"fusion_reader_v2_server.py"* ]]; then
-        log_msg "Instancia de Fusion detectada (sin metadatos runtime). Reiniciando..."
-        kill "$existing_pid" 2>/dev/null || true
-        sleep 3
-      else
-        log_msg "ERROR: El puerto ${PORT} está ocupado por un proceso desconocido (PID ${existing_pid})."
-        exit 1
-      fi
-    else
-      log_msg "ERROR: El puerto ${PORT} está ocupado y no se puede identificar el proceso."
-      exit 1
-    fi
-  fi
-fi
-
 log_msg "==== Fusion Reader v2 startup ===="
-log_msg "Commit: $(current_commit)"
+log_msg "Commit: ${current_commit}"
 log_msg "API/UI port: ${PORT}"
 log_msg "TTS URL selected: ${FUSION_READER_ALLTALK_URL}"
 log_msg "STT GPU URL: ${STT_URL}"
@@ -333,10 +293,10 @@ log_msg "Persistent log: ${LOG_FILE}"
 
 if [[ "${FUSION_READER_FOREGROUND:-0}" == "1" ]]; then
   printf '%s\n' "$$" >"$PID_FILE"
-  exec "$PYTHON_BIN" -u -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1
+  exec "$PYTHON_BIN" -u -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 9>&-
 fi
 
-nohup "$PYTHON_BIN" -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 &
+nohup "$PYTHON_BIN" -m scripts.fusion_reader_v2_server >>"$LOG_FILE" 2>&1 9>&- &
 server_pid=$!
 
 if ! printf '%s\n' "$server_pid" >"$PID_FILE" 2>/dev/null; then
@@ -347,7 +307,8 @@ log_msg "Fusion Reader v2 server spawned with PID ${server_pid}"
 
 deadline=$(( $(date +%s) + STARTUP_WAIT_SECONDS ))
 while (( $(date +%s) < deadline )); do
-  if curl -fsS --max-time 2 "$startup_status_url" >/dev/null 2>&1; then
+  if health="$(curl --noproxy '*' -fsS --max-time 2 "$startup_status_url" 2>/dev/null)" &&
+    "$PYTHON_BIN" -c 'import json, sys; sys.exit(json.load(sys.stdin) != {"ok": True, "status": "live", "pid": int(sys.argv[1])})' "$server_pid" <<<"$health" 2>/dev/null; then
     log_msg "Fusion Reader v2 health OK: ${startup_status_url}"
     exit 0
   fi

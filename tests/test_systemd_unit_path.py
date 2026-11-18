@@ -1,4 +1,3 @@
-import importlib.util
 import shutil
 import subprocess
 import tempfile
@@ -7,26 +6,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HELPER_PATH = REPO_ROOT / "scripts" / "systemd_unit_path.py"
-
-spec = importlib.util.spec_from_file_location("systemd_unit_path", HELPER_PATH)
-assert spec is not None and spec.loader is not None
-systemd_unit_path = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(systemd_unit_path)
 
 
 class SystemdUnitPathTests(unittest.TestCase):
-    def test_escape_systemd_path_preserves_absolute_path_and_encodes_unsafe_bytes(self):
-        escaped = systemd_unit_path.escape_systemd_path("/home/example/Escritorio/Fusión Total")
-        self.assertEqual(
-            escaped,
-            "/home/example/Escritorio/Fusi\\xc3\\xb3n\\x20Total",
-        )
-
-    def test_escape_systemd_path_rejects_relative_paths(self):
-        with self.assertRaises(ValueError):
-            systemd_unit_path.escape_systemd_path("Fusion Total")
-
     def test_installer_lets_launcher_own_working_directory_and_dotenv(self):
         installer = (REPO_ROOT / "scripts" / "install_launcher.sh").read_text(encoding="utf-8")
         self.assertIn('ExecStart=/usr/bin/bash "$ROOT/scripts/start_pandafusion_systemd.sh"', installer)

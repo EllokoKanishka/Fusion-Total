@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import signal
 import sys
 import tempfile
@@ -14,8 +15,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from fusion_reader_v2 import FusionReaderV2, import_document_path
-from fusion_reader_v2.config import Settings, create_settings, environment_value
+from fusion_reader_v2.config import Settings, create_settings, environment_value, is_loopback_host
 from fusion_reader_v2.documents import safe_filename
+from fusion_reader_v2.network import http_base_url
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.web.errors import APIError, error_response
@@ -162,6 +164,10 @@ class FusionHTTPServer(ThreadingHTTPServer):
             raise RuntimeError(";".join(errors))
 
 
+class FusionIPv6HTTPServer(FusionHTTPServer):
+    address_family = socket.AF_INET6
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "FusionReaderV2/0.1"
 
@@ -234,10 +240,9 @@ class Handler(BaseHTTPRequestHandler):
             raise APIError("invalid_host", "Se requiere un único Host local.", 403)
         try:
             host = urlparse("//" + hosts[0])
-            allowed = {"127.0.0.1", "localhost", "::1"}
             port = getattr(self.server, "server_address")[1]
             if (
-                host.hostname not in allowed
+                not is_loopback_host(host.hostname or "")
                 or host.username is not None
                 or host.password is not None
                 or host.path
@@ -253,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
                 origin = urlparse(origins[0])
                 if (
                     origin.scheme != "http"
-                    or origin.hostname not in allowed
+                    or not is_loopback_host(origin.hostname or "")
                     or origin.username is not None
                     or origin.password is not None
                     or origin.path not in {"", "/"}
@@ -269,19 +274,18 @@ class Handler(BaseHTTPRequestHandler):
             if len(lengths) > 1 or self.headers.get("Transfer-Encoding") or (lengths and int(lengths[0]) < 0):
                 raise ValueError("invalid_body_framing")
 
+    def _content_type(self) -> str:
+        return (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
+
     def _payload(self) -> dict:
         length = int(self.headers.get("Content-Length", "0") or 0)
-        content_type = (self.headers.get("Content-Type", "") or "").split(";", 1)[0].strip().lower()
-        if content_type != "application/json":
+        if self._content_type() != "application/json":
             raise ValueError("application_json_required")
         if length <= 0:
             return {}
         limit = self.settings.limits.upload_max_bytes
         if length > limit:
             raise ValueError("request_body_too_large")
-        content_type = (self.headers.get("Content-Type", "") or "").lower()
-        if "application/json" not in content_type:
-            raise ValueError("application_json_required")
         raw = self.rfile.read(length)
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -498,15 +502,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             self._check_local_request()
-        except Exception as exc:
-            self._request_error(exc)
-            return
-        parsed = urlparse(self.path)
-        path = parsed.path
-        if ROUTER.resolve("POST", path) is None:
-            self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
-            return
-        try:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if ROUTER.resolve("POST", path) is None:
+                self._json(404, {"ok": False, "error": "not_found", "detail": "La ruta no existe."})
+                return
             if ROUTER.dispatch_raw_post(self, path):
                 return
             if path == "/api/import-file/start":
@@ -533,7 +533,7 @@ class Handler(BaseHTTPRequestHandler):
                     tmp_path.unlink(missing_ok=True)
                 self._json(200, load_imported_document(self.context, imported, role=role, import_token=token))
                 return
-            if path == "/api/dialogue/turn" and "application/json" not in (self.headers.get("Content-Type", "") or ""):
+            if path == "/api/dialogue/turn" and self._content_type() != "application/json":
                 content_type = self.headers.get("Content-Type", "") or ""
                 params = parse_qs(parsed.query)
                 filename = str((params.get("filename") or ["dialogue.webm"])[0])
@@ -595,7 +595,9 @@ def create_http_server(app: FusionReaderV2, settings: Settings) -> ThreadingHTTP
         "log_file": str(settings.paths.logs / "fusion_reader_v2_server.log"),
     }
     context = WebContext(app=app, settings=settings, runtime_info=runtime_info)
-    server = FusionHTTPServer((settings.security.bind_host, settings.ports.api), Handler)
+    server_class = FusionIPv6HTTPServer if ":" in settings.security.bind_host else FusionHTTPServer
+    server = server_class((settings.security.bind_host, settings.ports.api), Handler)
+    context.runtime_info["port"] = server.server_address[1]
     server.context = context
     return server
 
@@ -658,7 +660,7 @@ def main() -> None:
         lifetime = DesktopLifetime(server.shutdown)
         setattr(server, "desktop_lifetime", lifetime)
         lifetime.start()
-        print(f"Fusion Reader v2 API listening on http://{settings.security.bind_host}:{settings.ports.api}")
+        print(f"Fusion Reader v2 API listening on {http_base_url(settings.security.bind_host, server.server_port)}")
         server.serve_forever()
     finally:
         _close_application(

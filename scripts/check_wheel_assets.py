@@ -21,25 +21,33 @@ def discover_static_assets(root: Path = ROOT) -> set[str]:
 REQUIRED_ASSETS = discover_static_assets()
 
 
-def missing_assets(wheel: Path | str) -> list[str]:
+def wheel_issues(wheel: Path | str) -> list[str]:
     path = Path(wheel)
     if not path.is_file():
         return [f"wheel_missing:{path}"]
     try:
         with zipfile.ZipFile(path) as archive:
-            names = set(archive.namelist())
+            names = {entry.filename for entry in archive.infolist() if not entry.is_dir()}
     except (OSError, zipfile.BadZipFile) as exc:
         return [f"wheel_invalid:{path}:{type(exc).__name__}"]
-    return sorted(REQUIRED_ASSETS - names)
+    unexpected = [
+        f"unexpected_wheel_entry:{name}"
+        for name in names
+        if not name.split("/", 1)[0].endswith(".dist-info")
+        and (not name.startswith(("fusion_reader_v2/", "scripts/")) or not (ROOT / name).is_file())
+    ]
+    return sorted(REQUIRED_ASSETS - names) + sorted(unexpected)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify that a built Fusion wheel contains every browser asset.")
+    parser = argparse.ArgumentParser(
+        description="Verify that a Fusion wheel contains its browser assets and current source files."
+    )
     parser.add_argument("wheel", type=Path)
     args = parser.parse_args()
-    missing = missing_assets(args.wheel)
-    if missing:
-        for item in missing:
+    issues = wheel_issues(args.wheel)
+    if issues:
+        for item in issues:
             print(f"ERROR: {item}")
         return 1
     if not REQUIRED_ASSETS:

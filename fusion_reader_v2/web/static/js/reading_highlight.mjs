@@ -23,6 +23,8 @@ export function createReadingHighlight({ player, container, indicator, request }
   let frame = null;
   let disposed = false;
   let trackedSource = '';
+  let audioUrl = '';
+  let paintedBoundary = 0;
   let follow = true;
   let enabled = true;
   const viewport = container.closest('.reader');
@@ -45,13 +47,18 @@ export function createReadingHighlight({ player, container, indicator, request }
     const index = wordAtTime(words, Number(player.currentTime) || 0);
     const word = index >= 0 ? words[index] : null;
     const boundary = words.length && player.ended ? text.length : word ? word.end_offset : 0;
-    let count = 0;
-    while (count < spans.length && spans[count].end <= boundary) count += 1;
-    for (let i = Math.min(painted, count); i < Math.max(painted, count); i += 1) {
-      spans[i].node.classList.toggle('is-read', i < count);
+    if (boundary !== paintedBoundary) {
+      while (painted > 0 && spans[painted - 1].end > boundary) {
+        spans[--painted].node.classList.remove('is-read');
+      }
+      while (painted < spans.length && spans[painted].end <= boundary) {
+        spans[painted++].node.classList.add('is-read');
+      }
+      paintedBoundary = boundary;
     }
-    painted = count;
-    const active = word && !player.ended ? spans.find(s => s.start === word.start_offset && s.end === word.end_offset)?.node : null;
+    const match = spans[painted - 1];
+    const active = word && !player.ended && match?.start === word.start_offset && match.end === word.end_offset
+      ? match.node : null;
     if (currentSpan !== active) {
       currentSpan?.classList.remove('is-current');
       active?.classList.add('is-current');
@@ -63,7 +70,7 @@ export function createReadingHighlight({ player, container, indicator, request }
     }
   }
 
-  function clearAudio() {
+  function clearTimings() {
     generation += 1;
     controller?.abort();
     controller = null;
@@ -71,11 +78,16 @@ export function createReadingHighlight({ player, container, indicator, request }
     pollTimer = null;
     cancelFrame();
     words = [];
-    trackedSource = '';
     sync();
     cancelFrame();
     indicator.textContent = '';
     indicator.title = '';
+  }
+
+  function clearAudio() {
+    audioUrl = '';
+    trackedSource = '';
+    clearTimings();
   }
 
   function setText(nextText, nextIdentity) {
@@ -103,10 +115,16 @@ export function createReadingHighlight({ player, container, indicator, request }
   }
 
   function load(audioURL) {
-    clearAudio();
+    clearTimings();
+    trackedSource = player.src;
+    audioUrl = audioURL;
+    if (enabled) requestTimings();
+  }
+
+  function requestTimings() {
     const token = generation;
-    const source = player.src;
-    trackedSource = source;
+    const source = trackedSource;
+    const requestedUrl = audioUrl;
     controller = new AbortController();
     const signal = controller.signal;
     const started = performance.now();
@@ -114,7 +132,7 @@ export function createReadingHighlight({ player, container, indicator, request }
     indicator.textContent = 'Sincronizando palabras…';
     async function poll() {
       try {
-        const result = await request(audioURL, signal, firstRequest);
+        const result = await request(requestedUrl, signal, firstRequest);
         firstRequest = false;
         if (disposed || token !== generation || player.src !== source) return;
         if (result.state === 'pending' || result.state === 'waiting') {
@@ -178,9 +196,12 @@ export function createReadingHighlight({ player, container, indicator, request }
     player.removeEventListener('emptied', onEmptied);
   }
   function setEnabled(value) {
-    enabled = Boolean(value);
-    indicator.hidden = !enabled;
-    sync();
+    const next = Boolean(value);
+    indicator.hidden = !next;
+    if (enabled === next) return;
+    enabled = next;
+    if (!enabled) clearTimings();
+    else if (audioUrl && trackedSource === player.src) requestTimings();
   }
   return { setText, load, clearAudio, sync, setEnabled, dispose };
 }

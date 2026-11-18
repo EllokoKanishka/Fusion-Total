@@ -19,7 +19,7 @@ class STTServerDefaultsTests(unittest.TestCase):
             self.assertEqual(settings.providers.stt_model, "small")
             self.assertEqual(getattr(settings.providers, "stt_server_model", None), "")
             with patch.dict(os.environ, {}, clear=True), patch.object(fusionctl, "run_owned") as run:
-                run.return_value.returncode = 0
+                run.return_value.configure_mock(returncode=0, stdout="", stderr="")
                 fusionctl.command_start(settings, SimpleNamespace(no_engines=False))
             self.assertNotIn("FUSION_READER_STT_MODEL", run.call_args.kwargs["env"])
 
@@ -38,7 +38,7 @@ class STTServerDefaultsTests(unittest.TestCase):
             python.touch()
             settings = create_settings(environ={}, repository_root=root)
             with patch.dict(os.environ, {}, clear=True), patch.object(fusionctl, "run_owned") as run:
-                run.return_value.returncode = 0
+                run.return_value.configure_mock(returncode=0, stdout="", stderr="")
                 fusionctl.command_start(settings, SimpleNamespace(no_engines=False))
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_PYTHON"], str(python))
 
@@ -52,6 +52,6 @@ class STTServerDefaultsTests(unittest.TestCase):
                 patch.dict(os.environ, {"FUSION_READER_GPU_TTS_WAIT_SECONDS": "450"}, clear=True),
                 patch.object(fusionctl, "run_owned") as run,
             ):
-                run.return_value.returncode = 0
+                run.return_value.configure_mock(returncode=0, stdout="", stderr="")
                 fusionctl.command_start(settings, SimpleNamespace(no_engines=False))
             self.assertGreaterEqual(run.call_args.kwargs["timeout"], 450 + 60 + 120 + 40)

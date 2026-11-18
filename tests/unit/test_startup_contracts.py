@@ -96,7 +96,7 @@ class StartupContractsTests(unittest.TestCase):
                 environ={"FUSION_READER_V2_PORT": "8123", "FUSION_READER_STT_PROVIDER": "none"}, repository_root=root
             )
             with patch.object(fusionctl, "run_owned") as run:
-                run.return_value.returncode = 0
+                run.return_value.configure_mock(returncode=0, stdout="", stderr="")
                 fusionctl.command_start(settings, None)
             options = run.call_args.kwargs
             self.assertEqual(options["env"]["FUSION_READER_V2_PORT"], "8123")

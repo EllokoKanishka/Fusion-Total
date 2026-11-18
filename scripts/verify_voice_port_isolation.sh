@@ -214,7 +214,7 @@ require_strict_file_contains "$ROOT/fusion_reader_v2/tts.py" "tts_historic_unass
 require_strict_file_contains "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" "FUSION_READER_TTS_OWNER_FILE"
 require_strict_file_contains "$ROOT/scripts/start_reader_neural_tts_gpu_5090.sh" "owner_pid"
 require_strict_file_contains "$ROOT/scripts/start_fusion_reader_v2.sh" "fusion_tts_owner_ok"
-require_strict_file_contains "$ROOT/scripts/open_fusion_reader.sh" "fusion_gpu_ready"
+require_strict_file_contains "$ROOT/scripts/open_fusion_reader.sh" "start_fusion_reader_v2.sh"
 require_strict_file_not_contains "$ROOT/scripts/start_fusion_reader_v2.sh" "127.0.0.1:$HISTORIC_PORT"
 require_strict_file_not_contains "$ROOT/scripts/open_fusion_reader.sh" "127.0.0.1:$HISTORIC_PORT"
 

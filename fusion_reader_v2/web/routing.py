@@ -102,7 +102,6 @@ def create_router() -> Router:
         "/api/media/download/",
     )
     post_exact = (
-        "/api/tools/pdf-to-docx",
         "/api/import-file/start",
         "/api/import-file",
         "/api/load",

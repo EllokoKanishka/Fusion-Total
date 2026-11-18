@@ -145,7 +145,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   expect(titleBox.width).toBeGreaterThanOrEqual(240);
   expect(titleBox.height).toBeLessThan(100);
   expect(readerBox.height).toBeGreaterThan(50);
-  await page.screenshot({ path: '../evidencia/browser-layout-1280.png' });
+  await page.screenshot({ path: test.info().outputPath('browser-layout-1280.png') });
   await expect.poll(() => requestCounts.get('/api/quick-text') || 0).toBe(quickTextBefore + 1);
   await page.locator('#quickClearBtn').click();
   await expect(page.locator('#docTitle')).toContainText('Ningún documento activo');
@@ -157,9 +157,34 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   });
   await expect(page.locator('#docTitle')).toContainText('e2e.txt');
 
+  await page.route('**/api/read/timings', route => route.fulfill({
+    json: { ok: true, state: 'ready', coverage: 1, words: [
+      { start: 0, end: 0.05, start_offset: 0, end_offset: 6 },
+      { start: 0.05, end: 0.1, start_offset: 7, end_offset: 13 }
+    ] }
+  }));
+  const highlightColor = page.locator('#readingHighlightColor');
+  const player = page.locator('#player');
+  await highlightColor.selectOption('off');
+  const timingsBefore = requestCounts.get('/api/read/timings') || 0;
   const readsBefore = requestCounts.get('/api/read') || 0;
+  const audioResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/audio/'));
   await page.locator('#readBtn').click();
+  await audioResponse;
   await expect.poll(() => requestCounts.get('/api/read') || 0).toBe(readsBefore + 1);
+  expect(requestCounts.get('/api/read/timings') || 0).toBe(timingsBefore);
+
+  await player.evaluate(audio => { audio.pause(); audio.currentTime = 0; });
+  await highlightColor.selectOption('green');
+  await expect(page.locator('.reader-word.is-current')).toHaveText('Primer');
+  await player.evaluate(audio => { audio.currentTime = 0.07; });
+  await expect(page.locator('.reader-word.is-current')).toHaveText('bloque');
+  await expect(page.locator('.reader-word.is-read')).toHaveCount(2);
+  await player.evaluate(audio => { audio.currentTime = 0; });
+  await expect(page.locator('.reader-word.is-read')).toHaveCount(1);
+  await highlightColor.selectOption('off');
+  await expect(page.locator('.reader-word.is-read')).toHaveCount(0);
+  await highlightColor.selectOption('green');
 
   const nextBefore = requestCounts.get('/api/next') || 0;
   await page.locator('#nextBtn').click();

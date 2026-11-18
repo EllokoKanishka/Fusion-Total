@@ -44,6 +44,49 @@ class FusionCtlTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertTrue(callable(parser.parse_args(argv).handler))
 
+    def test_main_uses_project_configuration_without_running_shell_expressions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".env").write_text(
+                'FUSION_READER_V2_PORT=19015\nFUSION_READER_BIND_HOST="::1"\nFUSION_READER_CHAT_MODEL="$(literal)"\n',
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(fusionctl, "__file__", str(repo / "scripts/fusionctl.py")),
+                mock.patch.dict(fusionctl.os.environ, {"FUSION_READER_V2_PORT": "19016"}, clear=True),
+                mock.patch.object(fusionctl, "command_status", return_value=0) as status,
+            ):
+                self.assertEqual(fusionctl.main(["status"]), 0)
+            settings = status.call_args.args[0]
+            self.assertEqual(fusionctl._base_url(settings), "http://[::1]:19016")
+            self.assertEqual(settings.providers.chat_model, "$(literal)")
+
+    def test_startup_probe_rejects_listener_with_a_different_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = self._settings(Path(tmp))
+            with (
+                mock.patch.object(fusionctl.socket, "create_connection"),
+                mock.patch.object(fusionctl, "_owned_server_pid", return_value=(123, "owned")),
+                mock.patch.object(fusionctl, "_request_json", return_value={"ok": True, "status": "live", "pid": 456}),
+                contextlib.redirect_stdout(io.StringIO()) as out,
+            ):
+                self.assertEqual(fusionctl.probe_startup(settings, mock.Mock()), 2)
+            self.assertEqual(json.loads(out.getvalue())["error"], "port_occupied")
+
+    def test_test_command_invokes_isolated_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "tests").mkdir()
+            runner = repo / "scripts/run_isolated_tests.py"
+            runner.parent.mkdir()
+            runner.touch()
+            settings = self._settings(repo)
+            with mock.patch.object(
+                fusionctl, "run_owned", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+            ) as run:
+                self.assertEqual(fusionctl.command_test(settings, mock.Mock()), 0)
+            self.assertEqual(run.call_args.args[0], [sys.executable, str(runner)])
+
     def test_cache_inspect_is_read_only_when_root_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._settings(Path(tmp))
@@ -86,7 +129,9 @@ class FusionCtlTests(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             settings = self._settings(root)
-            with mock.patch.object(fusionctl, "run_owned", return_value=mock.Mock(returncode=0)) as run:
+            with mock.patch.object(
+                fusionctl, "run_owned", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+            ) as run:
                 self.assertEqual(fusionctl.command_start(settings, mock.Mock()), 0)
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_PYTHON"], sys.executable)
             self.assertEqual(run.call_args.kwargs["env"]["FUSION_READER_RUNTIME_ROOT"], str(settings.paths.runtime))
