@@ -4,7 +4,7 @@
 
 ## Alcance
 
-El inventario cubrió los 405 archivos versionados de la revisión, incluidos el lector activo, las capas compatibles, los lanzadores, los recursos de interfaz, Tauri, la automatización y las pruebas. El análisis estático compiló 219 módulos Python y comprobó sintaxis de JavaScript y Bash, identificadores HTML, importaciones del frontend y recursos. El cruce de interfaz y API verificó 53 rutas referidas por el frontend, 85 registros HTTP únicos y 21 recursos estáticos servidos por HTTP.
+El inventario cubrió los 406 archivos versionados de la revisión, incluidos el lector activo, las capas compatibles, los lanzadores, los recursos de interfaz, Tauri, la automatización y las pruebas. El análisis estático compiló 219 módulos Python y comprobó sintaxis de JavaScript y Bash, identificadores HTML, importaciones del frontend y recursos. El cruce de interfaz y API verificó 53 rutas referidas por el frontend, 85 registros HTTP únicos y 21 recursos estáticos servidos por HTTP.
 
 La revisión manual recorrió los puntos de entrada y las conexiones que afectan a la lectura, el dictado, el diálogo, el ciclo de vida, el empaquetado y la investigación. Las suites ejercitaron además importación, persistencia, notas, preparación de documentos, trabajos multimedia, exportación y compatibilidad. El inventario estático y la cobertura documentan el alcance de esas pruebas.
 
@@ -27,4 +27,4 @@ La revisión manual recorrió los puntos de entrada y las conexiones que afectan
 
 ## Continuidad
 
-El próximo arranque de Panda carga el backend actualizado. Se conservaron las capas de compatibilidad y las muestras de biblioteca registradas en su auditoría. Queda admitida una revisión de ramas poco cubiertas en recursos, ciclo de vida y proveedores al ampliar esas áreas. La elección de licencia del repositorio sigue siendo una decisión del mantenedor.
+El próximo arranque de Panda carga el backend actualizado. Se conservaron las capas de compatibilidad y las muestras de biblioteca registradas en su auditoría. Al ampliar la gestión de recursos y el ciclo de vida, las ramas con menor cobertura merecen pruebas sobre pérdida de conexión y presión de memoria. La elección de licencia del repositorio sigue siendo una decisión del mantenedor.
