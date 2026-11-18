@@ -163,7 +163,11 @@ def _replacement_instruction(command: str) -> DictationInstruction | None:
     body = match.group(1)
     if len(body) > 20_000:
         return DictationInstruction("noop", scope="ambiguous_replacement")
-    connector_pattern = re.compile(rf"\s+y\s+(?=(?:{_REPLACE_VERB}\s+)?[^,;]+?\s+(?:por|con)\s+)", re.IGNORECASE)
+    connector_pattern = re.compile(
+        rf"\s+y\s+(?=(?:{_REPLACE_VERB}\s+)?[^,;]+?\s+(?:por|con)\s+|"
+        r"(?:borr[aá]|borra|elimin[aá]|elimina|deshac[eé]|deshacer|rehac[eé]|rehacer)\b)",
+        re.IGNORECASE,
+    )
     clauses = []
     start = 0
     quote = ""

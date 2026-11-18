@@ -47,6 +47,7 @@ class LucyCompoundCommandsTests(unittest.TestCase):
     def test_bounds_and_unclosed_quotes_are_explicit_rejections(self):
         for command in [
             'Lucy, cambia verde por "azul',
+            "Lucy, cambia verde por azul y borrá todo",
             "Lucy, cambia verde por azul, borra todo",
             "Lucy cambia " + "x" * 20001,
         ]:
