@@ -80,8 +80,8 @@ Componentes principales:
 
 - `fusion_reader_v2/dictation.py`: interpreta órdenes españolas y devuelve
   operaciones acotadas, sin mutar documentos;
-- `fusion_reader_v2/dictation_assistant.py`: clasifica órdenes no cubiertas por
-  la gramática mediante un modelo opcional y valida una única operación segura;
+- `fusion_reader_v2/dictation_assistant.py`: interpreta órdenes libres con el
+  modelo elegido, valida cambios a fragmentos exactos y admite aclaraciones;
 - `fusion_reader_v2/web/routes/dictation.py`: transcripción efímera y órdenes
   escritas;
 - `fusion_reader_v2/web/static/js/dictation.mjs`: captura, editor, historial,

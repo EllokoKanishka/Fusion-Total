@@ -63,10 +63,9 @@ y laboratorio, no como dependencia del producto v2.
 - las órdenes conocidas de Dictado son instantáneas; las desconocidas pueden
   escalar, por elección explícita, a Qwen3 4B local, Qwen3 14B Q8 local o GPT-5
   nano mediante `fusion-dialogue`. Sólo reciben una ventana acotada del borrador
-  y devuelven una operación validada y reversible; STT y TTS permanecen aislados.
-- “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden;
-  con asistente local primero precarga el modelo y la UI anuncia ese estado
-  únicamente después de reabrir el grabador. Si el
+  y proponen ediciones que Panda verifica y aplica juntas con un solo Deshacer.
+- “Lucy” dicha sola arma durante veinte segundos la siguiente frase como orden.
+  El grabador se reabre mientras la precarga local sigue en segundo plano. Si el
   modelo Qwen configurado falta, la interfaz permite instalar 4B o 14B
   explícitamente en un único trabajo poseído y cancelable. Las instalaciones se
   serializan para que dos pestañas o un cambio de selector no lancen pulls

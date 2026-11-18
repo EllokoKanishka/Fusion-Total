@@ -91,7 +91,7 @@ Dictation routes:
   installation of the configured Ollama dictation model; installation state is
   exposed by `GET /api/dictation/assistant` and never blocks STT or TTS;
 - `POST /api/dictation/assistant/warm`: preloads the selected local model with a
-  bounded keep-alive before the browser exposes the armed listening state;
+  bounded keep-alive while the browser resumes command listening;
 - `POST /api/dictation/assist`: accepts one explicit command plus a bounded
   draft excerpt and selection offsets, and returns one validated instruction.
   An `edit` instruction contains up to 12 exact replacements. The server
@@ -115,10 +115,9 @@ word.
 `delete_sentence` deletes one sentence at the caret (`scope=current`) or at the end of the draft (`scope=last`). It uses the editor undo stack and works without the assistant model.
 
 A bare `Lucy` utterance arms the next recorded utterance as its command for a
-bounded time window. When the local assistant is selected, the browser first
-waits for Ollama to confirm the model preload. It starts the new recorder before
-announcing the armed state, so neither model load nor recorder startup can be
-mistaken for active command listening. Common accented STT spellings such as
+bounded time window. When the local assistant is selected, the model preload
+runs in the background and the browser starts a new recorder before showing
+the armed state. Common accented STT spellings such as
 `Lúci` use the same wake contract. Once speech begins, the browser reserves the
 wake state through transcription and consumes it only after receiving a valid
 transcript; a failed upload or transcription keeps the bounded command window
