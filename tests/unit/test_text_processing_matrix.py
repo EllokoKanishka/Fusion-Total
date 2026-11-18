@@ -424,7 +424,11 @@ class MarkdownAndPDFEditorialMatrixTests(unittest.TestCase):
 
         self.assertEqual(markdown._split_connector_span_v4("modelos"), ("modelos", False))
         self.assertEqual(markdown._split_connector_span_v4("paraque"), ("para que", True))
-        self.assertTrue(markdown._split_connector_span_v4("casaparaqueleer")[1])
+        # Optional host dictionaries must not decide this grammar fixture.
+        with mock.patch.object(markdown, "SPANISH_WORDLIST_V4", {"casa", "leer"}):
+            self.assertEqual(markdown._split_connector_span_v4("casaparaqueleer"), ("casa para que leer", True))
+        with mock.patch.object(markdown, "SPANISH_WORDLIST_V4", set()):
+            self.assertEqual(markdown._split_connector_span_v4("casaparaqueleer"), ("casaparaqueleer", False))
         self.assertFalse(markdown._split_connector_span_v4("xparaquey")[1])
         self.assertFalse(markdown._split_connector_span_v4("sinconector")[1])
         repaired, repaired_metrics = markdown.repair_glued_words_v4(
