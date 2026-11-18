@@ -54,6 +54,30 @@ class DictationInstructionTests(unittest.TestCase):
         literal = interpret_dictation_transcript('Lucy, borrá "toda la frase"')
         self.assertEqual((literal.kind, literal.target), ("delete", "toda la frase"))
 
+    def test_lucy_clears_the_entire_draft_with_natural_spanish(self):
+        for utterance in (
+            "Lucy, borrá todo el texto escrito.",
+            "Lucy, borrá todo.",
+            "Luci borra el borrador entero",
+            "Lucy, quitá todo el texto que está escrito",
+            "Lucy, quiero que borres todo lo que dicté",
+            "Lucy, podés limpiar el documento completo desde el principio hasta el final",
+        ):
+            with self.subTest(utterance=utterance):
+                instruction = interpret_dictation_transcript(utterance, require_wake_word=True)
+                self.assertEqual((instruction.kind, instruction.target), ("clear", ""))
+
+    def test_whole_draft_delete_requires_an_explicit_positive_order(self):
+        for utterance, expected in (
+            ("Borrá todo el texto escrito", "dictate"),
+            ("Lucy, no borres todo el texto escrito", "noop"),
+            ("Lucy, no, borres todo el texto escrito", "noop"),
+            ('Lucy, borrá "todo el texto escrito"', "delete"),
+            ("Lucy, borrá todo desde la palabra final hasta el final", "delete_from"),
+        ):
+            with self.subTest(utterance=utterance):
+                self.assertEqual(interpret_dictation_transcript(utterance, require_wake_word=True).kind, expected)
+
     def test_lucy_can_stop_dictation_with_natural_spanish(self):
         for utterance in ("Lucy, pará acá", "Lucy, paramos acá", "Lucy, detener el dictado"):
             with self.subTest(utterance=utterance):

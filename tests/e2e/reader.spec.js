@@ -222,7 +222,7 @@ test('voice-first reader daily flow uses one request per action', async ({ page 
   await expect(page.locator('#chatLog')).toHaveAttribute('aria-live', 'polite');
 });
 
-test('Lucy edits captured dictation, suspends recording for confirmation and resumes', async ({ page }) => {
+async function checkCapturedEdit(page, sample) {
   await page.addInitScript(() => {
     window.__lucyRecorders = [];
     const Recorder = window.MediaRecorder;
@@ -247,12 +247,16 @@ test('Lucy edits captured dictation, suspends recording for confirmation and res
   });
   let transcriptions = 0;
   let confirmations = 0;
+  let assistantRequests = 0;
   let spoken;
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/dictation/assist') assistantRequests++;
+  });
   await page.route('**/api/dictation/transcribe?*', async route => {
     transcriptions++;
     expect((route.request().postDataBuffer() || Buffer.alloc(0)).length).toBeGreaterThan(900);
     const response = await page.request.post(`${baseURL}/api/dictation/interpret`, {
-      data: { text: 'Lucy, cambia verde por azul, azul por verde', commands_enabled: true, require_wake_word: true },
+      data: { text: sample.command, commands_enabled: true, require_wake_word: true },
     });
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(await response.json()) });
   });
@@ -264,16 +268,48 @@ test('Lucy edits captured dictation, suspends recording for confirmation and res
   });
   await page.goto(baseURL);
   await page.locator('#dictationToggleBtn').click();
-  await page.locator('#dictationEditor').fill('La casa es azul, la casa es verde y la pradera es azul.');
+  const original = sample.original ?? 'La casa es azul, la casa es verde y la pradera es azul.';
+  await page.locator('#dictationEditor').fill(original);
+  if (sample.reopen) {
+    await page.locator('#dictationEditor').evaluate(editor => editor.setSelectionRange(0, 0));
+    await page.locator('#dictationCloseBtn').click();
+    await page.reload();
+    await page.locator('#dictationToggleBtn').click();
+    await expect(page.locator('#dictationEditor')).toHaveValue(original);
+    await expect.poll(() => page.locator('#dictationEditor').evaluate(editor => editor.selectionStart)).toBe(0);
+    const providerSelected = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/dictation/assistant' && response.request().method() === 'POST');
+    await page.locator('#dictationAssistantSelect').selectOption('openai');
+    expect((await (await providerSelected).json()).selected).toBe('openai');
+  }
   await page.locator('#dictationMicBtn').click();
-  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es verde, la casa es azul y la pradera es verde.', { timeout: 15000 });
+  await expect(page.locator('#dictationEditor')).toHaveValue(sample.expected, { timeout: 15000 });
   await expect.poll(() => page.locator('#dictationPlayer').evaluate(player => player.ended)).toBe(true);
   await expect.poll(() => page.evaluate(() => window.__lucyRecorders.at(-1)?.state)).toBe('recording');
   expect(transcriptions).toBe(1);
   expect(confirmations).toBe(1);
-  expect(spoken).toBe('Listo. Apliqué 3 sustituciones.');
+  expect(assistantRequests).toBe(0);
+  expect(spoken).toBe(sample.confirmation);
   await page.locator('#dictationMicBtn').click();
   await page.evaluate(() => window.__lucyInputContext.close());
   await page.locator('#dictationUndoBtn').click();
-  await expect(page.locator('#dictationEditor')).toHaveValue('La casa es azul, la casa es verde y la pradera es azul.');
+  await expect(page.locator('#dictationEditor')).toHaveValue(original);
+}
+
+test('Lucy edits captured dictation, suspends recording for confirmation and resumes', async ({ page }) => {
+  await checkCapturedEdit(page, {
+    command: 'Lucy, cambia verde por azul, azul por verde',
+    expected: 'La casa es verde, la casa es azul y la pradera es verde.',
+    confirmation: 'Listo. Apliqué 3 sustituciones.',
+  });
+});
+
+test('Lucy clears the restored draft by voice and can undo it', async ({ page }) => {
+  await checkCapturedEdit(page, {
+    command: 'Lucy, borrá todo el texto escrito.',
+    original: 'Un párrafo guardado antes de cerrar el dictado.\n'.repeat(300),
+    expected: '',
+    confirmation: 'Listo. Limpié el borrador.',
+    reopen: true,
+  });
 });

@@ -187,7 +187,8 @@ en el `finally` de la ruta. Cerrar el panel detiene pistas de micrófono y lectu
 `Lucy, léeme el último párrafo`, `Lucy, léeme la última hoja` y
 `Lucy, léeme desde X`, `Lucy, borrá de X para adelante`,
 `Lucy, borrá las últimas 20 palabras`, `Lucy, borrá 10 palabras` y
-`Lucy, cambiá las últimas 20 palabras por Y`, `Lucy, después de X borrá todo`
+`Lucy, cambiá las últimas 20 palabras por Y`, `Lucy, después de X borrá todo`,
+`Lucy, borrá todo el texto escrito`
 y `Lucy, X, cambialo por Y`.
 
 El default `Reglas instantáneas` no carga ningún LLM. Para instalar los modelos

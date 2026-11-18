@@ -17,7 +17,7 @@ function cleanText(value) {
 const LUCY = String.raw`l[uú][cs](?:y|[ií])`;
 const WAKE_START = new RegExp(String.raw`^[¡¿]*(?:(?:che|hola|oye|bueno)[ ,.:]+)?${LUCY}(?![\p{L}\p{N}_])`, 'iu');
 const WAKE_MARK = /^[\s,.:;!?_\-…]+/u;
-const REQUEST_START = /^(?:(?:quiero|necesito) que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr[aáe]|borralo|elimin[aáe]|quit[aáe]|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
+const REQUEST_START = /^(?:(?:quiero|necesito) que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|l[eé]e|l[eé]eme|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
 
 function isAddressed(tail) {
   return /^[\s]*[,.:;!?…]/u.test(tail) || REQUEST_START.test(tail.trimStart());
@@ -922,8 +922,8 @@ export function createDictationController({
     editor.value = String(current.text || '');
     elements.dictationTitleInput.value = String(current.title || 'Dictado sin título');
     if (!elements.dictationTitleInput.value) elements.dictationTitleInput.value = 'Dictado sin título';
-    editor.selectionStart = Math.min(editor.value.length, Number(current.selectionStart || editor.value.length));
-    editor.selectionEnd = Math.min(editor.value.length, Math.max(editor.selectionStart, Number(current.selectionEnd || editor.selectionStart)));
+    editor.selectionStart = Math.min(editor.value.length, Number(current.selectionStart ?? editor.value.length));
+    editor.selectionEnd = Math.min(editor.value.length, Math.max(editor.selectionStart, Number(current.selectionEnd ?? editor.selectionStart)));
     updateStats();
     renderSessions();
     saveStatus(storageReadFailed ? 'error' : 'saved', storageReadFailed

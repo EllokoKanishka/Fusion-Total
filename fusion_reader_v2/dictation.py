@@ -32,7 +32,7 @@ class DictationInstruction:
 
 
 _LEADING_FILLER = re.compile(
-    r"^(?:(?:no|bueno|a ver|l[uú][cs](?:y|[ií])|che)\s*[,.:;-]?\s*)+",
+    r"^(?:no\s*[,.:;-]\s*|(?:bueno|a ver|l[uú][cs](?:y|[ií])|che)\b\s*[,.:;-]?\s*)+",
     flags=re.IGNORECASE,
 )
 _WAKE_WORD = re.compile(
@@ -40,6 +40,16 @@ _WAKE_WORD = re.compile(
     flags=re.IGNORECASE,
 )
 _JOINED_COMMAND_SEPARATOR = re.compile(r"(?<=\w)[.:;]+(?=\w)")
+_CLEAR_DRAFT_COMMAND = re.compile(
+    r"(?:(?:(?:quiero|necesito)\s+)?que\s+(?:borr|elimin|limpi|quit)es?|"
+    r"(?:(?:pod[eé]s|podr[ií]as|puedes)\s+|por\s+favor[ ,]+)?"
+    r"(?:borr|elimin|limpi|quit)(?:[aá]|ar))\s+"
+    r"(?:todo|(?:todo\s+)?(?:el|este)\s+(?:texto|borrador|documento)"
+    r"(?:\s+(?:(?:que\s+)?est[aá]\s+|ya\s+)?(?:escrito|dictado))?(?:\s+(?:completo|entero))?"
+    r"|todo\s+lo\s+(?:escrito|dictado|que\s+(?:est[aá]\s+escrito|escrib[ií]|dict[eé])))"
+    r"(?:\s+desde\s+el\s+principio\s+hasta\s+el\s+final)?[ .,!?:;…]*",
+    flags=re.IGNORECASE,
+)
 _SPANISH_CARDINALS = {
     "una": 1,
     "uno": 1,
@@ -288,11 +298,7 @@ def interpret_dictation_transcript(
         return DictationInstruction("undo")
     if re.fullmatch(r"(?:rehac[eé]|rehacer)", command, flags=re.IGNORECASE):
         return DictationInstruction("redo")
-    if re.fullmatch(
-        r"(?:borr[aá]|borra|elimin[aá]|elimina|limpi[aá]|limpia)\s+(?:todo|el\s+texto|el\s+documento)",
-        command,
-        flags=re.IGNORECASE,
-    ):
+    if _CLEAR_DRAFT_COMMAND.fullmatch(command):
         return DictationInstruction("clear")
 
     anchor_first_delete = re.fullmatch(
