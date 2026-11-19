@@ -2339,6 +2339,10 @@ class FusionReaderV2:
             return "OpenAI alcanzó el límite de uso. Podés elegir un asistente local para continuar."
         if clean in {"openclaw_timeout"} or "timed out" in clean.lower():
             return "El asistente tardó demasiado y no cambié el texto."
+        if clean == "gpu_measurement_unavailable":
+            return "Panda no pudo comprobar la memoria de video."
+        if clean == "gpu_budget_insufficient":
+            return "No hay suficiente memoria de video para interpretar la orden con ese modelo."
         if clean.startswith("assistant_"):
             return "El asistente no devolvió una operación editorial segura; no cambié el texto."
         return "El asistente no pudo interpretar la orden; no cambié el texto."

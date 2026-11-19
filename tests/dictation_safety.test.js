@@ -76,6 +76,15 @@ async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOve
       for (let i = 0; i < 3; i++) { now += 100; const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn()); }
     },
     async detectSpeech() { for (let i = 0; i < 3; i++) { now += 100; const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn()); } },
+    async silence(ms) {
+      loud = false;
+      for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+        now += 100;
+        const current = [...frames.values()]; frames.clear(); current.forEach(fn => fn());
+      }
+      loud = true;
+      await tick();
+    },
     async finishRecording() { recorders.at(-1).stop(); await tick(); },
     async upload() { await this.startRecording(); await this.finishRecording(); },
   };
@@ -382,6 +391,58 @@ test('Lucy alone arms the next phrase and confirms its edit without inserting th
   assert.equal(requests.filter(([route]) => route === '/api/dictation/speak').length, 1);
   await f.elements.dictationPlayer.emit('ended'); await tick();
   assert.equal(f.recorders.at(-1).state, 'recording'); f.controller.dispose();
+});
+
+test('a pause longer than one second does not cut a voice order in progress', async () => {
+  let uploads = 0;
+  const f = await fixture({
+    fetchFn: async () => ({ ok: true, json: async () => ({
+      transcript: ++uploads === 1 ? 'Lucy.' : 'cambiá original por claro', instruction: { kind: 'noop' }
+    }) }),
+    api: async route => route === '/api/dictation/interpret'
+      ? { instruction: { kind: 'replace', target: 'original', text: 'claro' } } : {},
+  });
+  await f.startRecording();
+  await f.finishRecording();
+  assert.equal(f.elements.dictationStatus.dataset.mode, 'armed');
+  await f.silence(9000);
+  await f.detectSpeech();
+  assert.equal(f.elements.dictationStatus.dataset.mode, 'capturing');
+  await f.silence(1300);
+  assert.equal(uploads, 1);
+  await f.detectSpeech();
+  await f.silence(1900);
+  assert.equal(uploads, 2);
+  assert.equal(f.elements.dictationEditor.value, 'Texto claro');
+  f.controller.dispose();
+});
+
+test('an empty transcription keeps a retry already in the microphone and displays the result', async () => {
+  const failed = deferred();
+  let uploads = 0;
+  const f = await fixture({
+    fetchFn: async () => {
+      uploads++;
+      if (uploads === 1) return { ok: true, json: async () => ({ transcript: 'Lucy.' }) };
+      if (uploads === 2) return failed.promise;
+      return { ok: true, json: async () => ({ transcript: 'cambiá original por claro' }) };
+    },
+    api: async route => route === '/api/dictation/interpret'
+      ? { instruction: { kind: 'replace', target: 'original', text: 'claro' } } : {},
+  });
+  await f.startRecording();
+  await f.finishRecording();
+  await f.detectSpeech();
+  await f.finishRecording();
+  await f.detectSpeech();
+  await f.finishRecording();
+  assert.equal(uploads, 2);
+  failed.resolve({ ok: true, json: async () => ({ ok: false, detail: 'empty_transcript' }) });
+  await tick();
+  assert.equal(uploads, 3);
+  assert.equal(f.elements.dictationEditor.value, 'Texto claro');
+  assert.match(f.elements.dictationReviewStatus.textContent, /Cambié original por claro/);
+  f.controller.dispose();
 });
 
 test('mixed utterance keeps its dictated prefix and applies only the invoked command', async () => {

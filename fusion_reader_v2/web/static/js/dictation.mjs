@@ -3,6 +3,7 @@ const DEFAULT_ASSISTANT_CONTEXT_CHARS = 12000;
 const WAKE_COMMAND_WINDOW_MS = 20000;
 const MAX_DICTATION_UTTERANCE_MS = 10000;
 const END_OF_UTTERANCE_SILENCE_MS = 1000;
+const END_OF_ORDER_SILENCE_MS = 1800;
 const MIN_CAPTURE_BYTES = 256;
 const REQUEST_TIMEOUT_MS = 120000;
 const CONFIRMATION_REQUEST_TIMEOUT_MS = 20000;
@@ -690,7 +691,8 @@ export function createDictationController({
 
   function setStatus(message, mode = '') {
     const labels = {
-      listening: 'Escuchando', armed: 'Orden', processing: 'Procesando', speaking: 'Leyendo', error: 'Error'
+      listening: 'Escuchando', armed: 'Esperando orden', capturing: 'Grabando orden',
+      processing: 'Procesando', speaking: 'Leyendo', error: 'Error'
     };
     elements.dictationStatus.textContent = mode === 'error'
       ? (cleanText(message) || 'Error de micrófono')
@@ -827,6 +829,7 @@ export function createDictationController({
         wakeExpiryTimer = 0;
         pendingClarification = null;
         addActivity('La espera de la orden venció; volvé a decir “Lucy”.');
+        reviewStatus('Pasaron 20 segundos. Volvé a decir «Lucy» para dar una orden.');
         if (active && !processing && !speaking) setStatus('Escuchando… hacé una pausa y aplico el tramo.', 'listening');
       }
     }, WAKE_COMMAND_WINDOW_MS + 20);
@@ -835,6 +838,7 @@ export function createDictationController({
   function armWakeCommand() {
     wakeGate.arm();
     scheduleWakeExpiry();
+    reviewStatus('Lucy te escucha. Tenés 20 segundos para empezar la orden.');
     addActivity('Lucy quedó atenta. Decí ahora la orden completa.');
   }
 
@@ -1364,7 +1368,7 @@ export function createDictationController({
         return await clarifyCommand('¿Qué parte del texto querés cambiar? Decime unas palabras más.', token, transcript);
       }
       let message = 'No pude aplicar la orden. No cambié el texto.';
-      if (detail === 'openclaw_rate_limit' && error.data?.detail) message = error.data.detail;
+      if ((detail === 'openclaw_rate_limit' || detail.startsWith('gpu_')) && error.data?.detail) message = error.data.detail;
       else if (detail.startsWith('openclaw_')) message = 'OpenAI no respondió bien. Podés usar el asistente local.';
       return await finishCommand({ changed: false, message }, { kind: 'noop' }, true, token);
     } finally {
@@ -1388,7 +1392,9 @@ export function createDictationController({
       !['dictate', 'undo', 'redo', 'read', 'stop_listening'].includes(item.kind);
     const completedDraft = canFollowUp ? captureDraft() : null;
     if (invoked && ownsRequest(token) && !['dictate', 'read', 'stop_listening'].includes(item.kind)) {
-      await speakText(commandConfirmation(item, result), 'confirmación', () => ownsRequest(token));
+      const message = commandConfirmation(item, result);
+      reviewStatus(message);
+      await speakText(message, 'confirmación', () => ownsRequest(token));
     }
     if (completedDraft && currentDraft(completedDraft)) {
       lastVoiceCommand = { draft: completedDraft, command: transcript.slice(0, 1200), changed: Boolean(result?.changed), expires: Date.now() + WAKE_COMMAND_WINDOW_MS };
@@ -1489,6 +1495,19 @@ export function createDictationController({
     return Math.sqrt(sum / micSamples.length);
   }
 
+  function reserveRecordedOrder(cycle) {
+    if (!cycle || cycle.voiceStartedAt === null || cycle.capturingOrder || !wakeGate.reserve()) return;
+    cycle.capturingOrder = true;
+    windowRef.clearTimeout(wakeExpiryTimer);
+    wakeExpiryTimer = 0;
+    windowRef.clearTimeout(cycle.deadlineTimer);
+    const remaining = MAX_DICTATION_UTTERANCE_MS - (windowRef.performance.now() - cycle.voiceStartedAt);
+    cycle.deadlineTimer = windowRef.setTimeout(() => {
+      if (recordingCycle === cycle) stopRecorderCycle(false);
+    }, Math.max(0, remaining));
+    if (!processing) showRecorderStatus();
+  }
+
   function monitorRecorder() {
     if (!active || !recorder || recorder.state !== 'recording') return;
     const now = windowRef.performance.now();
@@ -1503,21 +1522,18 @@ export function createDictationController({
       silenceMs = 0;
       if (speechMs >= 45 && !voiceDetected) {
         voiceDetected = true;
-        if (wakeGate.isArmed()) {
-          wakeGate.reserve();
-          windowRef.clearTimeout(wakeExpiryTimer);
-          wakeExpiryTimer = 0;
-        }
+        recordingCycle.voiceStartedAt = now;
+        reserveRecordedOrder(recordingCycle);
       }
     } else {
       silenceMs += delta;
       speechMs = Math.max(0, speechMs - delta * 0.5);
       if (!voiceDetected) noiseFloor = noiseFloor * 0.96 + level * 0.04;
     }
-    const elapsed = now - recorderStartedAt;
-    // Las pausas cierran antes el tramo. Si alguien habla de corrido, enviamos
-    // cada diez segundos: Dictado no debe sentirse como un audio de medio minuto.
-    if ((voiceDetected && elapsed >= 650 && silenceMs >= END_OF_UTTERANCE_SILENCE_MS) || elapsed >= MAX_DICTATION_UTTERANCE_MS) {
+    const order = recordingCycle.capturingOrder;
+    const elapsed = now - (order ? recordingCycle.voiceStartedAt : recorderStartedAt);
+    const silenceLimit = order || recordingCycle.overlapOwner ? END_OF_ORDER_SILENCE_MS : END_OF_UTTERANCE_SILENCE_MS;
+    if ((voiceDetected && elapsed >= 650 && silenceMs >= silenceLimit) || elapsed >= MAX_DICTATION_UTTERANCE_MS) {
       stopRecorderCycle(false);
       return;
     }
@@ -1530,6 +1546,7 @@ export function createDictationController({
     uploadOwner = token;
     processing = true;
     let preserveNextRecording = false;
+    let transcribed = false;
     startRecorderCycle(token);
     setStatus(reservedWakeCommand ? 'Transcribiendo la orden…' : 'Transcribiendo y aplicando…', 'processing');
     try {
@@ -1547,8 +1564,11 @@ export function createDictationController({
         return { response, data: await response.json() };
       });
       if (discardStale(token)) return;
-      if (!response.ok || data.ok === false) throw new Error(data.detail || data.error || 'dictation_failed');
       const transcript = String(data.transcript || '').trim();
+      if (!response.ok || data.ok === false || !transcript) {
+        throw new Error(data.detail || data.error || 'empty_transcript');
+      }
+      transcribed = true;
       const commandsEnabled = elements.dictationCommandsToggle.checked;
       const split = commandsEnabled ? splitLucyUtterance(transcript) : null;
       const bareWake = commandsEnabled && isBareLucyInvocation(transcript);
@@ -1625,10 +1645,13 @@ export function createDictationController({
     } catch (error) {
       if (!ownsRequest(token)) return;
       addActivity(`Falló la transcripción: ${error.message}.`);
-      if (reservedWakeCommand && active && elements.dictationCommandsToggle.checked) {
-        wakeGate.arm();
-        scheduleWakeExpiry();
+      if (reservedWakeCommand && active && elements.dictationCommandsToggle.checked && !transcribed) {
+        preserveNextRecording = true;
+        armWakeCommand();
+        reviewStatus('No entendí la orden. Repetila, Lucy te sigue escuchando.');
         addActivity('Lucy sigue atenta; repetí la orden completa.');
+      } else {
+        reviewStatus(transcribed ? 'No pude interpretar la orden. Probá decirla de nuevo.' : 'No pude transcribir ese audio.');
       }
     } finally {
       if (uploadOwner === token) {
@@ -1641,6 +1664,7 @@ export function createDictationController({
         if (next && canCarry) {
           next.overlapOwner = null;
           next.draft = captureDraft();
+          reserveRecordedOrder(next);
           showRecorderStatus();
         } else if (next) {
           stopRecorderCycle(true);
@@ -1664,8 +1688,12 @@ export function createDictationController({
   }
 
   function showRecorderStatus() {
+    if (recordingCycle?.capturingOrder) {
+      setStatus('Terminá la orden y hacé una pausa para enviarla.', 'capturing');
+      return;
+    }
     const armed = wakeGate.isArmed();
-    setStatus(armed ? 'Lucy está escuchando tu orden…' : 'Escuchando… hacé una pausa y aplico el tramo.',
+    setStatus(armed ? 'Tenés 20 segundos para empezar a hablar.' : 'Escuchando… hacé una pausa y aplico el tramo.',
       armed ? 'armed' : 'listening');
   }
 
@@ -1680,7 +1708,8 @@ export function createDictationController({
       stopListening();
       return;
     }
-    const cycle = { recorder, chunks: [], bytes: 0, deadlineTimer: 0, discard: false, draft: captureDraft(), overlapOwner };
+    const cycle = { recorder, chunks: [], bytes: 0, deadlineTimer: 0, discard: false,
+      draft: captureDraft(), overlapOwner, voiceStartedAt: null, capturingOrder: false };
     recordingCycle = cycle;
     voiceDetected = false;
     silenceMs = 0;

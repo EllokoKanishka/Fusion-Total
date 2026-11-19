@@ -213,11 +213,12 @@ class DictationAssistant:
         structured_chat = getattr(provider, "chat_structured", None)
 
         def ask(prompt: list[dict]):
-            if callable(structured_chat):
-                return structured_chat(
-                    prompt, schema=_INSTRUCTION_SCHEMA, think=False, num_predict=1024, keep_alive="10m"
-                )
-            return provider.chat(prompt, think=False, num_predict=1024)
+            with resource_work(0, wait_for_gpu=False):
+                if callable(structured_chat):
+                    return structured_chat(
+                        prompt, schema=_INSTRUCTION_SCHEMA, think=False, num_predict=1024, keep_alive="10m"
+                    )
+                return provider.chat(prompt, think=False, num_predict=1024)
 
         result = ask(messages)
         elapsed = result.duration_ms

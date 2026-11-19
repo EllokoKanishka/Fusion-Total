@@ -1419,7 +1419,8 @@ html[data-skin="neon"] .skins-menu-options {
   border-color: var(--accent);
   color: var(--accent);
 }
-.dictation-status-chip[data-mode="armed"] {
+.dictation-status-chip[data-mode="armed"],
+.dictation-status-chip[data-mode="capturing"] {
   border-color: var(--accent-2);
   color: var(--accent-2);
   box-shadow: 0 0 0 1px var(--accent-2-soft) inset;

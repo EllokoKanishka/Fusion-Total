@@ -215,8 +215,10 @@ ollama pull qwen3:14b-q8_0
 ```
 
 Al decir `Lucy` sola, Panda vuelve a escuchar la orden mientras prepara el
-modelo local en segundo plano. Si falla la precarga, la captura sigue
-disponible. La voz de confirmación se reproduce después de procesar la orden.
+modelo local en segundo plano. Tenés veinte segundos para empezar a hablar.
+Una vez que Panda detecta la orden, una pausa de 1,8 segundos envía el audio.
+Si falla la precarga, la captura sigue disponible. El resultado aparece
+por escrito y la voz de confirmación se reproduce después de procesar la orden.
 
 El dictado en OpenAI usa el modelo cloud del diálogo por defecto y admite
 `FUSION_READER_OPENAI_DICTATION_MODEL` para elegir otro. Pasa por el agente
