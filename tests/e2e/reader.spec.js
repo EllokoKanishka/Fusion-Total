@@ -261,9 +261,11 @@ async function checkCapturedEdit(page, sample) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(await response.json()) });
   });
   if (sample.review) {
-    await page.route('**/api/dictation/proofread', async route => {
-      expect(route.request().postDataJSON()).toEqual({ mode: 'prose', text: sample.original });
-      await route.fulfill({ json: { ok: true, text: sample.expected, changed_parts: 1 } });
+    await page.route('**/api/dictation/review', async route => {
+      expect(route.request().postDataJSON()).toEqual({
+        text: sample.original, requests: ['lee el texto y mejoralo.'], previous: ''
+      });
+      await route.fulfill({ json: { ok: true, text: sample.expected, note: '' } });
     });
   }
   await page.route('**/api/dictation/speak', async route => {
@@ -274,6 +276,8 @@ async function checkCapturedEdit(page, sample) {
   });
   await page.goto(baseURL);
   await page.locator('#dictationToggleBtn').click();
+  await expect(page.locator('#dictationModeSelect')).toHaveValue('direct');
+  if (sample.review) await page.locator('#dictationModeSelect').selectOption('review');
   const original = sample.original ?? 'La casa es azul, la casa es verde y la pradera es azul.';
   await page.locator('#dictationEditor').fill(original);
   if (sample.reopen) {
@@ -289,7 +293,13 @@ async function checkCapturedEdit(page, sample) {
     expect((await (await providerSelected).json()).selected).toBe('openai');
   }
   await page.locator('#dictationMicBtn').click();
-  await expect(page.locator('#dictationEditor')).toHaveValue(sample.expected, { timeout: 15000 });
+  if (sample.review) {
+    await expect(page.locator('#dictationReviewPanel')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('#dictationReviewProposed')).toHaveText(sample.expected);
+    await expect(page.locator('#dictationEditor')).toHaveValue(original);
+  } else {
+    await expect(page.locator('#dictationEditor')).toHaveValue(sample.expected, { timeout: 15000 });
+  }
   await expect.poll(() => page.locator('#dictationPlayer').evaluate(player => player.ended)).toBe(true);
   await expect.poll(() => page.evaluate(() => window.__lucyRecorders.at(-1)?.state)).toBe('recording');
   expect(transcriptions).toBe(1);
@@ -298,6 +308,11 @@ async function checkCapturedEdit(page, sample) {
   expect(spoken).toBe(sample.confirmation);
   await page.locator('#dictationMicBtn').click();
   await page.evaluate(() => window.__lucyInputContext.close());
+  if (sample.review) {
+    await page.locator('#dictationReviewApplyBtn').click();
+    await expect(page.locator('#dictationEditor')).toHaveValue(sample.expected);
+    await expect(page.locator('#dictationReviewPanel')).toBeHidden();
+  }
   await page.locator('#dictationUndoBtn').click();
   await expect(page.locator('#dictationEditor')).toHaveValue(original);
 }
@@ -320,12 +335,12 @@ test('Lucy clears the restored draft by voice and can undo it', async ({ page })
   });
 });
 
-test('Lucy revises the draft when asked to read it and improve it', async ({ page }) => {
+test('Lucy proposes a prose review from captured dictation before changing the draft', async ({ page }) => {
   await checkCapturedEdit(page, {
     command: 'Lucy, lee el texto y mejoralo.',
     original: 'La casa era blanco blanco y tenía un patio con plantas.',
     expected: 'La casa era blanca y tenía un patio con plantas.',
-    confirmation: 'Listo. Revisé la prosa.',
+    confirmation: 'Propuesta lista.',
     review: true,
   });
 });

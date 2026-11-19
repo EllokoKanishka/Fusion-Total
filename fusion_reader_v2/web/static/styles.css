@@ -1482,6 +1482,46 @@ html[data-skin="neon"] .skins-menu-options {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 7px;
 }
+.dictation-review-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.dictation-review {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.dictation-review[hidden] {
+  display: none;
+}
+.dictation-review h2,
+.dictation-review h3,
+.dictation-review p {
+  margin: 0;
+  font-size: 13px;
+}
+.dictation-review-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 8px;
+}
+.dictation-review-comparison pre {
+  max-height: 24vh;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-deep);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
 .dictation-help {
   border: 1px solid var(--line);
   border-radius: 8px;

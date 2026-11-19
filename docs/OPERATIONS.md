@@ -175,8 +175,18 @@ Si `WAV` existe pero `RMS`/`pico` son casi cero, el navegador está entregando s
    comprensión` u `OpenAI nano`; la gramática siempre resuelve primero las
    órdenes conocidas y el modelo se carga o llama sólo ante una orden no
    reconocida;
-6. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
+6. mantener `Edición directa` para cambios puntuales o elegir `Revisión asistida`
+   para trabajar sobre una propuesta;
+7. usar `Pasar al lector` para montar una copia temporal o `Descargar TXT` para
    conservar un archivo.
+
+En `Revisión asistida`, elegí un modelo en `Asistente` y seleccioná el tramo
+o indicá el alcance (por ejemplo, «todo el texto»). Si no indicás un alcance,
+Lucy usa la selección o el párrafo del cursor. Podés pedir «Lucy, hacelo más
+legible» o «Lucy, revisá estas referencias en APA 7», y ajustar la propuesta
+con otra orden. Cada propuesta admite un tramo de hasta 6.000 caracteres.
+Decí «Lucy, aplicalo» o «Lucy, descartalo», o usá los botones de la propuesta.
+La aplicación cuenta como un cambio que podés deshacer.
 
 El borrador se guarda en `localStorage` del origen `127.0.0.1:8010`. El audio se
 escribe en el upload temporal únicamente durante la transcripción y se elimina

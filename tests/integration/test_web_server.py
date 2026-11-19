@@ -412,6 +412,38 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(result["text"], revised)
             self.assertEqual(result["changed_parts"], 1)
 
+    def test_dictation_review_returns_a_bounded_apa_proposal_and_note(self) -> None:
+        original = "Rivas, Lucía. Leer en comunidad. Horizonte, 2024."
+        proposed = "Rivas, L. (2024). Leer en comunidad. Horizonte."
+        note = "El título del libro va en cursiva."
+        provider = NullChatProvider(json.dumps({"text": proposed, "note": note}))
+        assistant = DictationAssistant({"local": provider}, selected="local")
+        body = {"text": original, "requests": ["Aplicá APA 7", "Dejá una nota breve"], "previous": proposed}
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), dictation_assistant=assistant)
+            base = f"http://127.0.0.1:{server.server_port}"
+            status, result = self._request(base, "/api/dictation/review", body)
+            self.assertEqual(status, 200)
+            self.assertEqual((result["text"], result["note"]), (proposed, note))
+            prompt = json.loads(provider.calls[-1][0][-1]["content"])
+            self.assertEqual(prompt["fragmento"], original)
+            self.assertEqual(prompt["solicitudes"], body["requests"])
+            self.assertEqual(prompt["propuesta_anterior"], proposed)
+
+            for invalid, expected in (
+                ({"text": "a" * 6_001}, 413),
+                ({"requests": [7]}, 400),
+                ({"previous": {"text": proposed}}, 400),
+                ({"requests": []}, 400),
+            ):
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    self._request(base, "/api/dictation/review", {**body, **invalid})
+                with raised.exception as response:
+                    self.assertEqual(response.code, expected)
+                    result = json.load(response)
+                self.assertNotIn("text", result)
+            self.assertEqual(len(provider.calls), 1)
+
     def test_dictation_text_and_audio_routes_return_bounded_instructions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

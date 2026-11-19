@@ -29,7 +29,7 @@ from .audio_export import (
 from .conversation import ConversationCore
 from .dialogue import STTProvider, default_stt_provider
 from .dictation import interpret_dictation_transcript
-from .dictation_assistant import DictationAssistant
+from .dictation_assistant import REVIEW_MAX_CHARS, REVIEW_MAX_REQUEST_CHARS, REVIEW_MAX_REQUESTS, DictationAssistant
 from .metrics import VoiceMetric, VoiceMetricsStore
 from .notes import ReaderNotesStore
 from .local_web_bridge import default_external_research_bridge
@@ -2364,6 +2364,25 @@ class FusionReaderV2:
             "stt_provider": "text",
             "stt_ms": 0,
         }
+
+    def dictation_review(self, text: str, requests: list[str], previous: str) -> dict:
+        if (
+            not text.strip()
+            or not requests
+            or len(requests) > REVIEW_MAX_REQUESTS
+            or any(not request.strip() or len(request) > REVIEW_MAX_REQUEST_CHARS for request in requests)
+        ):
+            return {"ok": False, "error": "dictation_invalid_review", "detail": "Indicá qué querés revisar."}
+        if len(text) > REVIEW_MAX_CHARS or len(previous) > REVIEW_MAX_CHARS:
+            return {
+                "ok": False,
+                "error": "dictation_proofread_too_large",
+                "detail": f"Elegí un tramo de hasta {REVIEW_MAX_CHARS:,} caracteres.".replace(",", "."),
+            }
+        result = self.dictation_assistant.review(text, requests, previous)
+        if result.get("technical_detail") == "openclaw_rate_limit":
+            result["detail"] = self._human_dictation_assistant_error("openclaw_rate_limit")
+        return result
 
     def dictation_proofread(self, text: str, *, prose: bool = False) -> dict:
         original = str(text or "")

@@ -182,19 +182,31 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
             ),
         )
         return True
-    if path == "/api/dictation/proofread":
+    if path in {"/api/dictation/proofread", "/api/dictation/review"}:
         text = payload.get("text", "")
         if not isinstance(text, str):
             raise ValueError("dictation_text_required")
-        mode = payload.get("mode", "conservative")
-        if mode not in ("conservative", "prose"):
-            raise ValueError("invalid_dictation_proofread_mode")
-        result = responder.app.dictation_proofread(text, prose=mode == "prose")
+        if path == "/api/dictation/review":
+            requests = payload.get("requests")
+            previous = payload.get("previous", "")
+            if (
+                not isinstance(requests, list)
+                or not all(isinstance(item, str) for item in requests)
+                or not isinstance(previous, str)
+            ):
+                raise ValueError("invalid_dictation_review")
+            result = responder.app.dictation_review(text, requests, previous)
+        else:
+            mode = payload.get("mode", "conservative")
+            if mode not in ("conservative", "prose"):
+                raise ValueError("invalid_dictation_proofread_mode")
+            result = responder.app.dictation_proofread(text, prose=mode == "prose")
         status = (
             200
             if result.get("ok")
             else {
                 "empty_dictation_proofread": 400,
+                "dictation_invalid_review": 400,
                 "dictation_proofread_too_large": 413,
                 "dictation_proofread_unavailable": 503,
                 "dictation_proofread_failed": 502,

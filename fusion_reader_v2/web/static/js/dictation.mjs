@@ -10,6 +10,7 @@ const CONFIRMATION_PLAYBACK_TIMEOUT_MS = 20000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 const SESSION_SCHEMA_VERSION = 2;
 const MAX_SAVED_SESSIONS = 30;
+const MAX_REVIEW_REQUESTS = 6;
 
 function cleanText(value) {
   return String(value || '').trim();
@@ -23,7 +24,12 @@ const WAKE_MARK = /^[\s,.:;!?_\-…]+/u;
 const REQUEST_START = /^(?:esc[uú]chame[ ,.:]+)?(?:(?:quiero|necesito) que |lo que te pido es que |que |por favor[ ,]+|me )?(?:cambi[aáe]|cambialo|reemplaz[aáe]|sustitu[iíye]+|borr(?:[aáe]|ar|es)|borralo|elimin(?:[aáe]|ar|es)|limpi(?:[aáe]|ar|es)|quit(?:[aáe]|ar|es)|sac[aáe]|sacalo|deshac[eé]|rehac[eé]|correg[ií]|corregilo|corrige|revis[aáe]|mej[oó]r(?:[aáe]|[aá]l[oa])|reescr[ií]b(?:[iíe]|[iíe]l[oa])|pul[ií](?:l[oa])?|l[eé][eé](?:me|l[oa])?|par[aáe]|deten[eé]|escrib[iíe]|pon[eéga]*|ponele|agreg[aáe]|a[nñ]ad[iíe]|pas[aáe]|mov[eé]|orden[aáe]|separ[aáe]|junt[aáe]|dej[aáe]|pod[eé]s|podr[ií]as|hac[eé]|hagas|convert[ií]|donde dice)(?=$|[\s,.:;!?…])/iu;
 
 function isAddressed(tail) {
-  return /^[\s]*[,.:;!?…]/u.test(tail) || REQUEST_START.test(tail.trimStart());
+  return /^[\s]*[,.:;!?…]/u.test(tail) || startsRequest(tail.trimStart());
+}
+
+function startsRequest(text) {
+  return REQUEST_START.test(text) ||
+    /^(?:aplic[aáe](?:l[oa])?|acept[aáe](?:l[oa])?|descart[aáe](?:l[oa])?|cancel[aáe]|adapt[aáe]|formate[aáe]|mostr[aáe]|conserv[aáe]|manten[eé]|m[aá]s\s+(?:breve|claro|clara|legible|formal)|menos\s+formal)\b/iu.test(text);
 }
 
 export function isBareLucyInvocation(value) {
@@ -57,10 +63,27 @@ export function splitLucyUtterance(value) {
     const sentenceBreak = /[.?!…]$/u.test(prefix) || /\n\s*$/u.test(head);
     // An unpunctuated command can follow prose when it starts with a request.
     // A bare trailing name without a pause marker could be part of the prose.
-    if (REQUEST_START.test(tail.replace(WAKE_MARK, '')) ||
+    if (startsRequest(tail.replace(WAKE_MARK, '')) ||
         (sentenceBreak && (!tail.replace(WAKE_MARK, '') || isAddressed(tail)))) {
       return { prefix, command: text.slice(match.index) };
     }
+  }
+  return null;
+}
+
+function reviewScope(words, instruction) {
+  const numbered = words.match(/\bparrafo (?:numero )?([1-9]\d*)\b/);
+  if (numbered) return { scope: 'paragraph_number', number: Number(numbered[1]) };
+  if (/\b(?:primer|primero) parrafo\b/.test(words)) return { scope: 'paragraph_number', number: 1 };
+  if (/\b(?:ultimo parrafo|parrafo final)\b/.test(words)) return { scope: 'last_paragraph' };
+  if (/\b(?:parrafo anterior|anterior parrafo)\b/.test(words)) return { scope: 'previous_paragraph' };
+  if (/\b(?:este parrafo|parrafo actual)\b/.test(words)) return { scope: 'current_paragraph' };
+  if (/\b(?:seleccion|seleccionado|seleccionada|aca a aca)\b/.test(words)) return { scope: 'selection' };
+  if (/\b(?:todo el (?:texto|borrador|documento)|toda la redaccion|(?:texto|borrador) completo)\b|\btodo$/.test(words)) {
+    return { scope: 'all' };
+  }
+  if (['proofread', 'revise_prose'].includes(instruction.kind) && instruction.scope && instruction.scope !== 'all') {
+    return instruction;
   }
   return null;
 }
@@ -591,6 +614,7 @@ export function createDictationController({
   let bufferedRecording = null;
   let lastVoiceCommand = null;
   let pendingClarification = null;
+  let proposal = null;
   let cancelPlayback = null;
   let speechRequest = null;
   let dirty = false;
@@ -627,6 +651,35 @@ export function createDictationController({
     if (currentDraft(token)) return false;
     addActivity('Descarté una respuesta anterior porque cambió el borrador, la selección o la sesión.');
     return true;
+  }
+
+  function isReviewMode() {
+    return elements.dictationModeSelect?.value === 'review';
+  }
+
+  function reviewStatus(message) {
+    const status = elements.dictationReviewStatus;
+    if (status) {
+      status.hidden = !message;
+      status.textContent = message;
+    }
+  }
+
+  function showProposal(next) {
+    proposal = next;
+    if (!elements.dictationReviewPanel) return;
+    elements.dictationReviewPanel.hidden = !next;
+    elements.dictationReviewOriginal.textContent = next?.original || '';
+    elements.dictationReviewProposed.textContent = next?.text || '';
+    elements.dictationReviewNote.textContent = next?.note || '';
+    elements.dictationReviewNote.hidden = !next?.note;
+    elements.dictationReviewApplyBtn.disabled = !next || next.text === next.original;
+  }
+
+  function invalidateProposal() {
+    if (!proposal) return;
+    showProposal(null);
+    reviewStatus('El borrador cambió. Pedí una revisión nueva para ese tramo.');
   }
 
   function saveStatus(state, message) {
@@ -943,6 +996,8 @@ export function createDictationController({
     if (!next) return;
     stopListening();
     stopSpeech();
+    showProposal(null);
+    reviewStatus('');
     sessionStore.activeId = id;
     editor.value = String(next.text || '');
     elements.dictationTitleInput.value = String(next.title || 'Dictado sin título');
@@ -969,6 +1024,8 @@ export function createDictationController({
     if (!persistNow()) return;
     stopListening();
     stopSpeech();
+    showProposal(null);
+    reviewStatus('');
     const id = newSessionId();
     sessionStore.activeId = id;
     sessionStore.sessions.unshift({ id, title: 'Dictado sin título', text: '', selectionStart: 0, selectionEnd: 0, voice: String(elements.dictationVoiceSelect.value || ''), createdAt: Date.now(), updatedAt: Date.now() });
@@ -1003,6 +1060,7 @@ export function createDictationController({
     const before = snapshot(editor);
     const result = applyEditorInstruction(editor, instruction);
     if (result.changed) {
+      invalidateProposal();
       draftRevision += 1;
       pushUndo(before);
       redoStack.length = 0;
@@ -1023,6 +1081,7 @@ export function createDictationController({
     }
     redoStack.push(snapshot(editor));
     restoreSnapshot(editor, previous);
+    invalidateProposal();
     draftRevision += 1;
     schedulePersist();
     addActivity('Cambio deshecho.');
@@ -1038,6 +1097,7 @@ export function createDictationController({
     }
     pushUndo(snapshot(editor));
     restoreSnapshot(editor, next);
+    invalidateProposal();
     draftRevision += 1;
     schedulePersist();
     addActivity('Cambio rehecho.');
@@ -1152,7 +1212,7 @@ export function createDictationController({
     }
   }
 
-  async function requestProofread(instruction, transcript = '', token = beginRequest()) {
+  async function requestProofread(instruction, token) {
     if (discardStale(token)) return;
     const selection = readTextForInstruction(editor, { ...instruction, kind: 'read' });
     if (selection.error) {
@@ -1162,11 +1222,10 @@ export function createDictationController({
     flushManualHistory();
     const before = snapshot(editor);
     const source = before.value.slice(selection.start, selection.end);
-    const prose = instruction.kind === 'revise_prose';
-    setStatus(prose ? 'Lucy está revisando la prosa…' : 'Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
+    setStatus('Lucy está corrigiendo el tramo con Qwen 14B…', 'processing');
     try {
       const data = await requestWithDeadline(signal => api('/api/dictation/proofread', {
-        text: source, ...(prose ? { mode: 'prose' } : {})
+        text: source
       }, { signal }));
       if (discardStale(token)) return;
       if (data.ok === false) throw new Error(data.detail || data.error || 'proofread_failed');
@@ -1182,7 +1241,7 @@ export function createDictationController({
       const changed = Number(data.changed_parts || 0);
       const rejected = Number(data.rejected_parts || 0);
       addActivity(
-        `${prose ? 'Revisión de prosa' : 'Corrección conservadora'} con ${data.model || (prose ? 'el asistente' : 'Qwen 14B')}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
+        `Corrección conservadora con ${data.model || 'Qwen 14B'}: ${changed} tramo${changed === 1 ? '' : 's'} cambiado${changed === 1 ? '' : 's'}` +
         `${rejected ? ` · ${rejected} propuesta${rejected === 1 ? '' : 's'} rechazada${rejected === 1 ? '' : 's'} por seguridad` : ''}` +
         ` · ${Number(data.duration_ms || 0)} ms.`
       );
@@ -1193,6 +1252,77 @@ export function createDictationController({
       const technical = error && error.data && error.data.technical_detail ? ` (${error.data.technical_detail})` : '';
       addActivity(`No pude corregir el tramo: ${detail}${technical}. No cambié el texto.`);
       return { changed: false, message: detail };
+    } finally {
+      if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+    }
+  }
+
+  async function reviewFeedback(message, spoken, token) {
+    reviewStatus(message);
+    if (spoken && ownsRequest(token)) await speakText(message, 'confirmación', () => ownsRequest(token));
+  }
+
+  async function resolveProposal(apply, spoken = false, token = beginRequest()) {
+    if (discardStale(token)) return;
+    if (!proposal) return reviewFeedback('No hay una propuesta pendiente.', spoken, token);
+    const { base, start, end, original, text } = proposal;
+    showProposal(null);
+    if (!apply) return reviewFeedback('Propuesta descartada.', spoken, token);
+    if (base.sessionId !== token.sessionId || base.revision !== token.revision || base.value !== editor.value) {
+      return reviewFeedback('El borrador cambió. Pedí una revisión nueva.', spoken, token);
+    }
+    if (original === text) return reviewFeedback('El tramo ya estaba así.', spoken, token);
+    const result = mutate({ kind: 'edit', edits: [{ start, end, before: original, after: text }] });
+    return reviewFeedback(result.changed ? 'Propuesta aplicada.' : result.message, spoken, token);
+  }
+
+  async function requestReview(instruction, transcript, token, spoken) {
+    const command = cleanText(transcript).replace(WAKE_START, '').replace(WAKE_MARK, '').trim();
+    const words = command.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    if (/^(?:aplic|acept)(?:alo|ala|a|e)(?: (?:la propuesta|los cambios))?$/.test(words)) {
+      return resolveProposal(true, spoken, token);
+    }
+    if (/^(?:descart(?:alo|ala|a|e)|cancela)(?: (?:la propuesta|los cambios))?$/.test(words)) {
+      return resolveProposal(false, spoken, token);
+    }
+    if (!command) return reviewFeedback('Decime qué querés revisar.', spoken, token);
+    const explicitScope = reviewScope(words, instruction);
+    const selected = editor.selectionEnd > editor.selectionStart;
+    const sameSelection = !selected || (editor.selectionStart === proposal?.start && editor.selectionEnd === proposal?.end);
+    const range = proposal && !explicitScope && sameSelection ? proposal
+      : readTextForInstruction(editor, explicitScope || { scope: selected ? 'selection' : 'current_paragraph' });
+    if (explicitScope?.scope === 'selection' && !selected) {
+      return reviewFeedback('Seleccioná el tramo que querés revisar.', spoken, token);
+    }
+    if (range.error) return reviewFeedback(range.error, spoken, token);
+    const { start, end } = range;
+    const original = token.value.slice(start, end);
+    const refining = proposal?.start === start && proposal?.end === end ? proposal : null;
+    const history = refining?.requests || [];
+    const requests = history.length < MAX_REVIEW_REQUESTS
+      ? [...history, command] : [history[0], ...history.slice(2), command];
+    setStatus('Lucy está preparando una propuesta…', 'processing');
+    reviewStatus('Preparando propuesta…');
+    try {
+      const data = await requestWithDeadline(signal => api('/api/dictation/review', {
+        text: original, requests, previous: refining?.text || ''
+      }, { signal }));
+      if (discardStale(token)) {
+        if (ownsRequest(token)) reviewStatus('Cambió el borrador o la selección. Pedí la revisión otra vez.');
+        return;
+      }
+      if (data.ok === false || typeof data.text !== 'string' || !data.text.trim()) {
+        throw new Error(data.detail || 'Lucy no devolvió una propuesta.');
+      }
+      showProposal({ base: token, start, end, original, text: data.text, note: data.note, requests });
+      elements.dictationReviewPanel?.scrollIntoView?.({ block: 'nearest' });
+      const message = data.text !== original ? 'Propuesta lista.' : 'Revisé el tramo. Quedó igual.';
+      await reviewFeedback(message, spoken, token);
+    } catch (error) {
+      if (!ownsRequest(token)) return;
+      const message = error.data?.detail || error.message;
+      await reviewFeedback(message, spoken, token);
     } finally {
       if (ownsRequest(token)) setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
     }
@@ -1278,8 +1408,18 @@ export function createDictationController({
       addActivity('Dictado detenido por voz.');
       return stopListening();
     }
-    if (item.kind === 'proofread' || item.kind === 'revise_prose') {
-      return finishCommand(await requestProofread(item, transcript, token), item, invoked, token);
+    if (isReviewMode() && invoked && item.kind !== 'dictate' &&
+        (item.kind !== 'read' || /\b(?:y|para)\s+(?:revis|correg|mejor|aplic|reescri|formate)/iu.test(transcript))) {
+      return requestReview(item, transcript, token, active && processing);
+    }
+    const apaReview = item.kind === 'noop' && /\b(?:normas?\s+|formato\s+|estilo\s+|en\s+)APA\b/iu.test(transcript);
+    if (item.kind === 'revise_prose' || (invoked && apaReview)) {
+      const message = 'Elegí Revisión asistida para trabajar con una propuesta.';
+      reviewStatus(message);
+      return finishCommand({ changed: false, message }, item, invoked, token);
+    }
+    if (item.kind === 'proofread') {
+      return finishCommand(await requestProofread(item, token), item, invoked, token);
     }
     if (item.kind === 'read') {
       const selection = readTextForInstruction(editor, item);
@@ -1412,14 +1552,14 @@ export function createDictationController({
       const commandsEnabled = elements.dictationCommandsToggle.checked;
       const split = commandsEnabled ? splitLucyUtterance(transcript) : null;
       const bareWake = commandsEnabled && isBareLucyInvocation(transcript);
-      const rejection = commandsEnabled && rejectsLastEdit(transcript);
+      const rejection = commandsEnabled && !isReviewMode() && rejectsLastEdit(transcript);
       const recentCommand = lastVoiceCommand;
       if (transcript) lastVoiceCommand = null;
       const recent = recentCommand && Date.now() <= recentCommand.expires;
       const edited = recentCommand?.draft;
       const sameEdit = recent && recentCommand.changed && edited.sessionId === token.sessionId && edited.epoch === token.epoch &&
         edited.revision === token.revision && edited.value === token.value;
-      const revision = commandsEnabled && sameEdit && recentCommand.command && revisesLastOrder(transcript) &&
+      const revision = commandsEnabled && !isReviewMode() && sameEdit && recentCommand.command && revisesLastOrder(transcript) &&
         elements.dictationAssistantSelect.value !== 'rules';
       // Keep one following clip while STT is in flight. Hand it over only
       // after plain dictation or a bare wake. Processing an edit may speak.
@@ -1707,6 +1847,8 @@ export function createDictationController({
     stopSpeech();
     flushManualHistory();
     if (!persistNow()) return;
+    showProposal(null);
+    reviewStatus('');
     elements.appRoot.classList.remove('dictation-open');
     elements.dictationWorkspace.hidden = true;
     elements.dictationToggleBtn.setAttribute('aria-expanded', 'false');
@@ -1809,6 +1951,20 @@ export function createDictationController({
   elements.dictationCommandBtn.addEventListener('click', interpretTypedCommand);
   elements.dictationAssistantSelect.addEventListener('change', changeAssistant);
   elements.dictationAssistantInstallBtn.addEventListener('click', installAssistantModel);
+  elements.dictationModeSelect?.addEventListener('change', () => {
+    requestSequence += 1;
+    if (recordingCycle && !recordingCycle.overlapOwner) recordingCycle.draft = captureDraft();
+    lastVoiceCommand = null;
+    clearWakeCommand();
+    showProposal(null);
+    reviewStatus(isReviewMode() ? 'Seleccioná un tramo o indicá qué parte querés revisar.' : '');
+    elements.dictationCommandInput.placeholder = isReviewMode() ? 'Pedí una revisión o un ajuste a la propuesta…'
+      : 'También podés escribir una orden: reemplazá… / léeme…';
+    elements.dictationCommandBtn.textContent = isReviewMode() ? 'Pedir revisión' : 'Aplicar orden';
+    setStatus(active ? 'Escuchando el próximo tramo…' : 'Dictado en pausa.', active ? 'listening' : '');
+  });
+  elements.dictationReviewApplyBtn?.addEventListener('click', () => resolveProposal(true));
+  elements.dictationReviewDiscardBtn?.addEventListener('click', () => resolveProposal(false));
   elements.dictationCommandsToggle.addEventListener('change', () => {
     workEpoch += 1;
     requestSequence += 1;
@@ -1828,6 +1984,7 @@ export function createDictationController({
   });
   editor.addEventListener('input', () => {
     draftRevision += 1;
+    invalidateProposal();
     windowRef.clearTimeout(manualTimer);
     manualTimer = windowRef.setTimeout(flushManualHistory, 700);
     schedulePersist();
@@ -1848,6 +2005,7 @@ export function createDictationController({
   windowRef.addEventListener?.('beforeunload', beforeLeave);
 
   restoreDraft();
+  showProposal(null);
   refreshAssistantStatus();
 
   return {

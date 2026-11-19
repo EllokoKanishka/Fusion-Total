@@ -100,6 +100,12 @@ Dictation routes:
   offsets relative to that excerpt. The browser rechecks the draft and every
   replacement before applying them as one undoable change. `clarify` returns
   a short question instead of making an edit;
+- `POST /api/dictation/review`: accepts `text`, up to six editorial `requests`,
+  and an optional `previous` proposal. The source and previous proposal are
+  bounded to 6,000 characters each and each request to 800. The response
+  contains proposed `text` and a short `note`. The browser holds the proposal
+  in memory and applies it only on request, after verifying the original draft
+  session, revision and exact range.
 - instruction kinds are additive and currently include `dictate`, `insert`,
   `replace`, `replace_selection`, `replace_last_words`, `delete`, `delete_from`,
   `delete_last_words`, `delete_sentence`, `clear`, `undo`, `redo`, `read`, `stop_listening` and `noop`.

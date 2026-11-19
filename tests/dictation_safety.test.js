@@ -804,7 +804,7 @@ test('an immediate spoken refinement keeps the prior instruction and does not ap
   f.controller.dispose();
 });
 
-test('after a rejected prose review, a stalled confirmation releases the mic and Lucy accepts a new order', async () => {
+test('after a rejected review, a stalled confirmation releases the mic and Lucy accepts a new order', async () => {
   const packets = [
     { transcript: 'Lucy, mejorá la prosa', instruction: { kind: 'revise_prose', scope: 'all' } },
     { transcript: 'Lucy.', instruction: { kind: 'noop' } },
@@ -814,8 +814,8 @@ test('after a rejected prose review, a stalled confirmation releases the mic and
   const f = await fixture({
     fetchFn: async () => ({ ok: true, json: async () => packets.shift() }),
     api: async (route, body) => {
-      if (route === '/api/dictation/proofread') {
-        assert.deepEqual(body, { text: 'Texto original', mode: 'prose' });
+      if (route === '/api/dictation/review') {
+        assert.deepEqual(body, { text: 'Texto original', requests: ['mejorá la prosa'], previous: '' });
         throw new Error('No pude terminar la revisión de prosa');
       }
       if (route === '/api/dictation/interpret') return { instruction: { kind: 'replace', target: 'original', text: 'claro' } };
@@ -826,6 +826,7 @@ test('after a rejected prose review, a stalled confirmation releases the mic and
       return {};
     }
   });
+  f.elements.dictationModeSelect.value = 'review';
   await f.startRecording();
   await f.finishRecording();
   assert.equal(f.elements.dictationEditor.value, 'Texto original');
@@ -836,6 +837,8 @@ test('after a rejected prose review, a stalled confirmation releases the mic and
   await tick();
   assert.equal(f.recorders.at(-1).state, 'recording');
 
+  f.elements.dictationModeSelect.value = 'direct';
+  await f.elements.dictationModeSelect.emit('change');
   await f.detectSpeech();
   await f.finishRecording();
   assert.equal(f.elements.dictationStatus.dataset.mode, 'armed');
@@ -870,19 +873,57 @@ test('stopping a confirmation while its synthesis is pending resumes capture and
   f.controller.dispose();
 });
 
-test('prose revision applies the selected range in a single undo step', async () => {
+test('review refines a proposal and applies only the original selection in one undo step', async () => {
+  const requests = [];
   const f = await fixture({ api: async (route, body) => {
-    if (route === '/api/dictation/proofread') {
-      assert.deepEqual(body, { text: 'original', mode: 'prose' });
-      return { ok: true, text: 'revisado', changed_parts: 1, model: 'fixture' };
+    if (route === '/api/dictation/review') {
+      requests.push(body);
+      return { ok: true, text: body.previous ? 'nuevo' : 'revisado', note: 'Observación de prueba.' };
     }
     return {};
   } });
+  f.elements.dictationModeSelect.value = 'review';
   f.elements.dictationEditor.selectionStart = 6;
   f.elements.dictationEditor.selectionEnd = 14;
   await f.controller.applyInstruction({ kind: 'revise_prose', scope: 'selection' }, 'Lucy, mejorá la prosa de la selección', true);
-  assert.equal(f.elements.dictationEditor.value, 'Texto revisado');
+  assert.equal(f.elements.dictationEditor.value, 'Texto original');
+  assert.equal(f.elements.dictationReviewProposed.textContent, 'revisado');
+  f.elements.dictationEditor.selectionStart = f.elements.dictationEditor.selectionEnd = 0;
+  await f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, más breve', true);
+  assert.deepEqual(requests, [
+    { text: 'original', requests: ['mejorá la prosa de la selección'], previous: '' },
+    { text: 'original', requests: ['mejorá la prosa de la selección', 'más breve'], previous: 'revisado' }
+  ]);
+  await f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, aplicalo', true);
+  assert.equal(f.elements.dictationEditor.value, 'Texto nuevo');
+  assert.equal(f.elements.dictationReviewPanel.hidden, true);
   f.controller.undo();
   assert.equal(f.elements.dictationEditor.value, 'Texto original');
   f.controller.dispose();
+});
+
+test('review never applies a discarded proposal or a response for a changed draft or mode', async () => {
+  for (const change of ['discard', 'draft', 'mode']) {
+    const pending = deferred();
+    const f = await fixture({ api: () => pending.promise });
+    f.elements.dictationModeSelect.value = 'review';
+    const running = f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, hacelo más claro', true);
+    if (change === 'discard') {
+      pending.resolve({ text: 'Texto revisado' });
+      await running;
+      await f.elements.dictationReviewDiscardBtn.emit('click');
+    } else {
+      if (change === 'draft') await f.edit('Texto nuevo');
+      else {
+        f.elements.dictationModeSelect.value = 'direct';
+        await f.elements.dictationModeSelect.emit('change');
+      }
+      pending.resolve({ text: 'Texto revisado' });
+      await running;
+    }
+    assert.equal(f.elements.dictationReviewPanel.hidden, true);
+    await f.elements.dictationReviewApplyBtn.emit('click');
+    assert.equal(f.elements.dictationEditor.value, change === 'draft' ? 'Texto nuevo' : 'Texto original');
+    f.controller.dispose();
+  }
 });

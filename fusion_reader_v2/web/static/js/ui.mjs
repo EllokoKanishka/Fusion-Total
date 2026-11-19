@@ -5,6 +5,8 @@ const ELEMENT_IDS = [
   'dictationUndoBtn', 'dictationRedoBtn', 'dictationBackBtn', 'dictationReadBtn', 'dictationForwardBtn', 'dictationUseReaderBtn',
   'dictationDownloadBtn', 'dictationDownloadPdfBtn', 'dictationPdfPageNumbers', 'dictationNewBtn', 'dictationClearBtn', 'dictationCommandInput', 'dictationCommandBtn',
   'dictationStatus', 'dictationSessions', 'dictationSessionsList', 'dictationPlayer', 'dictationStats', 'dictationSaveStatus',
+  'dictationModeSelect', 'dictationReviewStatus', 'dictationReviewPanel', 'dictationReviewTitle', 'dictationReviewOriginal',
+  'dictationReviewProposed', 'dictationReviewNote', 'dictationReviewApplyBtn', 'dictationReviewDiscardBtn',
   'quickTextInput', 'quickReadStartBtn', 'quickReadCursorBtn', 'quickClearBtn', 'quickTextInfo',
   'dropzone', 'chooseFileBtn', 'fileInput', 'uploadInfo', 'importProgress', 'autoReadToggle',
   'pdfToWordTool', 'pdfToWordInput', 'pdfToWordInfo', 'pdfToWordDownload', 'referenceModeToggle',

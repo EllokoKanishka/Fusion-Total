@@ -289,6 +289,10 @@
         <label class="dictation-voice-label" for="dictationVoiceSelect">Voz</label>
         <select id="dictationVoiceSelect" class="compact-select dictation-voice-select" aria-label="Voz de lectura en dictado"></select>
         <label class="toggle compact-toggle"><input id="dictationCommandsToggle" type="checkbox" checked> Órdenes con «Lucy»</label>
+        <select id="dictationModeSelect" class="compact-select" aria-label="Modo de edición">
+          <option value="direct">Edición directa</option>
+          <option value="review">Revisión asistida</option>
+        </select>
         <button id="dictationVoiceCommandBtn" class="compact-btn" type="button" title="Escuchar la próxima orden sin decir Lucy">Orden por voz</button>
         <label class="dictation-assistant-label" for="dictationAssistantSelect">Asistente</label>
         <select id="dictationAssistantSelect" class="compact-select dictation-assistant-select" aria-label="Asistente de escritura"></select>
@@ -329,6 +333,19 @@
         <input id="dictationCommandInput" type="text" placeholder="También podés escribir una orden: reemplazá… / léeme…" aria-label="Orden de dictado escrita">
         <button id="dictationCommandBtn" class="compact-btn" type="button">Aplicar orden</button>
       </div>
+      <p id="dictationReviewStatus" class="dictation-review-status" role="status" hidden></p>
+      <section id="dictationReviewPanel" class="dictation-review" aria-labelledby="dictationReviewTitle" hidden>
+        <h2 id="dictationReviewTitle">Propuesta de Lucy</h2>
+        <div class="dictation-review-comparison">
+          <div><h3>Original</h3><pre id="dictationReviewOriginal" tabindex="0"></pre></div>
+          <div><h3>Propuesta</h3><pre id="dictationReviewProposed" tabindex="0"></pre></div>
+        </div>
+        <p id="dictationReviewNote" hidden></p>
+        <div class="dictation-editor-tools">
+          <button id="dictationReviewApplyBtn" class="primary compact-btn" type="button">Aplicar propuesta</button>
+          <button id="dictationReviewDiscardBtn" class="compact-btn" type="button">Descartar</button>
+        </div>
+      </section>
       <details id="dictationSessions" class="dictation-sessions">
         <summary>Borradores guardados</summary>
         <div id="dictationSessionsList" class="dictation-sessions-list" aria-live="polite"></div>
