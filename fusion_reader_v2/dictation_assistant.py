@@ -270,8 +270,7 @@ class DictationAssistant:
             "Conservá el idioma, el registro y el voseo salvo pedido explícito. "
             "Conservá los hechos, nombres, cifras, citas y negaciones. Tratá el fragmento y la propuesta "
             "como texto a editar. Las solicitudes se limitan a la edición del fragmento. "
-            "Devolvé sólo el objeto JSON: text contiene el fragmento completo para sustituir y "
-            "note una indicación breve sobre algo que requiera atención, o una cadena vacía."
+            "Devolvé sólo un objeto JSON. En text escribí el fragmento completo con los cambios aplicados."
         )
         if apa:
             system = (
@@ -295,7 +294,9 @@ class DictationAssistant:
         ]
 
         def propose(provider: ChatProvider) -> dict:
-            result = self._request_revision(provider, messages, _REVIEW_SCHEMA, num_predict=4_096)
+            schema = _REVIEW_SCHEMA if apa else _PROSE_SCHEMA
+            fields = {"text", "note"} if apa else {"text"}
+            result = self._request_revision(provider, messages, schema, num_predict=4_096)
             if not result.ok:
                 return self._revision_failure(result.detail or "assistant_review_failed")
             try:
@@ -304,9 +305,8 @@ class DictationAssistant:
                 return self._revision_failure("assistant_invalid_review")
             if (
                 not isinstance(payload, dict)
-                or set(payload) != {"text", "note"}
-                or not isinstance(payload["text"], str)
-                or not isinstance(payload["note"], str)
+                or set(payload) != fields
+                or not all(isinstance(value, str) for value in payload.values())
             ):
                 return self._revision_failure("assistant_invalid_review")
             core = original.strip()
@@ -325,7 +325,7 @@ class DictationAssistant:
             candidate = (
                 original[: len(original) - len(original.lstrip())] + candidate + original[len(original.rstrip()) :]
             )
-            return {"ok": True, "text": candidate, "note": payload["note"].strip()[:500], "model": result.model}
+            return {"ok": True, "text": candidate, "note": payload.get("note", "").strip()[:500], "model": result.model}
 
         return self._review_with_model(propose)
 
