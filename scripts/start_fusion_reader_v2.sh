@@ -195,7 +195,14 @@ start_fusion_gpu_tts() {
 }
 
 start_fusion_cpu_tts() {
-  nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 9>&- &
+  local fusion_python="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}/bin/python"
+  if [[ -z "${DIRECT_CHAT_ALLTALK_PYTHON:-}" && -x "$fusion_python" ]]; then
+    DIRECT_CHAT_ALLTALK_PYTHON="$fusion_python" DIRECT_CHAT_ALLTALK_FORCE_CPU=1 \
+      PYTHONPATH="$ROOT/scripts/gpu_compat${PYTHONPATH:+:$PYTHONPATH}" FUSION_READER_ALLOW_TORCH_PICKLE_LOAD=1 \
+      nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 9>&- &
+  else
+    nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 9>&- &
+  fi
   TTS_CHILD_PID="$!"
 }
 
