@@ -263,7 +263,7 @@ async function checkCapturedEdit(page, sample) {
   if (sample.review) {
     await page.route('**/api/dictation/review', async route => {
       expect(route.request().postDataJSON()).toEqual({
-        text: sample.original, requests: ['lee el texto y mejoralo.'], previous: ''
+        text: sample.original, requests: ['lee el texto y mejoralo.'], previous: '', provider: 'rules'
       });
       await route.fulfill({ json: { ok: true, text: sample.expected, note: '' } });
     });
@@ -343,4 +343,21 @@ test('Lucy proposes a prose review from captured dictation before changing the d
     confirmation: 'Propuesta lista.',
     review: true,
   });
+});
+
+test('keyboard cancellation of a destructive dictation dialog preserves the draft', async ({ page }) => {
+  await page.goto(baseURL);
+  await page.locator('#dictationToggleBtn').click();
+  await page.locator('#dictationEditor').fill('Este borrador debe conservarse.');
+  await page.locator('#dictationClearBtn').click();
+  await expect(page.locator('#pandaDialogCancel')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#pandaDialog')).toBeHidden();
+  await expect(page.locator('#dictationClearBtn')).toBeFocused();
+  await expect(page.locator('#dictationEditor')).toHaveValue('Este borrador debe conservarse.');
+  await page.locator('#dictationClearBtn').click();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#pandaDialogAccept')).toBeFocused();
+  await page.keyboard.press('Space');
+  await expect(page.locator('#dictationEditor')).toHaveValue('');
 });

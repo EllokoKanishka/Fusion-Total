@@ -15,6 +15,7 @@ from .dictation import DictationEdit, DictationInstruction
 from .reader import utf16_offset_to_index
 from .resources import resource_work
 from .transcript_correction import validate_protected_content
+from .turn_provider import provider_for_turn
 
 
 _ALLOWED_KINDS = {
@@ -193,7 +194,7 @@ class DictationAssistant:
         selection_end: int = 0,
     ) -> DictationAssistantResult:
         started = time.perf_counter()
-        selected = self.selected
+        selected = provider_for_turn.get() or self.selected
         if selected == "rules":
             return DictationAssistantResult(
                 False,
@@ -316,9 +317,18 @@ class DictationAssistant:
                 return self._revision_failure("assistant_review_length_changed")
             if apa:
                 # APA may reorder references and change separators, while new numeric data needs a source.
-                added_numbers = Counter(re.findall(r"\d+", candidate)) - Counter(re.findall(r"\d+", core))
-                if added_numbers:
+                if Counter(re.findall(r"\d+", candidate)) != Counter(re.findall(r"\d+", core)):
                     return self._revision_failure("protected_numbers_changed")
+                links = r"(?:https?://[^\s<>]+|\b10\.\d{4,9}/[^\s<>]+)"
+
+                def normalize(value: str) -> set[str]:
+                    return {
+                        re.sub(r"^https?://(?:dx\.)?doi\.org/", "", match.rstrip(".,;)"), flags=re.I)
+                        for match in re.findall(links, value)
+                    }
+
+                if normalize(candidate) != normalize(core):
+                    return self._revision_failure("protected_reference_links_changed")
             else:
                 preserved, detail = validate_protected_content(core, candidate, allow_reordering=True)
                 if not preserved:
@@ -331,7 +341,7 @@ class DictationAssistant:
         return self._review_with_model(propose)
 
     def _review_with_model(self, generate: Callable[[ChatProvider], dict]) -> dict:
-        selected = self.selected
+        selected = provider_for_turn.get() or self.selected
         provider = self.providers.get(selected)
         if provider is None:
             return {

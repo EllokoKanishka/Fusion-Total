@@ -872,9 +872,11 @@ function renderVeilStatus(veilInfo) {
   els.veilSelect.title = item.description || '';
 }
 
+let chatProviderChoice = 'local';
+
 function renderChatProviderStatus(providerInfo) {
   const item = providerInfo && typeof providerInfo === 'object' ? providerInfo : {};
-  const selected = String(item.id || 'local');
+  const selected = chatProviderChoice;
   const available = Array.isArray(item.available) ? item.available : [];
   if (available.length > 0) {
     els.chatProviderSelect.replaceChildren();
@@ -898,9 +900,11 @@ function renderChatProviderStatus(providerInfo) {
 
 async function setChatProvider(providerId) {
   const target = String(providerId || '').trim();
+  chatProviderChoice = target || 'local';
   try {
     const data = await api('/api/chat/provider', { provider: target });
     if (!data.ok) throw new Error(data.error || 'No se pudo cambiar la IA');
+    if (chatProviderChoice !== target) return;
     if (!status) status = {};
     status.chat_provider = data;
     renderChatProviderStatus(data);
@@ -1367,7 +1371,7 @@ async function sendChat() {
   }
   try {
     addChatMessage('system', pendingThoughtLabel());
-    const data = await api('/api/chat', { message, chunk_index: visibleChunkIndex() });
+    const data = await api('/api/chat', { message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice });
     const pending = els.chatLog.querySelector('.chat-msg.system:last-child');
     if (pending && /Pensando|Repensando|Respondiendo/.test(pending.textContent)) {
       pending.remove();
@@ -1452,7 +1456,7 @@ async function sendTypedDialogue(message) {
   const pending = addChatMessage('system', currentReasoningMode() === 'supreme' ? 'Dialogando por voz; Supremo se baja a Pensamiento para no romper latencia...' : 'Dialogando por voz...');
   const startedAt = performance.now();
   try {
-    const data = await api('/api/dialogue/turn', { text: message, chunk_index: visibleChunkIndex() }, { signal: token.controller.signal });
+    const data = await api('/api/dialogue/turn', { text: message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice }, { signal: token.controller.signal });
     if (!currentDialogueTurn(token)) return;
     if (pending && pending.isConnected) {
       pending.remove();
@@ -1894,7 +1898,7 @@ async function sendDialogueAudio(blob, mimeType) {
   const audioMime = mimeType || blob.type || 'audio/webm';
   const turnTrace = dialogue.trace ? { ...dialogue.trace, sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime } : { sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime };
   try {
-    const params = new URLSearchParams({ filename: 'dialogue.wav' });
+    const params = new URLSearchParams({ filename: 'dialogue.wav', provider: chatProviderChoice });
     params.set('audio_size_bytes', String(blob.size || 0));
     params.set('capture_ms', String(Math.round(turnTrace.captureDurationMs || turnTrace.recordedMs || 0)));
     params.set('mic_rms', String(Number(turnTrace.micRms || 0).toFixed(6)));

@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from fusion_reader_v2 import import_document_path
+from fusion_reader_v2.documents import document_conversion
 from fusion_reader_v2.pdf_to_docx import ConversionResult
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.errors import APIError
@@ -149,15 +150,31 @@ def import_job_worker(
     mime: str,
     role: str = "main",
 ) -> None:
+    class Signal:
+        def is_set(self) -> bool:
+            job = get_import_job(context, job_id)
+            if context._closed or not job or job.get("cancelled"):
+                return True
+            serial = job.get("request_generation")
+            return job.get("document_generation") != context.app._document_generation or (
+                serial is not None and serial != context._main_import_generation
+            )
+
+    signal = Signal()
     try:
         token = get_import_job(context, job_id)
         with context.import_publication(token, job_id):
             update_import_job(context, job_id, status="running", stage="starting", message="Preparando conversión...")
-        imported = import_document_path(filename, upload_path, mime=mime, progress=import_progress_for(context, job_id))
+        with document_conversion(signal):
+            imported = import_document_path(
+                filename, upload_path, mime=mime, progress=import_progress_for(context, job_id)
+            )
         with context.import_publication(token, job_id):
             # The nested load uses reentrant app locking; the web ownership
             # lock is already held, so call its implementation in this guard.
             result = _load_imported_document(context, imported, role)
+            if result.get("ok") is False:
+                raise APIError(str(result.get("error") or "import_rejected"), "No pude guardar el documento.", 409)
             update_import_job(
                 context,
                 job_id,
@@ -171,7 +188,7 @@ def import_job_worker(
             )
     except Exception as exc:
         cancelled = isinstance(exc, APIError) and exc.code in {"import_cancelled", "import_superseded"}
-        cancelled = cancelled or bool((get_import_job(context, job_id) or {}).get("cancelled"))
+        cancelled = cancelled or signal.is_set()
         update_import_job(
             context,
             job_id,

@@ -57,14 +57,22 @@ class SessionPersistenceService:
         self.reset_preparation = reset_preparation
         self.build_document_record = build_document_record
 
-    def persist(self, text: str | None = None, source_path: str = "", source_type: str = "") -> None:
+    def persist(
+        self,
+        text: str | None = None,
+        source_path: str = "",
+        source_type: str = "",
+        *,
+        candidate: ReaderSession | None = None,
+        references: dict[str, dict] | None = None,
+    ) -> None:
         if self.store is None:
             return
-        status = self.session.status()
+        status = (candidate if candidate is not None else self.session).status()
         preferences = self.get_preferences()
         current_source_path, current_source_type = self.get_main_source()
-        selected_source_path = str(source_path or current_source_path or "")
-        selected_source_type = str(source_type or current_source_type or "")
+        selected_source_path = source_path if candidate is not None else str(source_path or current_source_path or "")
+        selected_source_type = source_type if candidate is not None else str(source_type or current_source_type or "")
         transient_document = selected_source_type == "quick_text"
         payload = {
             "doc_id": "" if transient_document else str(status.get("doc_id") or ""),
@@ -88,10 +96,10 @@ class SessionPersistenceService:
                     "source_path": str(item.get("source_path") or ""),
                     "source_type": str(item.get("source_type") or ""),
                 }
-                for item in self.references.values()
+                for item in (references if references is not None else self.references).values()
             ],
         }
-        if not transient_document:
+        if not transient_document and payload["doc_id"]:
             if selected_source_path:
                 payload["source_path"] = selected_source_path
             if selected_source_type:
@@ -171,7 +179,7 @@ class SessionPersistenceService:
             self._restore_references(raw, main_doc_id="")
             return
         source_path = str(raw.get("source_path") or "")
-        text = self._source_text(source_path) or str(raw.get("text") or "")
+        text = str(raw.get("text") or "") or self._source_text(source_path)
         if not text.strip():
             return
         self.reset_preparation()

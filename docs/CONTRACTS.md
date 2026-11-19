@@ -76,6 +76,17 @@ Dynamic values are not snapshot identity: timestamps, process IDs, durations,
 UUIDs, temporary paths, and the current Git commit are ignored when comparing
 contract snapshots.
 
+Model selection for browser turns:
+
+- Chat, typed dialogue, audio dialogue and editor assistance pin the requested
+  `provider` for the entire turn. The browser starts a new window without
+  cloud consent and includes its provider selection in every turn.
+- Requests without an explicit provider cannot inherit an OpenAI preference.
+  Cloud reader turns omit the shared chat and dialogue history.
+- External research submits the user's explicit query without document
+  excerpts, notes or laboratory focus. A prohibition on external search
+  takes precedence over a request for sources.
+
 Dictation routes:
 
 - `POST /api/dictation/transcribe`: raw browser audio; query parameters

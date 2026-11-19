@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 from fusion_reader_v2.tts import AudioArtifact, AudioCache
 
 
 def write_wav(path: Path, payload: bytes = b"audio") -> None:
-    path.write_bytes(b"RIFF" + len(payload).to_bytes(4, "little") + b"WAVE" + payload)
+    with wave.open(str(path), "wb") as wav:
+        wav.setparams((1, 1, 8000, 0, "NONE", "not compressed"))
+        wav.writeframes(payload)
 
 
 class AudioCachePolicyTests(unittest.TestCase):
@@ -21,6 +24,7 @@ class AudioCachePolicyTests(unittest.TestCase):
             invalid.write_bytes(b"not-wave")
             result = cache.put("invalid", "voice", "es", AudioArtifact(True, path=invalid, provider="fake"))
             self.assertEqual(result.path, invalid)
+            self.assertFalse(result.ok)
             self.assertIsNone(cache.get("invalid", "voice", "es"))
 
             valid = root / "valid.wav"

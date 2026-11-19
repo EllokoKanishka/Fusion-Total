@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -12,20 +15,25 @@ def library_items(context: WebContext) -> list[dict]:
     if not context.library_root.exists():
         return []
     items: list[dict] = []
+    root = context.library_root.resolve()
     for path in sorted(context.library_root.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in ALLOWED_LIBRARY_SUFFIXES:
             continue
         rel = path.relative_to(context.library_root).as_posix()
         try:
-            text = path.read_text(encoding="utf-8", errors="replace").strip()
-        except Exception:
-            text = ""
+            if not path.resolve().is_relative_to(root):
+                continue
+            with path.open("rb") as handle:
+                text = handle.read(2048).decode("utf-8", errors="replace")
+            size = path.stat().st_size
+        except OSError:
+            continue
         preview = " ".join(text.split())[:170]
         items.append(
             {
                 "id": rel,
                 "title": path.name,
-                "bytes": path.stat().st_size,
+                "bytes": size,
                 "preview": preview,
             }
         )
@@ -62,25 +70,57 @@ def load_imported_document(
 
 def _load_imported_document(context: WebContext, imported, role: str) -> dict:
     context.converted_root.mkdir(parents=True, exist_ok=True)
-    target = context.converted_root / f"{imported.doc_id}.txt"
-    target.write_text(imported.text, encoding="utf-8")
+    digest = hashlib.sha256()
+    for field in (imported.title, imported.source_type, imported.text, getattr(imported, "raw_text", "")):
+        data = field.encode("utf-8")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    doc_id = f"{imported.doc_id[:96]}-{digest.hexdigest()[:24]}"
+    target = context.converted_root / f"{doc_id}.txt"
     raw_target = None
-    if getattr(imported, "raw_text", ""):
-        raw_target = context.converted_root / f"{imported.doc_id}.raw.txt"
-        raw_target.write_text(imported.raw_text, encoding="utf-8")
-    if str(role or "main") == "reference":
-        out = context.app.add_reference_text(
-            imported.doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type
-        )
-    else:
-        out = context.app.load_text(
-            imported.doc_id,
-            imported.title,
-            imported.text,
-            prefetch=False,
-            source_path=str(target),
-            source_type=imported.source_type,
-        )
+    created: list[Path] = []
+
+    def save_if_new(path: Path, text: str) -> None:
+        if not path.exists():
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+                    temporary = Path(handle.name)
+                    handle.write(text)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+                created.append(path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
+    try:
+        save_if_new(target, imported.text)
+        if getattr(imported, "raw_text", ""):
+            raw_target = context.converted_root / f"{doc_id}.raw.txt"
+            save_if_new(raw_target, imported.raw_text)
+        if str(role or "main") == "reference":
+            out = context.app.add_reference_text(
+                doc_id, imported.title, imported.text, source_path=str(target), source_type=imported.source_type
+            )
+        else:
+            out = context.app.load_text(
+                doc_id,
+                imported.title,
+                imported.text,
+                prefetch=False,
+                source_path=str(target),
+                source_type=imported.source_type,
+            )
+        if out.get("ok") is False:
+            for path in created:
+                path.unlink(missing_ok=True)
+            return out
+    except BaseException:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
     out["role"] = "reference" if str(role or "") == "reference" else "main"
     out["source_type"] = imported.source_type
     out["import_detail"] = imported.detail

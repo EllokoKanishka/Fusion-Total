@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import environment_value
+from .turn_provider import provider_for_turn
 
 from .audio_export import (
     AudioExportJob,
@@ -206,7 +207,7 @@ class FusionReaderV2:
             chat_lock=self._dialogue_service.chat_lock,
             looks_like_note_request=self._looks_like_note_request,
         )
-        self._research_service = ResearchService(self.external_research, self._external_research_snapshot)
+        self._research_service = ResearchService(self.external_research)
         self.dialogue_trace_path = (
             (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         )
@@ -510,8 +511,27 @@ class FusionReaderV2:
             return
         try:
             self.dialogue_trace_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.dialogue_trace_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event, ensure_ascii=True) + "\n")
+            categories = {
+                "event",
+                "failed_stage",
+                "requested_mode",
+                "applied_mode",
+                "reasoning_mode",
+                "selected_provider",
+                "chat_provider",
+                "stt_provider",
+                "tts_provider",
+            }
+            metrics = {
+                key: value
+                for key, value in event.items()
+                if isinstance(value, (bool, int, float))
+                or (key in categories and isinstance(value, str) and re.fullmatch(r"[\w.:/-]{1,96}", value))
+            }
+            fd = os.open(self.dialogue_trace_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(json.dumps(metrics, ensure_ascii=True) + "\n")
         except Exception:
             return
 
@@ -681,14 +701,6 @@ class FusionReaderV2:
     def _looks_like_external_research_request(self, text: str) -> bool:
         return self._research_service.is_explicit_request(text)
 
-    def _external_research_snapshot(self) -> dict:
-        snapshot = self.reader_snapshot()
-        with self._chat_lock:
-            snapshot["laboratory_history"] = list(self._chat_history)
-        with self._dialogue_lock:
-            snapshot["dialogue_history"] = list(self._dialogue_history)
-        return snapshot
-
     def _run_external_research(self, message: str) -> ExternalResearchResult:
         return self._research_service.research(message)
 
@@ -818,16 +830,28 @@ class FusionReaderV2:
         source_path: str = "",
         source_type: str = "",
     ) -> dict:
-        self._begin_document_lifecycle()
-        self._laboratory_focus = {}
-        status = self.session.load(Document.from_text(doc_id, title, text))
-        self._main_source_path = str(source_path or "")
-        self._main_source_type = str(source_type or "text")
-        self._reference_documents.pop(str(status.get("doc_id") or ""), None)
-        self._persist_session_state(text=str(text or ""), source_path=source_path, source_type=source_type)
+        document = Document.from_text(doc_id, title, text)
+        references = {key: value for key, value in self._reference_documents.items() if key != document.doc_id}
+        self._publish_document(
+            document, str(text or ""), str(source_path or ""), str(source_type or "text"), references
+        )
         if prefetch:
             self.prefetch_current()
         return self.status()
+
+    def _publish_document(
+        self, document: Document, text: str, source_path: str, source_type: str, references: dict[str, dict]
+    ) -> None:
+        candidate = ReaderSession()
+        candidate.load(document)
+        self._persistence_service.persist(text, source_path, source_type, candidate=candidate, references=references)
+        self._begin_document_lifecycle()
+        self._laboratory_focus = {}
+        self.session.load(document)
+        self._main_source_path = source_path
+        self._main_source_type = source_type
+        self._reference_documents.clear()
+        self._reference_documents.update(references)
 
     @_document_transition
     def load_quick_text(
@@ -874,6 +898,7 @@ class FusionReaderV2:
         text = p.read_text(encoding="utf-8")
         return self.load_text(p.stem, p.name, text, prefetch=prefetch, source_path=str(p), source_type="file")
 
+    @_document_transition
     def add_reference_text(
         self,
         doc_id: str,
@@ -889,8 +914,9 @@ class FusionReaderV2:
         record = self._document_record(
             clean_doc_id or title, title, text, source_path=source_path, source_type=source_type
         )
+        references = {**self._reference_documents, record["doc_id"]: record}
+        self._persistence_service.persist(references=references)
         self._reference_documents[record["doc_id"]] = record
-        self._persist_session_state()
         return {
             **self.status(),
             "reference_added": self._public_document_record(record),
@@ -905,13 +931,17 @@ class FusionReaderV2:
     def list_reference_documents(self) -> dict:
         return {"ok": True, "items": self._reference_document_items()}
 
+    @_document_transition
     def remove_reference_document(self, doc_id: str) -> dict:
-        removed = self._reference_documents.pop(str(doc_id or ""), None)
+        key = str(doc_id or "")
+        removed = self._reference_documents.get(key)
         if not removed:
             return {"ok": False, "error": "reference_not_found"}
+        references = {item: value for item, value in self._reference_documents.items() if item != key}
+        self._persistence_service.persist(references=references)
+        del self._reference_documents[key]
         if str(self._laboratory_focus.get("doc_id") or "") == str(removed.get("doc_id") or ""):
             self._laboratory_focus = {}
-        self._persist_session_state()
         return {
             "ok": True,
             "removed": True,
@@ -922,25 +952,21 @@ class FusionReaderV2:
     @_document_transition
     def promote_reference_document(self, doc_id: str, prefetch: bool = True) -> dict:
         selected_id = str(doc_id or "")
-        record = self._reference_documents.pop(selected_id, None)
+        record = self._reference_documents.get(selected_id)
         if not record:
             return {"ok": False, "error": "reference_not_found"}
         previous_main = self._main_document_record()
-        self._begin_document_lifecycle()
-        status = self.session.load(
-            Document.from_text(
-                str(record.get("doc_id") or ""), str(record.get("title") or ""), str(record.get("text") or "")
-            )
-        )
-        self._main_source_path = str(record.get("source_path") or "")
-        self._main_source_type = str(record.get("source_type") or "text")
-        if previous_main and previous_main["doc_id"] != status.get("doc_id"):
-            self._reference_documents[previous_main["doc_id"]] = previous_main
-        self._laboratory_focus = {}
-        self._persist_session_state(
-            text=str(record.get("text") or ""),
-            source_path=self._main_source_path,
-            source_type=self._main_source_type,
+        text = str(record.get("text") or "")
+        document = Document.from_text(selected_id, str(record.get("title") or ""), text)
+        references = {key: value for key, value in self._reference_documents.items() if key != selected_id}
+        if (
+            previous_main
+            and previous_main.get("source_type") != "quick_text"
+            and previous_main["doc_id"] != selected_id
+        ):
+            references[previous_main["doc_id"]] = previous_main
+        self._publish_document(
+            document, text, str(record.get("source_path") or ""), str(record.get("source_type") or "text"), references
         )
         if prefetch:
             self.prefetch_current()
@@ -2128,7 +2154,10 @@ class FusionReaderV2:
             return navigation
         snapshot = self.reader_snapshot()
         with self._chat_lock:
-            history = list(self._chat_history)
+            history = [] if provider_for_turn.get() == "openai" else list(self._chat_history)
+        if provider_for_turn.get() == "openai":
+            snapshot.pop("laboratory_history", None)
+            snapshot.pop("dialogue_history", None)
         selected_model = model
         if not selected_model and self.profile == "bohemia":
             selected_model = environment_value("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
@@ -2948,10 +2977,15 @@ class FusionReaderV2:
                 )
                 return out
         snapshot = self.reader_snapshot()
-        with self._chat_lock:
-            snapshot["laboratory_history"] = list(self._chat_history)
-        with self._dialogue_lock:
-            history = list(self._dialogue_history)
+        if provider_for_turn.get() == "openai":
+            snapshot.pop("laboratory_history", None)
+            snapshot.pop("dialogue_history", None)
+            history = []
+        else:
+            with self._chat_lock:
+                snapshot["laboratory_history"] = list(self._chat_history)
+            with self._dialogue_lock:
+                history = list(self._dialogue_history)
         chat_started = time.perf_counter()
         selected_model = model
         if not selected_model and self.profile == "bohemia":
@@ -3445,7 +3479,8 @@ class FusionReaderV2:
         return self._notes_service.is_generic_pointer(text)
 
     def _persist_session_state(self, text: str | None = None, source_path: str = "", source_type: str = "") -> None:
-        self._persistence_service.persist(text, source_path, source_type)
+        with self._document_lock:
+            self._persistence_service.persist(text, source_path, source_type)
 
     def _session_preferences(self) -> SessionPreferences:
         return SessionPreferences(

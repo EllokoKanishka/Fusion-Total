@@ -28,7 +28,8 @@ wait_for_url() {
 if ! wait_for_url "${URL}health/live" 1; then
   echo "Iniciando servidor de Fusion Reader v2 en $URL..." >>"$LOG_FILE"
 
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user show >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1 &&
+     [[ "$(systemctl --user show pandafusion.service --property=LoadState --value 2>/dev/null)" == "loaded" ]]; then
     echo "Usando servicio systemd (pandafusion.service)..." >>"$LOG_FILE"
     if ! systemctl --user start pandafusion.service >>"$LOG_FILE" 2>&1; then
       echo "ERROR: Falló systemctl --user start pandafusion.service." >>"$LOG_FILE"

@@ -594,6 +594,7 @@ export function createDictationController({
   let saveTimer = 0;
   let manualTimer = 0;
   let assistantInstallTimer = 0;
+  let assistantChoice = '';
   let wakeExpiryTimer = 0;
   let manualBaseline = null;
   let stream = null;
@@ -716,7 +717,10 @@ export function createDictationController({
   function renderAssistantStatus(data) {
     const available = Array.isArray(data && data.available) ? data.available : [];
     const select = elements.dictationAssistantSelect;
-    const previous = String(data && (data.selected || data.id) || select.value || 'rules');
+    if (!assistantChoice) {
+      const saved = String(data?.selected || data?.id || 'rules');
+      assistantChoice = saved === 'openai' ? 'rules' : saved;
+    }
     select.innerHTML = '';
     for (const item of available) {
       const option = documentRoot.createElement('option');
@@ -731,7 +735,7 @@ export function createDictationController({
       option.textContent = 'Reglas instantáneas';
       select.appendChild(option);
     }
-    select.value = previous;
+    select.value = assistantChoice;
     if (!select.value) select.value = 'rules';
     const selected = available.find(item => String(item.id || '') === select.value) || {};
     const ready = data && typeof data.ready === 'boolean' ? data.ready : true;
@@ -767,8 +771,10 @@ export function createDictationController({
 
   async function changeAssistant() {
     const provider = String(elements.dictationAssistantSelect.value || 'rules');
+    assistantChoice = provider;
     try {
       const data = await api('/api/dictation/assistant', { provider });
+      if (assistantChoice !== provider) return;
       renderAssistantStatus(data);
       const selected = (data.available || []).find(item => String(item.id || '') === data.selected) || {};
       addActivity(`Asistente: ${selected.label || provider}${selected.model ? ` (${selected.model})` : ''}.`);
@@ -921,15 +927,34 @@ export function createDictationController({
   function persistNow() {
     windowRef.clearTimeout(saveTimer);
     saveTimer = 0;
+    if (!dirty) return true;
     try {
-      const current = snapshotSession();
-      sessionStore.activeId = current.id;
-      sessionStore.sessions = [current, ...sessionStore.sessions.filter(item => item.id !== current.id)]
-        .slice(0, MAX_SAVED_SESSIONS);
       if (storageReadFailed || !storage) throw new Error('storage_unavailable');
-      storage.setItem(STORAGE_KEY, JSON.stringify(sessionStore));
+      const current = snapshotSession();
+      const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+      if (saved.schemaVersion != null && (Number(saved.schemaVersion) !== SESSION_SCHEMA_VERSION || !Array.isArray(saved.sessions))) {
+        storageReadFailed = true;
+        throw new Error('unsupported_draft_schema');
+      }
+      const latest = Array.isArray(saved.sessions) ? saved.sessions : sessionStore.sessions;
+      const existing = latest.find(item => item?.id === current.id);
+      const baseline = activeSession();
+      const sameDraft = (a, b) => a?.text === b?.text && a?.title === b?.title && a?.voice === b?.voice;
+      const conflict = existing && !sameDraft(existing, baseline) && !sameDraft(existing, current);
+      if (conflict) {
+        current.id = newSessionId();
+        current.title += ' (copia de esta ventana)';
+      }
+      const next = {
+        schemaVersion: SESSION_SCHEMA_VERSION,
+        activeId: current.id,
+        sessions: [current, ...latest.filter(item => item?.id && item.id !== current.id)].slice(0, MAX_SAVED_SESSIONS)
+      };
+      storage.setItem(STORAGE_KEY, JSON.stringify(next));
+      sessionStore = next;
+      if (conflict) elements.dictationTitleInput.value = current.title;
       dirty = false;
-      saveStatus('saved', 'Guardado en este navegador.');
+      saveStatus('saved', conflict ? 'Otra ventana cambió el borrador. Guardé esta versión como una copia.' : 'Guardado en este navegador.');
     } catch (_) {
       dirty = true;
       saveStatus('error', storageReadFailed
@@ -959,6 +984,8 @@ export function createDictationController({
             activeId: String(saved.activeId || ''),
             sessions: saved.sessions.slice(0, MAX_SAVED_SESSIONS).filter(item => item && typeof item === 'object')
           };
+        } else if (saved.schemaVersion != null) {
+          storageReadFailed = true;
         } else if (saved.text || saved.title) {
           sessionStore = {
             schemaVersion: SESSION_SCHEMA_VERSION,
@@ -996,7 +1023,17 @@ export function createDictationController({
     if (id === sessionStore.activeId) return;
     flushManualHistory();
     if (!persistNow()) return;
-    const next = sessionStore.sessions.find(item => item.id === id);
+    let next = sessionStore.sessions.find(item => item.id === id);
+    try {
+      const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+      if (Number(saved.schemaVersion) === SESSION_SCHEMA_VERSION && Array.isArray(saved.sessions)) {
+        const fresh = saved.sessions.find(item => item?.id === id);
+        if (fresh) {
+          sessionStore.sessions = saved.sessions;
+          next = fresh;
+        }
+      }
+    } catch (_) { /* Keep the in-memory draft available. */ }
     if (!next) return;
     stopListening();
     stopSpeech();
@@ -1013,7 +1050,7 @@ export function createDictationController({
       elements.dictationVoiceSelect.value = next.voice;
       elements.dictationVoiceSelect.dispatchEvent(new windowRef.Event('change'));
     }
-    persistNow();
+    saveStatus('saved', 'Borrador disponible en este navegador.');
     editor.focus();
     addActivity(`Borrador recuperado: ${next.title || 'sin título'}.`);
   }
@@ -1039,6 +1076,7 @@ export function createDictationController({
     elements.dictationTitleInput.value = 'Dictado sin título';
     undoStack.length = 0;
     redoStack.length = 0;
+    dirty = true;
     persistNow();
     editor.focus();
     addActivity('Borrador nuevo listo.');
@@ -1310,7 +1348,8 @@ export function createDictationController({
     reviewStatus('Preparando propuesta…');
     try {
       const data = await requestWithDeadline(signal => api('/api/dictation/review', {
-        text: original, requests, previous: refining?.text || ''
+        text: original, requests, previous: refining?.text || '',
+        provider: elements.dictationAssistantSelect.value || 'rules'
       }, { signal }));
       if (discardStale(token)) {
         if (ownsRequest(token)) reviewStatus('Cambió el borrador o la selección. Pedí la revisión otra vez.');
@@ -1342,7 +1381,9 @@ export function createDictationController({
         : prior
           ? `Orden que estaba pendiente: ${prior.command}\nLucy preguntó: ${prior.question}\nEl usuario aclaró: ${transcript}`
           : transcript;
-      const data = await requestWithDeadline(signal => api('/api/dictation/assist', { text, ...context }, { signal }));
+      const data = await requestWithDeadline(signal => api('/api/dictation/assist', {
+        text, ...context, provider: elements.dictationAssistantSelect.value || 'rules'
+      }, { signal }));
       if (discardStale(token)) return;
       const model = data.assistant_model || data.assistant_provider || 'asistente';
       addActivity(

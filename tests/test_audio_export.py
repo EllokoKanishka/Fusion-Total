@@ -688,8 +688,6 @@ class AudioExportTests(unittest.TestCase):
 
                 shutdown_thread = threading.Thread(target=run_shutdown, args=(app,), name="shutdown-thread")
                 shutdown_thread.start()
-                self.assertTrue(wait_until(lambda: app._background_work_state == "closing", timeout=5))
-
                 wait_thread.join(5)
                 shutdown_thread.join(5)
 

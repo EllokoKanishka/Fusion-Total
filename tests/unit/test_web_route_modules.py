@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from fusion_reader_v2.dictation_assistant import DictationAssistant
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.audio import handle_audio_get, handle_audio_post
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
@@ -46,6 +47,8 @@ class Responder:
 
 
 class App:
+    dictation_assistant = DictationAssistant()
+
     def get_voice_catalog(self) -> dict:
         return {"ok": True, "voices": ["voice.wav"]}
 

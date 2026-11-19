@@ -11,6 +11,8 @@ import shutil
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -19,7 +21,20 @@ from xml.etree import ElementTree
 from PIL import Image, ImageFilter, ImageOps
 
 from .config import environment_value
-from .owned_subprocess import run_owned
+from .owned_subprocess import CancelSignal, OwnedProcessError, run_owned
+
+
+_conversion_cancel: ContextVar[CancelSignal | None] = ContextVar("document_conversion_cancel", default=None)
+
+
+@contextmanager
+def document_conversion(cancel_event: CancelSignal):
+    token = _conversion_cancel.set(cancel_event)
+    try:
+        yield
+    finally:
+        _conversion_cancel.reset(token)
+
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".text", ".csv", ".log"}
 HTML_SUFFIXES = {".html", ".htm"}
@@ -452,11 +467,10 @@ def docx_to_text(data: bytes, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS)
     xml = _safe_archive_xml(data, "word/document.xml", limits)
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
-    for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-        parts = [
-            node.text or ""
-            for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
-        ]
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    separators = {f"{ns}tab": "\t", f"{ns}br": "\n", f"{ns}cr": "\n"}
+    for paragraph in root.iter(f"{ns}p"):
+        parts = [item.text or "" if item.tag == f"{ns}t" else separators.get(item.tag, "") for item in paragraph.iter()]
         line = "".join(parts).strip()
         if line:
             lines.append(line)
@@ -468,9 +482,26 @@ def odt_to_text(data: bytes, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS) 
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     text_ns = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+    remaining_spaces = limits.max_text_chars
+
+    def content(element) -> str:
+        nonlocal remaining_spaces
+        if element.tag == f"{text_ns}s":
+            count = element.get(f"{text_ns}c", "1")
+            if not count.isdigit() or len(count) > 8 or int(count) > remaining_spaces:
+                raise ValueError("document_text_too_large")
+            size = int(count)
+            remaining_spaces -= size
+            return " " * size
+        if element.tag == f"{text_ns}tab":
+            return "\t"
+        if element.tag == f"{text_ns}line-break":
+            return "\n"
+        return (element.text or "") + "".join(content(child) + (child.tail or "") for child in element)
+
     for node in root.iter():
         if node.tag in {f"{text_ns}p", f"{text_ns}h"}:
-            line = "".join(node.itertext()).strip()
+            line = content(node).strip()
             if line:
                 lines.append(line)
     return _bounded_document_text(lines, limits)
@@ -484,7 +515,11 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
     with tempfile.TemporaryDirectory(prefix="fusion_pdf_text_") as tmp:
         out = Path(tmp) / "document.txt"
         result = run_owned(
-            [tool, "-layout", "-enc", "UTF-8", str(path), str(out)], capture_output=True, text=True, timeout=180
+            [tool, "-layout", "-enc", "UTF-8", str(path), str(out)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            cancel_event=_conversion_cancel.get(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "pdftotext_failed").strip()
@@ -493,6 +528,35 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
     raw_marked = mark_pdf_pages(extracted, clean=False)
     marked = clean_pdf_text(raw_marked)
     if meaningful_chars(marked) >= 40:
+        pages = extracted.split("\f")
+        if len(pages) > 1 and pages[-1] == "":
+            pages.pop()
+        missing = [index for index, page in enumerate(pages, 1) if meaningful_chars(page) < 40]
+        if missing:
+            try:
+                ocr = ocr_pdf_to_text(path, progress=progress, page_numbers=missing)
+            except (ValueError, OSError, TimeoutError):
+                ocr = ""
+            found = {
+                int(match[1]): match[2].strip()
+                for match in re.finditer(r"(?ms)^\[Pagina (\d+)\]\n(.*?)(?=^\[Pagina \d+\]\n|\Z)", ocr)
+            }
+            used_ocr = False
+            for page in missing:
+                recognized = found.get(page, "")
+                if meaningful_chars(recognized) > meaningful_chars(pages[page - 1]):
+                    pages[page - 1] = recognized
+                    used_ocr = True
+            unresolved = [str(page) for page in missing if not meaningful_chars(pages[page - 1])]
+            detail = (
+                "PDF híbrido: extracción por página con OCR"
+                if used_ocr
+                else "PDF convertido con pdftotext y marcas de pagina"
+            )
+            if unresolved:
+                detail += f". Sin texto legible en las páginas {', '.join(unresolved)}"
+            raw_marked = mark_pdf_pages("\f".join(pages), clean=False)
+            return clean_pdf_text(raw_marked), detail, raw_marked
         report_progress(progress, "converted", 1, 1, "PDF con texto interno listo.")
         return marked, "pdf convertido con pdftotext y marcas de pagina", raw_marked
     report_progress(progress, "ocr_start", 0, 0, "PDF escaneado detectado. Iniciando OCR...")
@@ -687,19 +751,24 @@ def pdf_page_count(path: Path) -> int:
     tool = shutil.which("pdfinfo")
     if not tool:
         return 0
-    result = run_owned([tool, str(path)], capture_output=True, text=True, timeout=30)
+    result = run_owned(
+        [tool, str(path)], capture_output=True, text=True, timeout=30, cancel_event=_conversion_cancel.get()
+    )
     if result.returncode != 0:
         return 0
     match = re.search(r"^Pages:\s+(\d+)", result.stdout, flags=re.MULTILINE)
     return int(match.group(1)) if match else 0
 
 
-def ocr_pdf_to_text(path: Path, progress: ProgressCallback | None = None) -> str:
+def ocr_pdf_to_text(
+    path: Path, progress: ProgressCallback | None = None, *, page_numbers: list[int] | None = None
+) -> str:
     pdftoppm = shutil.which("pdftoppm")
     tesseract = shutil.which("tesseract")
     if not pdftoppm or not tesseract:
         raise ValueError("ocr_tools_not_found")
-    pages = pdf_page_count(path)
+    selected = page_numbers if page_numbers is not None else list(range(1, pdf_page_count(path) + 1))
+    pages = len(selected)
     if pages <= 0:
         raise ValueError("pdf_page_count_not_found")
     output: list[str] = []
@@ -708,21 +777,26 @@ def ocr_pdf_to_text(path: Path, progress: ProgressCallback | None = None) -> str
     worker_count = min(OCR_WORKERS, pages)
     if worker_count <= 1:
         page_items = []
-        for page in range(1, pages + 1):
+        for page in selected:
             item = ocr_pdf_page_to_text(path, page, pdftoppm, tesseract)
             page_items.append(item)
             completed += 1
             report_progress(progress, "ocr", completed, pages, f"OCR página {completed} de {pages}.")
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="fusion-reader-ocr") as executor:
-            futures = [
-                executor.submit(ocr_pdf_page_to_text, path, page, pdftoppm, tesseract) for page in range(1, pages + 1)
-            ]
             page_items = []
-            for future in as_completed(futures):
-                page_items.append(future.result())
-                completed += 1
-                report_progress(progress, "ocr", completed, pages, f"OCR página {completed} de {pages}.")
+            for start in range(0, pages, worker_count):
+                signal = _conversion_cancel.get()
+                if signal is not None and signal.is_set():
+                    raise OwnedProcessError("owned_process_cancelled")
+                futures = [
+                    executor.submit(copy_context().run, ocr_pdf_page_to_text, path, page, pdftoppm, tesseract)
+                    for page in selected[start : start + worker_count]
+                ]
+                for future in as_completed(futures):
+                    page_items.append(future.result())
+                    completed += 1
+                    report_progress(progress, "ocr", completed, pages, f"OCR página {completed} de {pages}.")
             page_items.sort(key=lambda item: item[0])
     for page, page_text in page_items:
         if page_text:
@@ -739,6 +813,7 @@ def ocr_pdf_page_to_text(path: Path, page: int, pdftoppm: str, tesseract: str) -
             capture_output=True,
             text=True,
             timeout=160,
+            cancel_event=_conversion_cancel.get(),
         )
         if render.returncode != 0:
             raise ValueError((render.stderr or render.stdout or "pdftoppm_failed").strip())
@@ -834,6 +909,7 @@ def run_tesseract_plain(tesseract: str, image_path: Path, *, psm: int = 6) -> st
         capture_output=True,
         text=True,
         timeout=180,
+        cancel_event=_conversion_cancel.get(),
     )
     if result.returncode != 0:
         raise ValueError((result.stderr or result.stdout or "tesseract_failed").strip())
@@ -1144,10 +1220,20 @@ def office_to_text(filename: str, data: bytes) -> str:
         src = root / f"document{suffix}"
         src.write_bytes(data)
         result = run_owned(
-            [tool, "--headless", "--convert-to", "txt:Text", "--outdir", str(root), str(src)],
+            [
+                tool,
+                f"-env:UserInstallation={(root / 'profile').as_uri()}",
+                "--headless",
+                "--convert-to",
+                "txt:Text",
+                "--outdir",
+                str(root),
+                str(src),
+            ],
             capture_output=True,
             text=True,
             timeout=180,
+            cancel_event=_conversion_cancel.get(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "libreoffice_convert_failed").strip()

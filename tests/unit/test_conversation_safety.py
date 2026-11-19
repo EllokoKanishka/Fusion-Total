@@ -91,7 +91,7 @@ class ConversationSafetyTests(unittest.TestCase):
                     self.assertEqual(bridge.calls, [])
 
     def test_positive_search_requests_remain_explicit(self):
-        service = ResearchService(NullExternalResearchBridge(), lambda: {})
+        service = ResearchService(NullExternalResearchBridge())
         for text in (
             "buscá en internet sobre Kant",
             "Por favor, buscá fuentes sobre Kant",

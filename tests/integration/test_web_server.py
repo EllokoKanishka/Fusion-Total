@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
+from fusion_reader_v2.conversation import SelectableChatProvider
 from fusion_reader_v2.dialogue import NullSTTProvider
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
@@ -28,6 +29,72 @@ from tests.helpers import SyntheticWavTTSProvider, managed_test_app
 
 
 class WebServerIntegrationTests(unittest.TestCase):
+    def test_turn_provider_is_pinned_to_the_request_and_legacy_requests_stay_local(self) -> None:
+        local = NullChatProvider('{"text":"Texto mejorado"}')
+        cloud = NullChatProvider('{"text":"Texto en la nube"}')
+        assistant = DictationAssistant({"local": local, "openai": cloud}, selected="openai")
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), dictation_assistant=assistant)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            app.conversation.provider = SelectableChatProvider({"local": local, "openai": cloud}, "openai")
+            body = {"text": "Texto original", "requests": ["Mejorá el texto"]}
+            status, result = self._request(base, "/api/dictation/review", {**body, "provider": "local"})
+            self.assertEqual((status, result["text"]), (200, "Texto mejorado"))
+            with self.assertRaises(urllib.error.HTTPError):
+                self._request(base, "/api/dictation/review", body)
+            self.assertEqual(cloud.calls, [])
+            self._request(base, "/api/chat", {"message": "Una pregunta privada de prueba."})
+            self.assertEqual(cloud.calls, [])
+            self._request(base, "/api/chat", {"message": "Una pregunta distinta.", "provider": "openai"})
+            self.assertTrue(cloud.calls)
+            self.assertNotIn("Una pregunta privada de prueba.", str(cloud.calls))
+            self.assertEqual(assistant.selected, "openai")
+
+    def test_import_homonyms_restore_and_a_failed_upload_preserves_the_active_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+
+            def upload(text: str, role: str = "main") -> dict:
+                _, result = self._request(
+                    base,
+                    "/api/import",
+                    {"filename": "mismo.txt", "role": role, "data_b64": base64.b64encode(text.encode()).decode()},
+                )
+                return result
+
+            first = upload("Texto principal de la primera copia.")
+            second = upload("Texto alternativo de la segunda copia.", "reference")
+            self.assertNotEqual(first["doc_id"], second["reference_added"]["doc_id"])
+            self.assertEqual(Path(first["converted_text"]).read_text(), "Texto principal de la primera copia.")
+            app._session_store.max_bytes = 4096
+            converted = set(server.context.converted_root.iterdir())
+            with self.assertRaises(urllib.error.HTTPError):
+                upload("Palabras que superan el presupuesto durable. " * 300)
+            self.assertEqual(set(server.context.converted_root.iterdir()), converted)
+            self.assertEqual(app.session.status()["doc_id"], first["doc_id"])
+            with managed_test_app(root=Path(tmp) / "app") as restored:
+                self.assertEqual(restored.session.status()["doc_id"], first["doc_id"])
+                self.assertEqual(restored.session.document.text, "Texto principal de la primera copia.")
+
+    def test_quick_text_and_dialogue_content_do_not_reach_the_saved_session_or_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            self._request(
+                base, "/api/load", {"doc_id": "referencia", "text": "Referencia de prueba", "role": "reference"}
+            )
+            self._request(base, "/api/quick-text", {"text": "Marca temporal reservada para la prueba"})
+            self._request(base, "/api/reference/promote", {"doc_id": "referencia"})
+            self.assertNotIn("Marca temporal reservada", app.session_state_path.read_text())
+            self._request(base, "/api/dialogue/turn", {"text": "¿Qué significa esta frase privada de prueba?"})
+            trace = app.dialogue_trace_path
+            self.assertNotIn("frase privada de prueba", trace.read_text())
+            self.assertEqual(trace.stat().st_mode & 0o777, 0o600)
+
     def _settings(self, root: Path):
         settings = create_settings(
             repository_root=Path.cwd(),

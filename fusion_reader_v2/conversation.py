@@ -19,6 +19,7 @@ from unicodedata import normalize
 
 from .config import environment_copy, environment_has, environment_value, resolve_openclaw_command
 from .owned_subprocess import CancelSignal, run_owned
+from .turn_provider import provider_for_turn
 
 
 @dataclass(frozen=True)
@@ -698,7 +699,11 @@ class SelectableChatProvider(ChatProvider):
 
     @property
     def active(self) -> ChatProvider:
-        return self.providers[self.selected]
+        return self.providers[self.effective_provider]
+
+    @property
+    def effective_provider(self) -> str:
+        return provider_for_turn.get() or self.selected
 
     @property
     def default_model(self) -> str:
@@ -738,7 +743,7 @@ class SelectableChatProvider(ChatProvider):
         self, messages: list[dict], model: str = "", think: bool | None = None, num_predict: int | None = None
     ) -> ChatResult:
         selected_model = str(model or "").strip()
-        if self.selected == "openai" and selected_model and not selected_model.startswith("openai/"):
+        if self.effective_provider == "openai" and selected_model and not selected_model.startswith("openai/"):
             selected_model = ""
         return self.active.chat(messages, model=selected_model, think=think, num_predict=num_predict)
 

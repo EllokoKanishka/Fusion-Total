@@ -194,6 +194,8 @@ def probe_media(path: Path, *, timeout_seconds: float = 30.0, cancel_event=None)
             "format=duration,format_name:stream=codec_type,codec_name",
             "-of",
             "json",
+            "-protocol_whitelist",
+            "file,pipe",
             str(path),
         ],
         check=False,
@@ -235,6 +237,8 @@ def normalize_media_audio(source: Path, target: Path, *, timeout_seconds: float,
             "-hide_banner",
             "-loglevel",
             "error",
+            "-protocol_whitelist",
+            "file,pipe",
             "-i",
             str(source),
             "-vn",
@@ -329,7 +333,7 @@ def write_transcript_pdf(
     paragraphs: list[tuple[float, str]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    regular, bold = _register_pdf_fonts()
+    regular, bold = register_pdf_fonts()
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "FusionTitle",
@@ -390,7 +394,7 @@ def write_transcript_pdf(
     document.build(story)
 
 
-def _register_pdf_fonts() -> tuple[str, str]:
+def register_pdf_fonts() -> tuple[str, str]:
     candidates = [
         (
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),

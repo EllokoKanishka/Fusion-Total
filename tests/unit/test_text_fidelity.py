@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -10,7 +11,8 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from contextlib import nullcontext
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.pdfgen.canvas import Canvas
 
 from fusion_reader_v2 import documents
 from fusion_reader_v2.md_to_docx import repair_glued_words_v4
@@ -22,6 +24,33 @@ from tests.helpers import managed_test_app
 
 
 class TextFidelityTests(unittest.TestCase):
+    @unittest.skipUnless(
+        all(shutil.which(tool) for tool in ("pdftotext", "pdftoppm", "tesseract")),
+        "requires local PDF and OCR tools",
+    )
+    def test_hybrid_pdf_keeps_scanned_pages_and_reports_empty_ones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raster = Image.new("RGB", (1000, 250), "white")
+            ImageDraw.Draw(raster).text(
+                (35, 70), "SEGUNDA PAGINA ESCANEADA", fill="black", font=ImageFont.load_default(size=42)
+            )
+            raster.save(root / "part.png")
+            document = root / "mixed.pdf"
+            pdf = Canvas(str(document))
+            pdf.drawString(40, 760, "Primera pagina del ejemplo con contenido digital suficiente para conservar.")
+            pdf.showPage()
+            pdf.drawImage(str(root / "part.png"), 30, 620, width=530, height=130)
+            pdf.showPage()
+            pdf.showPage()
+            pdf.save()
+            text, detail, raw = documents.pdf_to_text(document.name, document)
+            self.assertIn("Primera pagina", text)
+            self.assertIn("[Pagina 2]", text)
+            self.assertIn("SEGUNDA PAGINA", text.upper())
+            self.assertIn("páginas 3", detail)
+            self.assertIn("[Pagina 2]", raw)
+
     def test_valid_docx_directory_entries_are_not_rejected(self):
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w") as archive:

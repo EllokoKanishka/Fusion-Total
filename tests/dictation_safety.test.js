@@ -193,6 +193,35 @@ test('storage read failure is visible and never overwrites unreadable stored dat
   assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
 });
 
+test('stale windows do not overwrite newer drafts and edited conflicts retain both copies', async () => {
+  const writer = await fixture();
+  const stale = await fixture({ storage: writer.memory });
+  const conflicting = await fixture({ storage: writer.memory });
+  await writer.edit('Versión más nueva');
+  await writer.flushSave();
+  stale.controller.close();
+  assert.equal(JSON.parse([...writer.values.values()][0]).sessions[0].text, 'Versión más nueva');
+  await conflicting.edit('Otra edición');
+  await conflicting.flushSave();
+  const saved = JSON.parse([...writer.values.values()][0]);
+  assert.equal(saved.sessions.find(item => item.id === 'A').text, 'Versión más nueva');
+  assert.equal(saved.sessions.find(item => item.id === saved.activeId).text, 'Otra edición');
+  assert.match(conflicting.elements.dictationSaveStatus.textContent, /copia/);
+  for (const view of [writer, stale, conflicting]) view.controller.dispose();
+});
+
+test('a newer draft schema survives edits and closure in an older window', async () => {
+  const future = JSON.stringify({ schemaVersion: 97, text: 'Versión futura' });
+  let writes = 0;
+  const f = await fixture({ storage: { getItem: () => future, setItem() { writes++; } } });
+  await f.edit('Escritura de esta ventana');
+  await f.flushSave();
+  f.controller.close();
+  assert.equal(writes, 0);
+  assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
+  f.controller.dispose();
+});
+
 test('successful retry clears the save warning only after data is persisted', async () => {
   let fail = true; let saved = '';
   const f = await fixture({ storage: { getItem: () => null, setItem(_key, value) { if (fail) throw new Error('quota'); saved = value; } } });
@@ -952,8 +981,8 @@ test('review refines a proposal and applies only the original selection in one u
   f.elements.dictationEditor.selectionStart = f.elements.dictationEditor.selectionEnd = 0;
   await f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, más breve', true);
   assert.deepEqual(requests, [
-    { text: 'original', requests: ['mejorá la prosa de la selección'], previous: '' },
-    { text: 'original', requests: ['mejorá la prosa de la selección', 'más breve'], previous: 'revisado' }
+    { text: 'original', requests: ['mejorá la prosa de la selección'], previous: '', provider: 'rules' },
+    { text: 'original', requests: ['mejorá la prosa de la selección', 'más breve'], previous: 'revisado', provider: 'rules' }
   ]);
   await f.controller.applyInstruction({ kind: 'noop' }, 'Lucy, aplicalo', true);
   assert.equal(f.elements.dictationEditor.value, 'Texto nuevo');

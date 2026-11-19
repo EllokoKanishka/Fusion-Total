@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -11,7 +12,9 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from fusion_reader_v2 import documents
 from fusion_reader_v2.documents import ImportedDocument
+from fusion_reader_v2.owned_subprocess import run_owned
 from fusion_reader_v2.pdf_to_docx import JobStatus
 from fusion_reader_v2.web import jobs, server as web_server
 from fusion_reader_v2.web.routes import reading
@@ -81,8 +84,9 @@ class ImportLifecycleTests(unittest.TestCase):
         release.set()
         finished = self.wait_terminal(job["job_id"])
         self.assertEqual(finished["status"], "cancelled")
+        self.assertIsNone(finished["result"])
         self.assertEqual(self.server.context.app.session.document.doc_id, "new")
-        self.assertFalse((self.server.context.converted_root / "old.txt").exists())
+        self.assertEqual(list(self.server.context.converted_root.glob("old-*.txt")), [])
         self.assert_no_uploads()
 
     def test_quick_text_clear_and_promotion_invalidate_slow_import(self):
@@ -118,8 +122,10 @@ class ImportLifecycleTests(unittest.TestCase):
         uploads = list(self.server.context.upload_root.glob("*"))
         self.assertEqual(len(uploads), 1)
         jobs.import_job_worker(self.server.context, newer["job_id"], "newer.txt", uploads[0], "text/plain")
-        self.assertEqual(self.wait_terminal(newer["job_id"])["status"], "done")
-        self.assertEqual(self.server.context.app.session.document.doc_id, "newer")
+        result = self.wait_terminal(newer["job_id"])
+        self.assertEqual(result["status"], "done")
+        self.assertTrue(result["result"]["doc_id"].startswith("newer-"))
+        self.assertEqual(self.server.context.app.session.document.doc_id, result["result"]["doc_id"])
         self.assert_no_uploads()
 
     def test_cancel_prevents_late_progress_and_publication(self):
@@ -133,6 +139,34 @@ class ImportLifecycleTests(unittest.TestCase):
         finished = self.wait_terminal(job["job_id"])
         self.assertEqual(finished["status"], "cancelled")
         self.assertIsNone(finished["result"])
+        self.assertEqual(self.server.context.app.session.document.doc_id, "initial")
+        self.assert_no_uploads()
+
+    def test_cancel_reaps_the_owned_converter_before_reporting_terminal(self):
+        entered = threading.Event()
+        processes = []
+
+        def run_converter(_command, **kwargs):
+            def started(process):
+                processes.append(process)
+                entered.set()
+
+            return run_owned(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                timeout=30,
+                cancel_event=kwargs.get("cancel_event"),
+                on_start=started,
+            )
+
+        with (
+            patch.object(documents, "run_owned", side_effect=run_converter),
+            patch.object(documents.shutil, "which", return_value="pdftotext"),
+        ):
+            _, job = self.raw_import("cancelar.pdf")
+            self.assertTrue(entered.wait(2))
+            self._request(self.base, f"/api/import-cancel/{job['job_id']}", {})
+            self.assertEqual(self.wait_terminal(job["job_id"])["status"], "cancelled")
+        self.assertIsNotNone(processes[0].poll())
         self.assertEqual(self.server.context.app.session.document.doc_id, "initial")
         self.assert_no_uploads()
 
@@ -167,7 +201,8 @@ class ImportLifecycleTests(unittest.TestCase):
             self.assertEqual(self.wait_terminal(job["job_id"])["status"], "done")
         self.assertEqual(self.server.context.app.session.document.doc_id, "initial")
         self.assertEqual(
-            {item["doc_id"] for item in self.server.context.app.list_reference_documents()["items"]}, {"ref1", "ref2"}
+            {item["title"] for item in self.server.context.app.list_reference_documents()["items"]},
+            {"ref1.txt", "ref2.txt"},
         )
 
     def test_registry_full_removes_upload_and_keeps_active_request(self):
@@ -199,8 +234,10 @@ class ImportLifecycleTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError):
                 self.raw_import("failed.txt")
         release.set()
-        self.assertEqual(self.wait_terminal(old["job_id"])["status"], "done")
-        self.assertEqual(self.server.context.app.session.document.doc_id, "old")
+        result = self.wait_terminal(old["job_id"])
+        self.assertEqual(result["status"], "done")
+        self.assertTrue(result["result"]["doc_id"].startswith("old-"))
+        self.assertEqual(self.server.context.app.session.document.doc_id, result["result"]["doc_id"])
         self.assert_no_uploads()
 
     def test_document_change_during_upload_invalidates_import(self):

@@ -38,7 +38,15 @@ def sanitized_command(command: Sequence[os.PathLike[str] | str]) -> str:
         if redact_next:
             safe.append("<redacted>")
             redact_next = False
-        elif value.lower() in {"--token", "--api-key", "--password", "--secret"}:
+        elif value.lower() in {
+            "--token",
+            "--api-key",
+            "--password",
+            "--secret",
+            "--message",
+            "--initial_prompt",
+            "--initial-prompt",
+        }:
             safe.append(value)
             redact_next = True
         elif len(value) > 240:

@@ -13,7 +13,8 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+import wave
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .config import environment_value
@@ -103,7 +104,9 @@ class NullTTSProvider(TTSProvider):
         fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_null_", suffix=".wav")
         os.close(fd)
         path = Path(name)
-        path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+        with wave.open(str(path), "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(bytes(320))
         return AudioArtifact(
             True,
             path=path,
@@ -465,8 +468,10 @@ class AudioCache:
         return None
 
     def put(self, text: str, voice: str, language: str, artifact: AudioArtifact) -> AudioArtifact:
-        if not artifact.ok or not artifact.path or not self._valid_wav(artifact.path):
+        if not artifact.ok or not artifact.path or not artifact.path.exists():
             return artifact
+        if not self._valid_wav(artifact.path):
+            return replace(artifact, ok=False, detail="invalid_wav")
         target = self.path_for(text, voice, language)
         temporary: Path | None = None
         with self._lock:
@@ -486,7 +491,7 @@ class AudioCache:
                     handle.flush()
                     os.fsync(handle.fileno())
                 if not self._valid_wav(temporary):
-                    return artifact
+                    return replace(artifact, ok=False, detail="invalid_wav")
                 os.replace(temporary, target)
                 self._summary_cache = None
                 temporary = None
@@ -608,8 +613,11 @@ class AudioCache:
         try:
             if path.is_symlink() or not path.is_file() or path.stat().st_size < 12:
                 return False
-            with path.open("rb") as handle:
-                header = handle.read(12)
-        except OSError:
+            with wave.open(str(path), "rb") as audio:
+                frames = audio.getnframes()
+                if frames <= 0 or audio.getframerate() <= 0:
+                    return False
+                audio.setpos(frames - 1)
+                return len(audio.readframes(1)) == audio.getsampwidth() * audio.getnchannels()
+        except (OSError, EOFError, wave.Error, ValueError):
             return False
-        return header[:4] == b"RIFF" and header[8:12] == b"WAVE"

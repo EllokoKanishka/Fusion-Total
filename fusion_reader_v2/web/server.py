@@ -20,6 +20,7 @@ from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.network import http_base_url
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.owned_subprocess import run_owned
+from fusion_reader_v2.turn_provider import use_turn_provider
 from fusion_reader_v2.web.errors import APIError, error_response
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.routes.documents import (
@@ -284,6 +285,8 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         limit = self.settings.limits.upload_max_bytes
+        if urlparse(self.path).path in {"/api/dictation/assist", "/api/dictation/review", "/api/dictation/proofread"}:
+            limit = min(limit, 256 * 1024)
         if length > limit:
             raise ValueError("request_body_too_large")
         raw = self.rfile.read(length)
@@ -549,16 +552,17 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 tmp_path = self._read_body_to_temp(filename)
                 try:
-                    self._result(
-                        200,
-                        self.app.dialogue_turn_audio(
-                            tmp_path,
-                            mime=content_type,
-                            model=str((params.get("model") or [""])[0]),
-                            chunk_index=chunk_index,
-                            audio_meta=audio_meta,
-                        ),
-                    )
+                    with use_turn_provider((params.get("provider") or [""])[0], {"local", "openai"}, "local"):
+                        self._result(
+                            200,
+                            self.app.dialogue_turn_audio(
+                                tmp_path,
+                                mime=content_type,
+                                model=str((params.get("model") or [""])[0]),
+                                chunk_index=chunk_index,
+                                audio_meta=audio_meta,
+                            ),
+                        )
                 finally:
                     tmp_path.unlink(missing_ok=True)
                 return

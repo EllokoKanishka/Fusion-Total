@@ -79,6 +79,11 @@ if [[ "$1" == "--user" && "$2" == "show" ]]; then
   if [[ -f "{self.tmp_dir}/systemd_missing" ]]; then
     exit 1
   fi
+  if [[ -f "{self.tmp_dir}/unit_missing" ]]; then
+    echo not-found
+    exit 0
+  fi
+  echo loaded
   exit 0
 fi
 if [[ "$1" == "--user" && "$2" == "start" ]]; then
@@ -201,8 +206,8 @@ exit 1
         self.assertTrue("zenity" in log_content or "notify-send" in log_content)
 
     def test_launcher_fallback_traditional_script(self):
-        # simulate systemd not available
-        (Path(self.tmp_dir) / "systemd_missing").touch()
+        # A systemd manager can exist even when Panda's unit was never installed.
+        (Path(self.tmp_dir) / "unit_missing").touch()
 
         # Mock python script that touches healthy marker representing successful startup via fallback
         self.mock_python.write_text(

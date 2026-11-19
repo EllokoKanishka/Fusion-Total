@@ -14,6 +14,7 @@ export function createPandaDialog({ documentRoot = document } = {}) {
 
   function ask({ title: heading = 'Panda Fusión', message: detail = '', acceptLabel = 'Aceptar', cancelLabel = 'Cancelar', value, fieldLabel: label = '', danger = false } = {}) {
     if (!root) return Promise.resolve(typeof value === 'undefined' ? window.confirm(detail) : window.prompt(heading, value));
+    const previousFocus = documentRoot.activeElement;
     const acceptsText = typeof value !== 'undefined';
     const mode = acceptsText ? 'prompt' : (cancelLabel ? 'confirm' : 'notice');
     title.textContent = cleanText(heading) || 'Panda Fusión';
@@ -22,12 +23,13 @@ export function createPandaDialog({ documentRoot = document } = {}) {
     cancel.textContent = mode === 'confirm' ? 'No' : cancelLabel;
     accept.classList.toggle('danger-btn', Boolean(danger));
     fieldWrap.hidden = !acceptsText;
+    cancel.hidden = mode === 'notice';
     fieldLabel.textContent = label || heading;
     field.value = acceptsText ? String(value || '') : '';
     root.hidden = false;
     root.dataset.open = 'true';
     root.dataset.mode = mode;
-    (acceptsText ? field : accept).focus();
+    (acceptsText ? field : danger && mode === 'confirm' ? cancel : accept).focus();
 
     return new Promise(resolve => {
       const finish = accepted => {
@@ -37,13 +39,25 @@ export function createPandaDialog({ documentRoot = document } = {}) {
         cancel.removeEventListener('click', onCancel);
         accept.removeEventListener('click', onAccept);
         root.removeEventListener('keydown', onKeydown);
+        previousFocus?.focus?.();
         resolve(accepted ? (acceptsText ? field.value : true) : (acceptsText ? null : false));
       };
       const onCancel = () => finish(false);
       const onAccept = () => finish(true);
       const onKeydown = event => {
         if (event.key === 'Escape') { event.preventDefault(); finish(false); }
-        if (event.key === 'Enter' && event.target !== field) { event.preventDefault(); finish(true); }
+        if (event.key === 'Enter' && acceptsText && event.target === field && !event.isComposing) {
+          event.preventDefault();
+          finish(true);
+        }
+        if (event.key === 'Tab') {
+          const controls = [...(acceptsText ? [field] : []), ...(cancel.hidden ? [] : [cancel]), accept];
+          const index = controls.indexOf(event.target);
+          if (index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
+            event.preventDefault();
+            controls[event.shiftKey ? controls.length - 1 : 0].focus();
+          }
+        }
       };
       cancel.addEventListener('click', onCancel);
       accept.addEventListener('click', onAccept);

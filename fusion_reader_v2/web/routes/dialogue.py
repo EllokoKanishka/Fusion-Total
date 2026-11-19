@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from fusion_reader_v2 import FusionReaderV2
+from fusion_reader_v2.turn_provider import use_turn_provider
 
 
 class DialogueResponder(Protocol):
@@ -39,25 +40,27 @@ def handle_dialogue_post(responder: DialogueResponder, path: str, payload: dict)
         return True
     if path == "/api/dialogue/turn":
         chunk_value = payload.get("chunk_index")
-        responder._result(
-            200,
-            responder.app.dialogue_turn_text(
-                str(payload.get("text") or ""),
-                model=str(payload.get("model") or ""),
-                chunk_index=int(chunk_value) if chunk_value is not None else None,
-            ),
-        )
+        with use_turn_provider(payload.get("provider", ""), {"local", "openai"}, "local"):
+            responder._result(
+                200,
+                responder.app.dialogue_turn_text(
+                    str(payload.get("text") or ""),
+                    model=str(payload.get("model") or ""),
+                    chunk_index=int(chunk_value) if chunk_value is not None else None,
+                ),
+            )
         return True
     if path == "/api/chat":
         chunk_value = payload.get("chunk_index")
-        responder._result(
-            200,
-            responder.app.chat(
-                str(payload.get("message") or ""),
-                model=str(payload.get("model") or ""),
-                chunk_index=int(chunk_value) if chunk_value is not None else None,
-            ),
-        )
+        with use_turn_provider(payload.get("provider", ""), {"local", "openai"}, "local"):
+            responder._result(
+                200,
+                responder.app.chat(
+                    str(payload.get("message") or ""),
+                    model=str(payload.get("model") or ""),
+                    chunk_index=int(chunk_value) if chunk_value is not None else None,
+                ),
+            )
         return True
     return False
 

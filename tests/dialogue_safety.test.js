@@ -27,7 +27,7 @@ async function fixture({ capture, Context, api, fetch } = {}) {
   }
   const messages = [];
   const context = {
-    dialogue, ...audio, Blob, URLSearchParams, AbortController, Float32Array, Uint8Array,
+    dialogue, chatProviderChoice: 'local', ...audio, Blob, URLSearchParams, AbortController, Float32Array, Uint8Array,
     performance: { now: () => now }, navigator: { mediaDevices: { getUserMedia: capture || (async () => stream) } },
     document: { hidden: false }, window: { AudioContext: Context || AudioContext,
       setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); } },

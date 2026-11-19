@@ -12,6 +12,8 @@ from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from fusion_reader_v2 import FusionReaderV2
+from fusion_reader_v2.media import register_pdf_fonts
+from fusion_reader_v2.turn_provider import use_turn_provider
 
 
 class DictationResponder(Protocol):
@@ -41,11 +43,12 @@ def _dictation_pdf(title: str, text: str, show_page_numbers: bool) -> bytes:
     if len(source) > 500_000:
         raise ValueError("dictation_too_large")
     buffer = BytesIO()
+    regular, bold = register_pdf_fonts()
     styles = getSampleStyleSheet()
     body = ParagraphStyle(
         "DictationBody",
         parent=styles["BodyText"],
-        fontName="Times-Roman",
+        fontName=regular,
         fontSize=11.5,
         leading=17,
         textColor=HexColor("#172a2e"),
@@ -54,7 +57,7 @@ def _dictation_pdf(title: str, text: str, show_page_numbers: bool) -> bytes:
     heading = ParagraphStyle(
         "DictationHeading",
         parent=styles["Title"],
-        fontName="Times-Bold",
+        fontName=bold,
         fontSize=20,
         leading=25,
         alignment=TA_CENTER,
@@ -171,6 +174,29 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
             ),
         )
         return True
+    if path in {"/api/dictation/assist", "/api/dictation/proofread", "/api/dictation/review"}:
+        assistant = responder.app.dictation_assistant
+        selected = assistant.selected
+        default = selected if selected != "openai" else "rules"
+        with use_turn_provider(payload.get("provider", ""), {"rules", *assistant.providers}, default):
+            return _handle_dictation_edit(responder, path, payload)
+    if path == "/api/dictation/speak":
+        responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
+        return True
+    if path != "/api/dictation/interpret":
+        return False
+    responder._json(
+        200,
+        responder.app.dictation_turn_text(
+            str(payload.get("text") or ""),
+            commands_enabled=bool(payload.get("commands_enabled", True)),
+            require_wake_word=bool(payload.get("require_wake_word", False)),
+        ),
+    )
+    return True
+
+
+def _handle_dictation_edit(responder: DictationResponder, path: str, payload: dict) -> bool:
     if path == "/api/dictation/assist":
         responder._json(
             200,
@@ -214,20 +240,7 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
         )
         responder._json(status, result)
         return True
-    if path == "/api/dictation/speak":
-        responder._result(200, responder.app.dictation_speak(str(payload.get("text") or "")))
-        return True
-    if path != "/api/dictation/interpret":
-        return False
-    responder._json(
-        200,
-        responder.app.dictation_turn_text(
-            str(payload.get("text") or ""),
-            commands_enabled=bool(payload.get("commands_enabled", True)),
-            require_wake_word=bool(payload.get("require_wake_word", False)),
-        ),
-    )
-    return True
+    return False
 
 
 __all__ = ["handle_dictation_get", "handle_dictation_post", "handle_dictation_raw_post"]

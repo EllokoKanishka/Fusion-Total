@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Callable
 
 from fusion_reader_v2.openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
 
@@ -10,9 +9,8 @@ from fusion_reader_v2.openclaw_bridge import ExternalResearchBridge, ExternalRes
 class ResearchService:
     """Owns explicit external-research intent, provider health and execution."""
 
-    def __init__(self, bridge: ExternalResearchBridge, snapshot: Callable[[], dict]) -> None:
+    def __init__(self, bridge: ExternalResearchBridge) -> None:
         self.bridge = bridge
-        self.snapshot = snapshot
 
     @staticmethod
     def normalized_key(text: str) -> str:
@@ -40,6 +38,12 @@ class ResearchService:
         verb, target = request.groups()
         target = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", target)
         target = re.sub(r"(?<!\w)'[^']*'(?!\w)", " ", target)
+        if re.search(
+            r"\b(?:no|nunca|sin)\s+(?:(?:que|usar|uses|utilizar|utilices|consultar|consultes|buscar|busques|investigar|investigues|salgas|salir|acceder|accedas)\s+){0,3}"
+            r"(?:en\s+|a\s+)?(?:internet|(?:la\s+)?web|la red|fuentes externas|afuera|fuera)\b",
+            target,
+        ):
+            return False
         if verb.startswith("googlea"):
             return True
         local_scope = re.search(
@@ -62,7 +66,7 @@ class ResearchService:
         )
 
     def research(self, message: str) -> ExternalResearchResult:
-        return self.bridge.research(message, snapshot=self.snapshot())
+        return self.bridge.research(message, snapshot={})
 
     def health(self) -> dict:
         bridge = self.bridge
