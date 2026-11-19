@@ -195,9 +195,16 @@ start_fusion_gpu_tts() {
 }
 
 start_fusion_cpu_tts() {
-  local fusion_python="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}/bin/python"
+  local fusion_voice_env="${FUSION_READER_GPU_ENV:-${HOME}/fusion_reader_envs/alltalk_gpu_5090_py311}"
+  local fusion_python="$fusion_voice_env/bin/python"
   if [[ -z "${DIRECT_CHAT_ALLTALK_PYTHON:-}" && -x "$fusion_python" ]]; then
+    # TorchCodec links to the packaged NVIDIA libraries even with CUDA disabled.
+    local libdir voice_libs="${LD_LIBRARY_PATH:-}"
+    for libdir in "$fusion_voice_env"/lib/python*/site-packages/nvidia/*/lib; do
+      [[ -d "$libdir" ]] && voice_libs="$libdir${voice_libs:+:$voice_libs}"
+    done
     DIRECT_CHAT_ALLTALK_PYTHON="$fusion_python" DIRECT_CHAT_ALLTALK_FORCE_CPU=1 \
+      LD_LIBRARY_PATH="$voice_libs" \
       PYTHONPATH="$ROOT/scripts/gpu_compat${PYTHONPATH:+:$PYTHONPATH}" FUSION_READER_ALLOW_TORCH_PICKLE_LOAD=1 \
       nohup "$ROOT/scripts/start_reader_neural_tts.sh" >>"$CPU_TTS_LOG_FILE" 2>&1 9>&- &
   else
