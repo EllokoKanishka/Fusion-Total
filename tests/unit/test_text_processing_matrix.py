@@ -139,10 +139,20 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
                     with mock.patch.object(documents, "pdf_raster_pages", side_effect=TimeoutError):
                         self.assertIn("inspeccionar", documents.pdf_to_text(source.name, source)[1])
 
-        self.assertEqual(documents.merge_pdf_raster_text(title, title.upper() + "\n!"), title)
+        date = "Fecha de entrega 18/11/2026."
+        different_date = "Fecha de entrega 19/11/2026."
+        final = "Fin de la consigna."
+        self.assertEqual(documents.merge_pdf_raster_text(title, title.upper() + "\n!"), (title, True))
         self.assertEqual(
-            documents.merge_pdf_raster_text(title, title.replace("más", "mas") + "\nUn párrafo del raster."),
-            title + "\n\nUn párrafo del raster.",
+            documents.merge_pdf_raster_text(
+                f"{title}\n{date}\n{final}",
+                f"{title.replace('más', 'mas')}\n{date}\n{different_date}\n{final}",
+            ),
+            (f"{title}\n{date}\n{different_date}\n{final}", True),
+        )
+        self.assertEqual(
+            documents.merge_pdf_raster_text(title, "Texto escaneado sin referencias comunes."),
+            (title + "\nTexto escaneado sin referencias comunes.", False),
         )
 
     def test_pdf_cleanup_ocr_signal_and_heading_matrix(self) -> None:

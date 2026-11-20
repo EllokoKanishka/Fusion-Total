@@ -23,11 +23,21 @@ Para desarrollo:
 npm run dev
 ```
 
-Para generar el paquete de escritorio:
+Para generar el paquete de la ventana:
 
 ```bash
 npm run build
 ```
+
+La distribución actual requiere instalar por separado el paquete Python que
+provee `fusionctl`, con ese ejecutable disponible en el `PATH` de la sesión de
+escritorio. También requiere disponer de los motores locales de voz y dictado
+según la [guía operativa](../docs/OPERATIONS.md) y el [manifiesto de
+dependencias](../docs/DEPENDENCIES_V2.md).
+
+Para publicar un instalador autónomo, queda integrar el backend y su entorno
+en el paquete, provisionar la voz y el dictado, y verificar arranque, lectura
+audible, dictado y liberación de recursos en una instalación limpia.
 
 La ventana no abre contenido remoto: su única URL es el servidor loopback de
 Panda Fusión. El backend, voz, documentos y sus rutas API conservan el mismo

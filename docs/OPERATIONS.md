@@ -54,8 +54,9 @@ y la ventana carga exclusivamente `http://127.0.0.1:8010`.
 ./scripts/start_pandafusion_desktop.sh
 ```
 
-La primera vez requiere `cd desktop && npm install`. Para un paquete instalable,
-usar `npm run build` desde esa carpeta.
+La primera vez requiere `cd desktop && npm install`. `npm run build` empaqueta
+la ventana. El backend Python y los motores de voz y dictado se instalan por
+separado. [Requisitos del paquete de escritorio](../desktop/README.md).
 
 Manifiesto único de dependencias:
 

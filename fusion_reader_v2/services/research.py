@@ -39,10 +39,20 @@ class ResearchService:
         verb, target = request.groups()
         target = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", target)
         target = re.sub(r"(?<!\w)'[^']*'(?!\w)", " ", target)
+        external_scope = r"(?:internet|(?:la\s+)?web|la red|fuentes externas|afuera|fuera|online)"
+        # A restriction in an adversative clause can refer to the earlier
+        # search indirectly, including verbs unrelated to searching.
+        if re.search(
+            rf"\b(?:pero|aunque)\s+(?:por favor,?\s+)?(?:no|nunca|sin|evita|evitemos|prohibido)\b"
+            rf"[^.;!?]{{0,100}}\b{external_scope}\b",
+            target,
+        ):
+            return False
         if re.search(
             r"\b(?:no|nunca|sin)\s+(?:(?:quiero|quisiera|permito|autorizo|te|pido)\s+){0,3}"
-            r"(?:(?:que|usar|uses|utilizar|utilices|consultar|consultes|buscar|busques|investigar|investigues|salgas|salir|acceder|accedas)\s+){0,3}"
-            r"(?:en\s+|a\s+)?(?:internet|(?:la\s+)?web|la red|fuentes externas|afuera|fuera)\b",
+            r"(?:(?:que|lo|la|hagas|hacer|usar|uses|utilizar|utilices|consultar|consultes|buscar|busques|"
+            r"investigar|investigues|salgas|salir|acceder|accedas)\s+){0,5}"
+            rf"(?:(?:en|por|a)\s+)?{external_scope}\b",
             target,
         ):
             return False

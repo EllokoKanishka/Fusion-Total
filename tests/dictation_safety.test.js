@@ -26,7 +26,7 @@ class Element {
   play() { this.playCalls = (this.playCalls || 0) + 1; return Promise.resolve(); }
 }
 
-async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOverride } = {}) {
+async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOverride, locks } = {}) {
   const { createDictationController, STORAGE_KEY } = await import(moduleUrl);
   const elements = new Proxy({}, { get(target, name) { return target[name] ||= new Element(); } });
   elements.dictationCommandsToggle.checked = true;
@@ -52,7 +52,7 @@ async function fixture({ api, fetchFn, storage, dialog, getUserMedia, ContextOve
   const windowRef = new Element();
   Object.assign(windowRef, {
     crypto: { randomUUID: () => `new-${++ids}` }, performance: { now: () => now }, Blob, Event: class { constructor(type) { this.type = type; } },
-    MediaRecorder: Recorder, AudioContext: ContextOverride || Context, navigator: { mediaDevices: { getUserMedia: getUserMedia || (async () => stream) } },
+    MediaRecorder: Recorder, AudioContext: ContextOverride || Context, navigator: { locks: locks === null ? undefined : locks || { request: async (_name, _options, save) => save() }, mediaDevices: { getUserMedia: getUserMedia || (async () => stream) } },
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
     requestAnimationFrame(fn) { const id = ++timerId; frames.set(id, fn); return id; }, cancelAnimationFrame(id) { frames.delete(id); },
     URL: { createObjectURL(blob) { downloads.push(blob); return 'blob:fixture'; }, revokeObjectURL() {} }, confirm: () => true,
@@ -219,6 +219,18 @@ test('stale windows do not overwrite newer drafts and edited conflicts retain bo
     assert.equal(saved.sessions.find(item => item.id === original.id).text, original.text);
   }
   for (const view of [seed, writer, stale, conflicting]) view.controller.dispose();
+});
+
+test('a browser without cross-window locking keeps the draft available for export', async () => {
+  const f = await fixture({ locks: null });
+  const before = [...f.values.values()][0];
+  await f.edit('Texto recuperable sin bloqueo');
+  await f.flushSave();
+  assert.equal([...f.values.values()][0], before);
+  assert.equal(f.elements.dictationSaveStatus.dataset.state, 'error');
+  await f.elements.dictationDownloadBtn.emit('click');
+  assert.equal(await f.downloads[0].text(), 'Texto recuperable sin bloqueo');
+  f.controller.dispose();
 });
 
 test('a newer draft schema survives edits and closure in an older window', async () => {

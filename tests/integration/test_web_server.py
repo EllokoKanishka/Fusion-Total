@@ -53,54 +53,123 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(assistant.selected, "openai")
 
     def test_external_research_permission_is_per_request_and_prohibition_wins(self) -> None:
+        affirmative = "Buscá fuentes sobre el concepto de técnica."
+        prohibitions = (
+            "Buscá fuentes, pero no quiero que busques en internet.",
+            "Buscá fuentes sobre la escuela, pero no lo hagas en internet.",
+            "Buscá fuentes sobre la escuela, pero no la hagas por la web.",
+            "Buscá fuentes sobre la escuela, pero evitá conectarte a internet.",
+        )
         with tempfile.TemporaryDirectory() as tmp:
-            server = self._start(Path(tmp))
+            stt = NullSTTProvider()
+            server = self._start(Path(tmp), stt=stt)
             base = f"http://127.0.0.1:{server.server_port}"
             bridge = NullExternalResearchBridge()
             server.context.app._research_service.bridge = bridge
             for path, key in (("/api/chat", "message"), ("/api/dialogue/turn", "text")):
-                request = {key: "Buscá fuentes sobre el concepto de técnica."}
-                self._request(base, path, request)
-                self._request(base, path, {**request, "allow_external_research": "true"})
-                self._request(
-                    base,
-                    path,
-                    {
-                        key: "Buscá fuentes, pero no quiero que busques en internet.",
-                        "allow_external_research": True,
-                    },
-                )
+                self._request(base, path, {key: affirmative})
+                self._request(base, path, {key: affirmative, "allow_external_research": "true"})
+                for prohibition in prohibitions:
+                    self._request(base, path, {key: prohibition, "allow_external_research": True})
                 self.assertEqual(bridge.calls, [])
-                self._request(base, path, {**request, "allow_external_research": True})
-                self.assertEqual(bridge.calls, [(request[key], {})])
+                self._request(base, path, {key: affirmative, "allow_external_research": True})
+                self.assertEqual(bridge.calls, [(affirmative, {})])
                 bridge.calls.clear()
 
-    def test_library_homonyms_and_legacy_note_recovery(self) -> None:
+            for utterance in (*prohibitions, affirmative):
+                stt.text = utterance
+                request = urllib.request.Request(
+                    base + "/api/dialogue/turn?filename=turn.wav&allow_external_research=1",
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5.0) as response:
+                    self.assertEqual(response.status, 200)
+            self.assertEqual(bridge.calls, [(affirmative, {})])
+
+    def test_library_homonyms_keep_legacy_notes_separate_even_after_reopening(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            server = self._start(Path(tmp))
+            root = Path(tmp)
+            server = self._start(root)
             base = f"http://127.0.0.1:{server.server_port}"
             app = server.context.app
             library = server.context.library_root
             first = library / "uno" / "clase.txt"
             second = library / "dos" / "clase.txt"
-            for path, content in ((first, "Primera clase."), (second, "Segunda clase.")):
+            shared = "Encabezado compartido."
+            for path in (first, second):
                 path.parent.mkdir(parents=True)
-                path.write_text(content, encoding="utf-8")
-            app.load_text(
-                "clase", first.name, first.read_text(), prefetch=False, source_path=str(first), source_type="file"
-            )
-            legacy_note = app.create_note("Anotación original")["note"]
-            app.notes.add("clase", second.name, 0, "De otro archivo", quote=second.read_text())
+                path.write_text(shared, encoding="utf-8")
+            (library / "intermedio.txt").write_text("Otro archivo abierto entre los dos.", encoding="utf-8")
+            app.load_text("clase", first.name, shared, prefetch=False, source_path=str(first), source_type="file")
+            original = app.create_note("Nota de la primera carpeta")["note"]
+            app.notes.add("clase", second.name, 0, "Nota de la segunda carpeta", quote=shared)
+            with managed_test_app(root=root / "app") as restored:
+                self.assertNotEqual(restored.status()["doc_id"], "clase")
+                self.assertEqual(restored.list_notes()["items"], [])
+                self.assertTrue(restored.notes_summary()["legacy_archive_available"])
+                self.assertEqual(len(restored.list_legacy_notes(restored.status()["doc_id"])["items"]), 2)
+
+            self._request(base, "/api/load", {"book_id": "intermedio.txt"})
             _, opened = self._request(base, "/api/load", {"book_id": "uno/clase.txt"})
-            self.assertEqual(opened["notes"]["count"], 1)
-            self.assertEqual(app.list_notes()["items"][0]["note_id"], legacy_note["note_id"])
+            self.assertEqual(opened["notes"]["count"], 0)
+            doc_id = opened["doc_id"]
+            archive = "/api/notes/legacy?doc_id=" + doc_id
+            self.assertTrue(opened["notes"]["legacy_archive_available"])
+            _, candidates = self._request(base, archive)
+            self.assertEqual(
+                {note["text"] for note in candidates["items"]},
+                {
+                    "Nota de la primera carpeta",
+                    "Nota de la segunda carpeta",
+                },
+            )
+            self.assertTrue(all(note["can_copy"] for note in candidates["items"]))
+            self._request(base, "/api/notes/legacy/copy", {"doc_id": doc_id, "note_id": original["note_id"]})
+            self._request(base, "/api/notes/legacy/copy", {"doc_id": doc_id, "note_id": original["note_id"]})
+            self.assertEqual([note["note_id"] for note in app.list_notes()["items"]], [original["note_id"]])
+            self.assertEqual(len(self._request(base, archive)[1]["items"]), 1)
             _, reference = self._request(base, "/api/load", {"book_id": "dos/clase.txt", "role": "reference"})
             self.assertTrue(reference["ok"])
-            self.assertNotEqual(reference["reference_added"]["doc_id"], opened["doc_id"])
+            self.assertNotEqual(reference["reference_added"]["doc_id"], doc_id)
             _, other = self._request(base, "/api/load", {"book_id": "dos/clase.txt"})
             self.assertEqual(other["notes"]["count"], 0)
+            with self.assertRaises(urllib.error.HTTPError) as stale:
+                self._request(base, "/api/notes/legacy/copy", {"doc_id": doc_id, "note_id": original["note_id"]})
+            self.assertEqual(stale.exception.code, 409)
+            self.assertEqual(len(app.list_notes(doc_id="clase")["items"]), 2)
 
-    def test_reimport_recovers_only_verified_legacy_notes_and_accepts_long_unicode_name(self) -> None:
+    def test_old_automatic_copy_is_reviewed_without_losing_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "clase.txt"
+            path.write_text("Un bloque compartido.", encoding="utf-8")
+            with managed_test_app(root=root / "app") as app:
+                original = app.notes.add("clase", path.name, 0, "Versión de origen", quote=path.read_text())
+                doc_id = app.load_file(path, prefetch=False)["doc_id"]
+                app.notes._store(doc_id).write(
+                    {
+                        "doc_id": doc_id,
+                        "recovered_from": ["clase"],
+                        "notes": [{**original, "doc_id": doc_id, "text": "Versión editada después de la copia"}],
+                    }
+                )
+                self.assertEqual(app.list_notes()["items"], [])
+                pending = app.list_legacy_notes(doc_id)["items"]
+                self.assertEqual([note["text"] for note in pending], ["Versión editada después de la copia"])
+                self.assertTrue(app.copy_legacy_note(doc_id, original["note_id"])["ok"])
+                self.assertTrue(app.update_note(original["note_id"], "Edición posterior a la verificación")["ok"])
+            with managed_test_app(root=root / "app") as restored:
+                self.assertEqual(
+                    [note["text"] for note in restored.list_notes()["items"]],
+                    [
+                        "Edición posterior a la verificación",
+                    ],
+                )
+                self.assertEqual(restored.notes.list("clase")[0]["text"], "Versión de origen")
+                self.assertEqual(restored.list_legacy_notes(doc_id)["items"], [])
+
+    def test_reimport_keeps_the_legacy_archive_and_accepts_long_unicode_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp))
             base = f"http://127.0.0.1:{server.server_port}"
@@ -113,6 +182,11 @@ class WebServerIntegrationTests(unittest.TestCase):
             app.load_text("clase", "clase.txt", original, prefetch=False, source_path=str(legacy_file))
             note = app.create_note("Anotación anterior")["note"]
             app.notes.add("clase", "clase.txt", 0, "Con otro anclaje", quote="Texto de un archivo homónimo.")
+            with managed_test_app(root=Path(tmp) / "app") as restored:
+                restored_id = restored.status()["doc_id"]
+                self.assertNotEqual(restored_id, "clase")
+                self.assertTrue(restored.notes_summary()["legacy_archive_available"])
+                self.assertEqual(restored.list_notes()["items"], [])
 
             def reimport(filename: str, text: str) -> dict:
                 return self._request(
@@ -127,7 +201,15 @@ class WebServerIntegrationTests(unittest.TestCase):
             different = reimport("clase.txt", "Otro archivo homónimo.")
             self.assertEqual(different["notes"]["count"], 0)
             same = reimport("clase.txt", original)
-            self.assertEqual(same["notes"]["count"], 1)
+            self.assertEqual(same["doc_id"], restored_id)
+            self.assertEqual(same["notes"]["count"], 0)
+            _, archive = self._request(base, "/api/notes/legacy?doc_id=" + same["doc_id"])
+            self.assertEqual(
+                {item["text"]: item["can_copy"] for item in archive["items"]},
+                {"Anotación anterior": True, "Con otro anclaje": False},
+            )
+            self._request(base, "/api/notes/legacy/copy", {"doc_id": same["doc_id"], "note_id": note["note_id"]})
+            self.assertEqual(app.notes_summary()["count"], 1)
             self.assertTrue(app.delete_note(note["note_id"])["ok"])
             self.assertEqual(reimport("clase.txt", original)["notes"]["count"], 0)
             self.assertEqual(len(app.list_notes(doc_id="clase")["items"]), 2)

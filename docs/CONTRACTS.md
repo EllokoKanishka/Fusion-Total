@@ -92,8 +92,9 @@ Model selection for browser turns:
 Dictation routes:
 
 - `GET /api/dictation/assistant?provider=local` probes the selected tab's
-  model. `POST /api/dictation/assistant/install` requires the displayed
-  `provider` and `model`. The server checks them against its configuration.
+  model. `POST /api/dictation/assistant/install` and
+  `POST /api/dictation/assistant/warm` require the displayed `provider` and
+  `model`. The server checks them against its configuration.
 - `POST /api/dictation/transcribe`: raw browser audio; query parameters
   `filename` and `commands=0|1`; returns `transcript`, STT metadata and one
   bounded `instruction` object;
@@ -176,7 +177,12 @@ notes responses expose codes; the reader displays a human-readable notice.
 
 Code rollback must preserve both storage layouts: older versions do not read
 new `by-id` files. Callers must still supply distinct document IDs; this storage
-contract cannot distinguish two sources assigned the same ID.
+contract cannot distinguish two sources assigned the same ID. Old filename-based
+archives stay separate and can be opened under “Notas antiguas para revisar”
+after loading a library file or importing a document. A user can explicitly copy
+a note if its quote matches a block. Identifiable copies made by the previous
+automatic migration wait in the archive for confirmation with their edits
+intact. Changing documents never consumes the archive.
 
 Session recovery validates field types before restoration. Invalid snapshots
 are preserved as `.corrupt.*` files and startup uses the default state. If a
@@ -321,7 +327,9 @@ not interrupt reader controls and must not silently fall back to another model.
   the selected range, with undo owned by the browser.
 - Confirmation remains visible inside Dictation. Cancellation preserves the
   draft; acceptance after a revision change cannot clear the newer text.
-- The save indicator distinguishes pending, saved and error states. Storage
+- Dictation uses an exclusive browser Web Lock for each read, conflict check
+  and write to its local draft history. The save indicator distinguishes
+  pending, saved and error states. Storage
   read/parse errors preserve the unreadable stored value; write failures retain
   the in-memory draft, keep TXT export available, prevent switching away and
   request browser confirmation before leaving. Successful persistence clears

@@ -46,6 +46,44 @@ test('external research permission applies to one submitted chat turn', async ({
   }
 });
 
+test('two windows waiting for the same draft lock preserve both edits', async ({ page, context }) => {
+  await page.goto(baseURL);
+  const key = await page.evaluate(async () => (await import('/static/js/dictation.mjs')).STORAGE_KEY);
+  await page.locator('#dictationToggleBtn').click();
+  await page.locator('#dictationEditor').fill('Borrador original');
+  await expect(page.locator('#dictationSaveStatus')).toContainText('Guardado');
+  const other = await context.newPage();
+  await other.goto(baseURL);
+  await other.locator('#dictationToggleBtn').click();
+  await expect(other.locator('#dictationEditor')).toHaveValue('Borrador original');
+
+  await page.evaluate(key => new Promise(resolve => {
+    void navigator.locks.request(key, () => new Promise(release => {
+      window.releaseTestDraftLock = release;
+      resolve();
+    }));
+  }), key);
+  try {
+    await Promise.all([
+      page.locator('#dictationEditor').fill('Versión de la primera ventana'),
+      other.locator('#dictationEditor').fill('Versión de la segunda ventana'),
+    ]);
+    await expect.poll(() => page.evaluate(async key =>
+      (await navigator.locks.query()).pending.filter(lock => lock.name === key).length,
+    key)).toBe(2);
+    await expect(page.locator('#dictationSaveStatus')).toHaveAttribute('data-state', 'pending');
+    await expect(other.locator('#dictationSaveStatus')).toHaveAttribute('data-state', 'pending');
+  } finally {
+    await page.evaluate(() => window.releaseTestDraftLock());
+  }
+  await expect(page.locator('#dictationSaveStatus')).toHaveAttribute('data-state', 'saved');
+  await expect(other.locator('#dictationSaveStatus')).toHaveAttribute('data-state', 'saved');
+  const texts = await page.evaluate(key =>
+    JSON.parse(localStorage.getItem(key)).sessions.map(draft => draft.text).sort(), key);
+  expect(texts).toEqual(['Versión de la primera ventana', 'Versión de la segunda ventana']);
+  await other.close();
+});
+
 test('voice-first reader daily flow uses one request per action', async ({ page }) => {
   const requestCounts = new Map();
   page.on('request', request => {
@@ -300,6 +338,7 @@ async function checkCapturedEdit(page, sample) {
   if (sample.reopen) {
     await page.locator('#dictationEditor').evaluate(editor => editor.setSelectionRange(0, 0));
     await page.locator('#dictationCloseBtn').click();
+    await expect(page.locator('#dictationWorkspace')).toBeHidden();
     await page.reload();
     await page.locator('#dictationToggleBtn').click();
     await expect(page.locator('#dictationEditor')).toHaveValue(original);
@@ -377,4 +416,24 @@ test('keyboard cancellation of a destructive dictation dialog preserves the draf
   await expect(page.locator('#pandaDialogAccept')).toBeFocused();
   await page.keyboard.press('Space');
   await expect(page.locator('#dictationEditor')).toHaveValue('');
+});
+
+test('an archived note enters the active document only after confirmation', async ({ page }) => {
+  const response = await page.request.post(baseURL + '/api/load', { data: { book_id: 'apuntes.txt' } });
+  expect(response.ok()).toBe(true);
+  await page.goto(baseURL);
+  const archive = page.locator('#legacyNotes');
+  const notes = page.locator('#notesList');
+  await expect(archive).toBeVisible();
+  await expect(notes.getByText('Nota anterior de prueba')).toHaveCount(0);
+  await archive.locator('summary').click();
+  await expect(archive.getByText('Nota anterior de prueba')).toBeVisible();
+  await archive.getByRole('button', { name: 'Copiar a este documento' }).click();
+  await expect(page.locator('#pandaDialogMessage')).toContainText('/apuntes.txt');
+  await page.locator('#pandaDialogCancel').click();
+  await expect(notes.getByText('Nota anterior de prueba')).toHaveCount(0);
+  await archive.getByRole('button', { name: 'Copiar a este documento' }).click();
+  await page.locator('#pandaDialogAccept').click();
+  await expect(notes.locator('.note-text')).toHaveText('Nota anterior de prueba');
+  await expect(archive.getByText('Sin notas pendientes para este título.')).toBeVisible();
 });

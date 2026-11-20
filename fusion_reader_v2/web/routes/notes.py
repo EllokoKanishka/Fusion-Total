@@ -14,10 +14,13 @@ class NotesResponder(Protocol):
 
 
 def handle_notes_get(responder: NotesResponder, path: str, raw_path: str) -> bool:
-    if path != "/api/notes":
+    if path not in {"/api/notes", "/api/notes/legacy"}:
         return False
     params = parse_qs(urlparse(raw_path).query)
     doc_id = str((params.get("doc_id") or [""])[0])
+    if path == "/api/notes/legacy":
+        responder._json(200, responder.app.list_legacy_notes(doc_id))
+        return True
     current_only = str((params.get("current_only") or ["0"])[0]).lower() in {"1", "true", "yes"}
     chunk_index_raw = str((params.get("chunk_index") or [""])[0])
     chunk_index = int(chunk_index_raw) if chunk_index_raw else None
@@ -29,6 +32,10 @@ def handle_notes_get(responder: NotesResponder, path: str, raw_path: str) -> boo
 
 
 def handle_notes_post(responder: NotesResponder, path: str, payload: dict) -> bool:
+    if path == "/api/notes/legacy/copy":
+        result = responder.app.copy_legacy_note(str(payload.get("doc_id") or ""), str(payload.get("note_id") or ""))
+        responder._json(200 if result["ok"] else 409, result)
+        return True
     if path == "/api/notes/create":
         chunk_index = payload.get("chunk_index")
         responder._json(

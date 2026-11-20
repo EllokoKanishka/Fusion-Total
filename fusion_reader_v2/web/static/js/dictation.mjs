@@ -591,6 +591,7 @@ export function createDictationController({
   const redoStack = [];
   let sessionStore = { schemaVersion: SESSION_SCHEMA_VERSION, activeId: '', sessions: [] };
   let saveTimer = 0;
+  let pendingSave = null;
   let manualTimer = 0;
   let assistantInstallTimer = 0;
   let assistantChoice = '';
@@ -866,10 +867,12 @@ export function createDictationController({
   }
 
   async function prepareAssistantForWake() {
-    const value = String(elements.dictationAssistantSelect.value || 'rules');
-    if (!['local', 'local14b'].includes(value)) return true;
+    const provider = String(elements.dictationAssistantSelect.value || 'rules');
+    if (!['local', 'local14b'].includes(provider)) return true;
+    const model = assistantCatalog.find(item => item.id === provider)?.model;
+    if (!model) return false;
     try {
-      const data = await api('/api/dictation/assistant/warm', {});
+      const data = await api('/api/dictation/assistant/warm', { provider, model });
       const load = Number(data.load_duration_ms || 0);
       const total = Number(data.duration_ms || 0);
       addActivity(`Modelo ${data.model || 'local'} preparado: carga ${load} ms · total ${total} ms.`);
@@ -944,34 +947,44 @@ export function createDictationController({
   function persistNow() {
     windowRef.clearTimeout(saveTimer);
     saveTimer = 0;
-    if (!dirty) return true;
+    if (!dirty) return Promise.resolve(true);
+    if (!pendingSave) {
+      pendingSave = saveDraftLocked().finally(() => { pendingSave = null; });
+    }
+    return pendingSave;
+  }
+
+  async function saveDraftLocked() {
     try {
-      if (storageReadFailed || !storage) throw new Error('storage_unavailable');
-      const current = snapshotSession();
-      const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
-      if (saved.schemaVersion != null && (Number(saved.schemaVersion) !== SESSION_SCHEMA_VERSION || !Array.isArray(saved.sessions))) {
-        storageReadFailed = true;
-        throw new Error('unsupported_draft_schema');
-      }
-      const latest = Array.isArray(saved.sessions) ? saved.sessions : sessionStore.sessions;
-      const existing = latest.find(item => item?.id === current.id);
-      const baseline = activeSession();
-      const sameDraft = (a, b) => a?.text === b?.text && a?.title === b?.title && a?.voice === b?.voice;
-      const conflict = existing && !sameDraft(existing, baseline) && !sameDraft(existing, current);
-      if (conflict) {
-        current.id = newSessionId();
-        current.title += ' (copia de esta ventana)';
-      }
-      const next = {
-        schemaVersion: SESSION_SCHEMA_VERSION,
-        activeId: current.id,
-        sessions: [current, ...latest.filter(item => item?.id && item.id !== current.id)]
-      };
-      storage.setItem(STORAGE_KEY, JSON.stringify(next));
-      sessionStore = next;
-      if (conflict) elements.dictationTitleInput.value = current.title;
-      dirty = false;
-      saveStatus('saved', conflict ? 'Otra ventana cambió el borrador. Guardé esta versión como una copia.' : 'Guardado en este navegador.');
+      const locks = windowRef.navigator?.locks;
+      if (storageReadFailed || !storage || !locks?.request) throw new Error('storage_unavailable');
+      await locks.request(STORAGE_KEY, { mode: 'exclusive' }, () => {
+        const current = snapshotSession();
+        const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+        if (saved.schemaVersion != null && (Number(saved.schemaVersion) !== SESSION_SCHEMA_VERSION || !Array.isArray(saved.sessions))) {
+          storageReadFailed = true;
+          throw new Error('unsupported_draft_schema');
+        }
+        const latest = Array.isArray(saved.sessions) ? saved.sessions : sessionStore.sessions;
+        const existing = latest.find(item => item?.id === current.id);
+        const baseline = activeSession();
+        const sameDraft = (a, b) => a?.text === b?.text && a?.title === b?.title && a?.voice === b?.voice;
+        const conflict = existing && !sameDraft(existing, baseline) && !sameDraft(existing, current);
+        if (conflict) {
+          current.id = newSessionId();
+          current.title += ' (copia de esta ventana)';
+        }
+        const next = {
+          schemaVersion: SESSION_SCHEMA_VERSION,
+          activeId: current.id,
+          sessions: [current, ...latest.filter(item => item?.id && item.id !== current.id)]
+        };
+        storage.setItem(STORAGE_KEY, JSON.stringify(next));
+        sessionStore = next;
+        if (conflict) elements.dictationTitleInput.value = current.title;
+        dirty = false;
+        saveStatus('saved', conflict ? 'Otra ventana cambió el borrador. Guardé esta versión como una copia.' : 'Guardado en este navegador.');
+      });
     } catch (_) {
       dirty = true;
       saveStatus('error', storageReadFailed
@@ -1006,14 +1019,13 @@ export function createDictationController({
         } else if (saved.text || saved.title) {
           sessionStore = {
             schemaVersion: SESSION_SCHEMA_VERSION,
-            activeId: newSessionId(),
+            activeId: 'legacy-draft',
             sessions: [{
-              id: '', title: String(saved.title || 'Dictado sin título'), text: String(saved.text || ''),
+              id: 'legacy-draft', title: String(saved.title || 'Dictado sin título'), text: String(saved.text || ''),
               selectionStart: String(saved.text || '').length, selectionEnd: String(saved.text || '').length,
               voice: '', createdAt: Number(saved.updatedAt || Date.now()), updatedAt: Number(saved.updatedAt || Date.now())
             }]
           };
-          sessionStore.sessions[0].id = sessionStore.activeId;
         }
       }
     } catch (_) { storageReadFailed = true; }
@@ -1036,10 +1048,10 @@ export function createDictationController({
       : 'Borrador disponible en este navegador.');
   }
 
-  function loadSession(id) {
+  async function loadSession(id) {
     if (id === sessionStore.activeId) return;
     flushManualHistory();
-    if (!persistNow()) return;
+    if (dirty && !await persistNow()) return;
     let next = sessionStore.sessions.find(item => item.id === id);
     try {
       const saved = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
@@ -1079,7 +1091,7 @@ export function createDictationController({
       : windowRef.confirm('¿Abrir un borrador nuevo? El actual queda guardado en el historial.'));
     if (!approved || discardStale(token)) return;
     flushManualHistory();
-    if (!persistNow()) return;
+    if (dirty && !await persistNow()) return;
     stopListening();
     stopSpeech();
     showProposal(null);
@@ -1929,11 +1941,11 @@ export function createDictationController({
     editor.focus();
   }
 
-  function close() {
+  async function close() {
     stopListening();
     stopSpeech();
     flushManualHistory();
-    if (!persistNow()) return;
+    if (dirty && !await persistNow()) return;
     showProposal(null);
     reviewStatus('');
     elements.appRoot.classList.remove('dictation-open');
@@ -2082,12 +2094,17 @@ export function createDictationController({
   function beforeLeave(event) {
     stopListening();
     stopSpeech();
-    if ((dirty || saveTimer) && !persistNow()) {
+    if (dirty) {
+      void persistNow();
       event.preventDefault();
       event.returnValue = '';
     }
   }
-  function onVisibilityChange() { if (documentRoot.hidden) stopListening(); }
+  function onVisibilityChange() {
+    if (!documentRoot.hidden) return;
+    stopListening();
+    if (dirty) void persistNow();
+  }
   documentRoot.addEventListener?.('visibilitychange', onVisibilityChange);
   windowRef.addEventListener?.('beforeunload', beforeLeave);
 

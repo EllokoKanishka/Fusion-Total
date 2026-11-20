@@ -17,6 +17,87 @@ export function compactNoteLabel(note) {
 
 export function createNotesController({ api, elements, beginBusyLease, busyControls, getStatus, renderMainStatus, log, documentRoot = document, prompt = window.prompt, confirm = window.confirm, dialog = null }) {
   let state = { docId: '', current: 0, items: [] };
+  let archiveDocId = '';
+  let archiveRequest = 0;
+
+  function syncLegacyArchive(status) {
+    const panel = elements.legacyNotes;
+    if (!panel) return;
+    const nextDocId = status?.notes?.legacy_archive_available ? status.doc_id : '';
+    if (nextDocId !== archiveDocId) {
+      archiveDocId = nextDocId;
+      archiveRequest += 1;
+      panel.open = false;
+      elements.legacyNotesList.replaceChildren();
+    }
+    panel.hidden = !archiveDocId;
+  }
+
+  async function showLegacyArchive() {
+    const docId = archiveDocId;
+    if (!docId || !elements.legacyNotes.open) return;
+    const request = ++archiveRequest;
+    const list = elements.legacyNotesList;
+    list.textContent = 'Buscando notas antiguas…';
+    try {
+      const data = await api(`/api/notes/legacy?doc_id=${encodeURIComponent(docId)}`);
+      if (request !== archiveRequest) return;
+      list.replaceChildren();
+      for (const note of data.items || []) {
+        const row = documentRoot.createElement('div');
+        row.className = 'note-row';
+        const text = documentRoot.createElement('p');
+        text.textContent = note.text;
+        row.append(text);
+        if (note.quote) {
+          const quote = documentRoot.createElement('p');
+          quote.className = 'note-quote';
+          quote.textContent = note.quote;
+          row.append(quote);
+        }
+        if (note.can_copy) {
+          const copy = documentRoot.createElement('button');
+          Object.assign(copy, { type: 'button', textContent: 'Copiar a este documento' });
+          copy.addEventListener('click', () => copyLegacyNote(docId, note.note_id));
+          row.append(copy);
+        } else {
+          const info = documentRoot.createElement('p');
+          info.className = 'upload-info';
+          info.textContent = 'La cita no coincide con un bloque de este documento.';
+          row.append(info);
+        }
+        list.append(row);
+      }
+      if (!list.childElementCount) list.textContent = 'Sin notas pendientes para este título.';
+    } catch (error) {
+      if (request === archiveRequest) list.textContent = `No pude abrir las notas antiguas. ${error.message}`;
+    }
+  }
+
+  async function copyLegacyNote(docId, noteId) {
+    const status = getStatus();
+    const title = status?.title || 'el documento';
+    const filePath = status?.main_document?.source_type === 'file' ? status.main_document.source_path : '';
+    const accepted = dialog
+      ? await dialog.confirm({
+          title: `¿Copiar la nota a «${title}»?`,
+          message: filePath
+            ? `Confirmá que la nota corresponde a ${filePath}.`
+            : 'Confirmá que la nota corresponde al archivo abierto.',
+          acceptLabel: 'Copiar nota'
+        })
+      : confirm('¿La nota corresponde al archivo abierto?');
+    if (!accepted || docId !== archiveDocId) return;
+    try {
+      await api('/api/notes/legacy/copy', { doc_id: docId, note_id: noteId });
+      await refresh();
+      await showLegacyArchive();
+      log('Nota copiada al documento.');
+    } catch (error) { log(`No pude copiar la nota. ${error.message}`); }
+  }
+
+  elements.legacyNotes?.addEventListener('toggle', showLegacyArchive);
+
   function reference(note) {
     if (String(note && note.source_kind || '').toLowerCase() === 'laboratory') {
       return `L${Number(note && note.anchor_number || 1)}`;
@@ -79,6 +160,7 @@ export function createNotesController({ api, elements, beginBusyLease, busyContr
 
   async function refresh() {
     const status = getStatus();
+    syncLegacyArchive(status);
     if (!status) {
       state = { docId: '', current: 0, items: [] };
       elements.notesSummary.textContent = 'Notas del documento';

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import html
 import codecs
+import hashlib
+import unicodedata
 import io
 import csv
 import functools
@@ -23,6 +25,9 @@ from PIL import Image, ImageFilter, ImageOps
 
 from .config import environment_value
 from .owned_subprocess import CancelSignal, OwnedProcessError, run_owned
+
+
+IMPORTED_TEXTS_DIRECTORY = "imported_texts"
 
 
 _conversion_cancel: ContextVar[CancelSignal | None] = ContextVar("document_conversion_cancel", default=None)
@@ -248,6 +253,16 @@ def safe_filename(filename: str) -> str:
 def doc_id_for_filename(filename: str) -> str:
     stem = Path(filename).stem or "documento"
     return re.sub(r"[^\w.-]+", "_", stem, flags=re.UNICODE).strip("._") or "documento"
+
+
+def converted_document_id(legacy_id: str, title: str, source_type: str, text: str, raw_text: str) -> str:
+    digest = hashlib.sha256()
+    for field in (title, source_type, text, raw_text):
+        data = field.encode("utf-8")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    stem = legacy_id[:96].encode("utf-8")[:200].decode("utf-8", errors="ignore")
+    return f"{stem}-{digest.hexdigest()[:24]}"
 
 
 def suffix_from_mime(mime: str) -> str:
@@ -536,29 +551,50 @@ def pdf_raster_pages(path: Path) -> set[int] | None:
     return pages
 
 
-def merge_pdf_raster_text(digital: str, recognized: str) -> str:
-    """Keep exact digital lines and add only OCR lines that bring new text."""
+def merge_pdf_raster_text(digital: str, recognized: str) -> tuple[str, bool]:
+    """Insert scanned lines between shared anchors, preserving the digital spelling."""
 
-    def key(line: str) -> str:
-        return "".join(char for char in line.casefold() if char.isalnum())
-
-    digital_lines = [key(line) for line in digital.splitlines() if line.strip()]
-    additions = []
-    for line in recognized.splitlines():
-        normalized = key(line)
-        if not normalized or any(
-            normalized == existing
-            or (
-                8 <= len(normalized) <= 240
-                and 8 <= len(existing) <= 240
-                and SequenceMatcher(None, normalized, existing).ratio() >= 0.85
+    def anchors(lines: list[str]) -> list[tuple[int, str]]:
+        return [
+            (
+                index,
+                " ".join(
+                    "".join(
+                        ch for ch in unicodedata.normalize("NFKD", line.casefold()) if not unicodedata.combining(ch)
+                    ).split()
+                ),
             )
-            for existing in digital_lines
-        ):
-            continue
-        additions.append(line)
-    extra = "\n".join(additions).strip()
-    return digital.rstrip() + "\n\n" + extra if meaningful_chars(extra) >= 8 else digital
+            for index, line in enumerate(lines)
+            if meaningful_chars(line)
+        ]
+
+    native_lines = digital.strip("\n").splitlines()
+    scanned_lines = recognized.splitlines()
+    native = anchors(native_lines)
+    scanned = anchors(scanned_lines)
+    matcher = SequenceMatcher(None, [key for _, key in native], [key for _, key in scanned])
+    output: list[str] = []
+    native_start = scanned_start = additions = 0
+    ordered = True
+    pairs = [
+        (native[group.a + offset][0], scanned[group.b + offset][0])
+        for group in matcher.get_matching_blocks()
+        for offset in range(group.size)
+    ]
+    pairs.append((len(native_lines), len(scanned_lines)))
+    for native_end, scanned_end in pairs:
+        native_gap = native_lines[native_start:native_end]
+        scanned_gap = scanned_lines[scanned_start:scanned_end]
+        extra = meaningful_chars(" ".join(scanned_gap))
+        output.extend(native_gap)
+        if extra:
+            output.extend(scanned_gap)
+            additions += extra
+            if any(meaningful_chars(line) for line in native_gap):
+                ordered = False
+        output.extend(native_lines[native_end : native_end + 1])
+        native_start, scanned_start = native_end + 1, scanned_end + 1
+    return ("\n".join(output).strip(), ordered) if additions else (digital, True)
 
 
 def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = None) -> tuple[str, str, str]:
@@ -605,16 +641,19 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
             }
             used_ocr = False
             unverified = []
+            unordered = []
             for page in missing:
                 recognized = found.get(page, "")
                 digital = pages[page - 1]
-                if page in raster_pages and meaningful_chars(digital) >= 40:
-                    merged = merge_pdf_raster_text(digital, recognized)
+                if page in raster_pages and meaningful_chars(digital):
+                    merged, ordered = merge_pdf_raster_text(digital, recognized)
                     if merged == digital:
                         unverified.append(str(page))
                     else:
                         pages[page - 1] = merged
                         used_ocr = True
+                        if not ordered:
+                            unordered.append(str(page))
                 elif meaningful_chars(recognized) > meaningful_chars(digital):
                     pages[page - 1] = recognized
                     used_ocr = True
@@ -628,6 +667,8 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
                 detail += f". Sin texto legible en las páginas {', '.join(unresolved)}"
             if unverified:
                 detail += f". OCR sin texto adicional verificable en las páginas {', '.join(unverified)}"
+            if unordered:
+                detail += f". Orden del OCR pendiente de revisión en las páginas {', '.join(unordered)}"
             raw_marked = mark_pdf_pages("\f".join(pages), clean=False)
             return clean_pdf_text(raw_marked), detail + inspection_warning, raw_marked
         report_progress(progress, "converted", 1, 1, "PDF con texto interno listo.")

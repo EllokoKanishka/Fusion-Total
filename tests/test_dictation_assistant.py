@@ -470,7 +470,7 @@ class DictationAssistantTests(unittest.TestCase):
                 self.assertEqual(context.warm_dictation_model()["state"], "ready")
                 self.assertEqual(context.warm_dictation_model()["state"], "ready")
                 self.assertEqual(provider.preload_calls, 1)
-                context._dictation_model_warm["ready_until_ts"] = 0
+                context._dictation_model_warm["local"]["ready_until_ts"] = 0
                 self.assertEqual(context.dictation_model_warm_status()["state"], "cold")
 
     def test_local14b_catalog_persistence_and_warmup_isolation(self) -> None:
@@ -478,11 +478,13 @@ class DictationAssistantTests(unittest.TestCase):
             def __init__(self, model: str) -> None:
                 super().__init__("{}")
                 self.default_model = model
+                self.preload_calls = []
 
             def health(self) -> dict:
                 return {"ok": True, "provider": "ollama", "model": self.default_model, "model_present": True}
 
             def preload_model(self, model: str = "", *, keep_alive="10m") -> dict:
+                self.preload_calls.append(model)
                 return {"ok": True, "model": model, "duration_ms": 100, "load_duration_ms": 80}
 
         local4b = DummyProvider("qwen3:4b")
@@ -522,10 +524,15 @@ class DictationAssistantTests(unittest.TestCase):
                 self.assertEqual(warmed["state"], "ready")
                 self.assertEqual(warmed["model"], "qwen3:14b-q8_0")
 
-                app.set_dictation_assistant("local")
-                warmed_4b = context.warm_dictation_model()
+                self.assertEqual(context.warm_dictation_model("local", "qwen3:14b-q8_0")["state"], "error")
+                warmed_4b = context.warm_dictation_model("local", "qwen3:4b")
                 self.assertEqual(warmed_4b["state"], "ready")
                 self.assertEqual(warmed_4b["model"], "qwen3:4b")
+                self.assertEqual(local4b.preload_calls, ["qwen3:4b"])
+                self.assertEqual(local14b.preload_calls, ["qwen3:14b-q8_0"])
+                self.assertEqual(context.dictation_model_warm_status("local")["model"], "qwen3:4b")
+                self.assertEqual(context.dictation_model_warm_status("local14b")["model"], "qwen3:14b-q8_0")
+                self.assertEqual(app.dictation_assistant_status()["selected"], "local14b")
 
 
 if __name__ == "__main__":

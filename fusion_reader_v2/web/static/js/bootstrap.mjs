@@ -1192,7 +1192,7 @@ async function loadFile(file) {
     const data = await pollImportJob(started.job_id);
     renderStatus(data);
     const convertedKb = data.converted_bytes ? ` Texto convertido: ${Math.max(1, Math.round(data.converted_bytes / 1024))} KB.` : '';
-    els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}${data.notes_recovery_warning ? ' ' + data.notes_recovery_warning : ''}`;
+    els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
     setReferenceMode(false);
     if (data.role !== 'reference' && els.autoReadToggle.checked) {
       log('Texto cargado. Generando voz del primer bloque...');

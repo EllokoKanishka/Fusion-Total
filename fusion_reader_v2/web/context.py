@@ -10,6 +10,7 @@ from pathlib import Path
 from fusion_reader_v2 import FusionReaderV2
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.domain.jobs import JobRegistry
+from fusion_reader_v2.documents import IMPORTED_TEXTS_DIRECTORY
 from fusion_reader_v2.pdf_to_docx import JobStatus
 from fusion_reader_v2.services.media import MediaProcessingService
 from fusion_reader_v2.version import __version__
@@ -37,7 +38,7 @@ class WebContext:
     _dictation_model_cancel: threading.Event = field(default_factory=threading.Event, init=False)
     _dictation_model_job: dict = field(default_factory=dict, init=False)
     _dictation_model_warm_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-    _dictation_model_warm: dict = field(default_factory=dict, init=False)
+    _dictation_model_warm: dict[str, dict] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         limits = self.settings.limits
@@ -99,7 +100,7 @@ class WebContext:
 
     @property
     def converted_root(self) -> Path:
-        return self.settings.paths.runtime / "imported_texts"
+        return self.settings.paths.runtime / IMPORTED_TEXTS_DIRECTORY
 
     @property
     def upload_root(self) -> Path:
@@ -182,12 +183,13 @@ class WebContext:
         with self._dictation_model_lock:
             return dict(self._dictation_model_job or {"state": "idle", "terminal": True})
 
-    def dictation_model_warm_status(self) -> dict:
+    def dictation_model_warm_status(self, provider_id: str = "") -> dict:
+        assistant = self.app.dictation_assistant
+        selected = provider_id or str(getattr(assistant, "selected", "rules") or "rules")
+        provider = getattr(assistant, "providers", {}).get(selected)
         with self._dictation_model_lock:
-            status = dict(self._dictation_model_warm or {"state": "cold", "terminal": True})
+            status = dict(self._dictation_model_warm.get(selected, {"state": "cold", "terminal": True}))
         if status.get("state") == "ready":
-            assistant = self.app.dictation_assistant
-            provider = getattr(assistant, "providers", {}).get(getattr(assistant, "selected", "rules"))
             health = dict(provider.health() or {}) if provider is not None else {}
             if (
                 float(status.get("ready_until_ts") or 0) <= time.time()
@@ -197,14 +199,21 @@ class WebContext:
                 return {"state": "cold", "terminal": True, "model": status.get("model", "")}
         return status
 
-    def warm_dictation_model(self) -> dict:
+    def warm_dictation_model(self, provider_id: str = "", expected_model: str = "") -> dict:
         assistant = self.app.dictation_assistant
-        selected = str(getattr(assistant, "selected", "rules") or "rules")
+        selected = provider_id or str(getattr(assistant, "selected", "rules") or "rules")
         providers = getattr(assistant, "providers", {})
-        if selected not in providers:
+        if selected == "rules" and not provider_id:
             return {"ok": True, "state": "not_required", "terminal": True}
         provider = providers.get(selected)
         model = str(getattr(provider, "default_model", "") or "").strip()
+        if expected_model and model != expected_model:
+            return {
+                "ok": False,
+                "state": "error",
+                "terminal": True,
+                "detail": "El modelo cambió. Revisá la selección antes de prepararlo.",
+            }
         preload = getattr(provider, "preload_model", None)
         if provider is None or not model or not callable(preload):
             return {
@@ -224,7 +233,7 @@ class WebContext:
                 "detail": "El modelo local no está instalado o Ollama no responde.",
             }
         with self._dictation_model_warm_lock:
-            current = self.dictation_model_warm_status()
+            current = self.dictation_model_warm_status(selected)
             if (
                 current.get("state") == "ready"
                 and current.get("model") == model
@@ -232,13 +241,14 @@ class WebContext:
             ):
                 return {"ok": True, **current}
             with self._dictation_model_lock:
-                self._dictation_model_warm = {
+                self._dictation_model_warm[selected] = {
                     "ok": True,
                     "state": "loading",
                     "terminal": False,
                     "model": model,
+                    "provider": selected,
                 }
-            result = dict(preload(model, keep_alive="10m") or {})
+            result = {**dict(preload(model, keep_alive="10m") or {}), "model": model, "provider": selected}
             if result.get("ok"):
                 result.update(
                     {
@@ -250,7 +260,7 @@ class WebContext:
             else:
                 result.update({"ok": False, "state": "error", "terminal": True})
             with self._dictation_model_lock:
-                self._dictation_model_warm = result
+                self._dictation_model_warm[selected] = result
             return dict(result)
 
     def _run_dictation_model_install(self, provider, model: str) -> None:

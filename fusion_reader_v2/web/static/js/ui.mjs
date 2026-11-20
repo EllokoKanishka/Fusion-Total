@@ -13,7 +13,7 @@ const ELEMENT_IDS = [
   'prepareBtn', 'cancelPrepareBtn', 'clearDocBtn', 'prepareInfo', 'prepareProgress', 'audioExportMode',
   'audioExportBlockWrap', 'audioExportBlockInput', 'audioExportRangeWrap', 'audioExportStartInput',
   'audioExportEndInput', 'audioExportBtn', 'audioExportCancelBtn', 'audioExportInfo',
-  'audioExportDownload', 'notesSummary', 'noteInput', 'saveNoteBtn', 'notesInfo', 'notesList',
+  'audioExportDownload', 'notesSummary', 'noteInput', 'saveNoteBtn', 'notesInfo', 'notesList', 'legacyNotes', 'legacyNotesList',
   'docTitle', 'docMeta', 'chunk', 'ttsChip', 'ttsDot', 'ttsStatus', 'sttChip', 'sttDot', 'sttStatus',
   'log', 'player', 'readerPlayerToggleBtn', 'readerPlayerSeek', 'readerPlayerTime', 'prevBtn', 'readBtn', 'repeatBtn', 'nextBtn', 'jumpInput', 'jumpBtn',
   'continuousToggle', 'readerPlaybackRate', 'readerPlaybackRateValue', 'readingHighlightStatus', 'readingHighlightColor', 'chatLog', 'chatInput', 'sendChatBtn', 'clearLabHistoryBtn', 'reasoningNormalBtn',

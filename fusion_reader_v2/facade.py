@@ -29,6 +29,7 @@ from .audio_export import (
 )
 from .conversation import ConversationCore
 from .dialogue import STTProvider, default_stt_provider
+from .documents import IMPORTED_TEXTS_DIRECTORY, converted_document_id, doc_id_for_filename
 from .dictation import interpret_dictation_transcript
 from .dictation_assistant import REVIEW_MAX_CHARS, REVIEW_MAX_REQUEST_CHARS, REVIEW_MAX_REQUESTS, DictationAssistant
 from .metrics import VoiceMetric, VoiceMetricsStore
@@ -902,32 +903,13 @@ class FusionReaderV2:
     def load_file(self, path: str | Path, prefetch: bool = True) -> dict:
         p = Path(path).resolve()
         text = p.read_text(encoding="utf-8")
-        doc_id = self._library_file_id(p)
-        legacy = (
-            self._main_document_record() if self._main_source_path == str(p) else self._reference_documents.get(p.stem)
+        return self.load_text(
+            self._library_file_id(p), p.name, text, prefetch=prefetch, source_path=str(p), source_type="file"
         )
-        result = self.load_text(doc_id, p.name, text, prefetch=prefetch, source_path=str(p), source_type="file")
-        if (
-            legacy
-            and legacy["doc_id"] == p.stem
-            and legacy["source_type"] == "file"
-            and legacy["source_path"] == str(p)
-            and legacy["text"] == text
-        ):
-            self.recover_document_notes(p.stem, doc_id, p.name, text, result)
-            result["notes"] = self._notes_service.summary()
-        return result
 
     @staticmethod
     def _library_file_id(path: Path) -> str:
         return "file-" + hashlib.sha256(os.fsencode(path)).hexdigest()[:24]
-
-    def recover_document_notes(self, legacy_id: str, doc_id: str, title: str, text: str, result: dict) -> None:
-        document = Document.from_text(doc_id, title, text)
-        try:
-            self.notes.recover_document_notes(legacy_id, doc_id, document.title, document.chunks)
-        except (OSError, ValueError):
-            result["notes_recovery_warning"] = "No se pudieron recuperar las notas anteriores."
 
     @_document_transition
     def add_reference_text(
@@ -3456,10 +3438,53 @@ class FusionReaderV2:
         return clipped.rstrip(",;:") + "."
 
     def notes_summary(self) -> dict:
-        return self._notes_service.summary()
+        result = self._notes_service.summary()
+        archive = self._legacy_note_source(str(self.session.status().get("doc_id") or ""))
+        if archive and self.notes.has_saved_notes(archive[1]):
+            result["legacy_archive_available"] = True
+        return result
 
     def list_notes(self, doc_id: str = "", chunk_index: int | None = None, current_only: bool = False) -> dict:
         return self._notes_service.list(doc_id, chunk_index, current_only)
+
+    def _legacy_note_source(self, doc_id: str) -> tuple[Document, str] | None:
+        document = self.session.document
+        if not document or document.doc_id != doc_id or not self._main_source_path:
+            return None
+        path = Path(self._main_source_path)
+        if (
+            self._main_source_type == "file"
+            and document.title == path.name
+            and re.fullmatch(r"file-[a-f0-9]{24}", doc_id)
+        ):
+            legacy_id = path.stem
+        elif path.parent.name == IMPORTED_TEXTS_DIRECTORY:
+            legacy_id = doc_id_for_filename(document.title)
+            if path.name not in {f"{doc_id}.txt", f"{legacy_id}.txt"}:
+                return None
+        else:
+            return None
+        return (document, legacy_id) if legacy_id != doc_id else None
+
+    @_document_transition
+    def list_legacy_notes(self, doc_id: str) -> dict:
+        archive = self._legacy_note_source(doc_id)
+        if not archive:
+            return {"ok": True, "items": []}
+        document, legacy_id = archive
+        return {"ok": True, "items": self.notes.legacy_notes(legacy_id, doc_id, document.title, document.chunks)}
+
+    @_document_transition
+    def copy_legacy_note(self, doc_id: str, note_id: str) -> dict:
+        archive = self._legacy_note_source(doc_id)
+        if not archive or not note_id:
+            return {"ok": False, "error": "legacy_note_document_changed"}
+        document, legacy_id = archive
+        try:
+            self.notes.copy_legacy_note(legacy_id, doc_id, document.title, document.chunks, note_id)
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
 
     def create_note(self, text: str, chunk_index: int | None = None) -> dict:
         return self._notes_service.create(text, chunk_index)
@@ -3551,6 +3576,46 @@ class FusionReaderV2:
 
     def _restore_session_state(self) -> None:
         self._persistence_service.restore()
+        document = self.session.document
+        if document:
+            document.doc_id = self._restored_file_identity(
+                document.doc_id, document.title, document.text, self._main_source_path, self._main_source_type
+            )
+        for previous_id, record in tuple(self._reference_documents.items()):
+            stable_id = self._restored_file_identity(
+                previous_id, record["title"], record["text"], record["source_path"], record["source_type"]
+            )
+            if stable_id != previous_id:
+                del self._reference_documents[previous_id]
+                if not document or stable_id != document.doc_id:
+                    self._reference_documents.setdefault(stable_id, {**record, "doc_id": stable_id})
+
+    def _restored_file_identity(self, doc_id: str, title: str, text: str, source_path: str, source_type: str) -> str:
+        if not source_path:
+            return doc_id
+        path = Path(source_path)
+        if source_type == "file" and title == path.name and doc_id == path.stem:
+            try:
+                return self._library_file_id(path.resolve())
+            except (OSError, RuntimeError):
+                return self._library_file_id(path.absolute())
+        if (
+            path.parent.name != IMPORTED_TEXTS_DIRECTORY
+            or path.name != f"{doc_id}.txt"
+            or doc_id != doc_id_for_filename(title)
+        ):
+            return doc_id
+        raw = ""
+        # The raw file is usable only if the conversion still describes this snapshot.
+        try:
+            with path.open(encoding="utf-8") as handle:
+                same_text = handle.read(len(text) + 1) == text
+            raw_path = path.with_suffix(".raw.txt")
+            if same_text and raw_path.is_file() and raw_path.stat().st_size <= 32 * 1024 * 1024:
+                raw = raw_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            pass
+        return converted_document_id(doc_id, title, source_type, text, raw)
 
     def _extract_note_command(self, text: str) -> str:
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split())

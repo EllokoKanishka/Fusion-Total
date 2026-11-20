@@ -85,6 +85,10 @@ def main() -> None:
         }
     )
     settings = replace(settings, ports=replace(settings.ports, api=0))
+    library = settings.paths.library
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "apuntes.txt").write_text("Una consigna para revisar.", encoding="utf-8")
+    app.notes.add("apuntes", "apuntes.txt", 0, "Nota anterior de prueba", quote="Una consigna para revisar.")
     server = create_http_server(app, settings)
 
     def stop(_signum: int, _frame: object) -> None:

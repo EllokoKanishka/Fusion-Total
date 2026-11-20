@@ -45,6 +45,8 @@ class TextFidelityTests(unittest.TestCase):
             header = "Encabezado digital de la segunda pagina con mas de cuarenta caracteres."
             pdf.drawString(40, 800, header)
             pdf.drawImage(str(root / "part.png"), 30, 620, width=530, height=130)
+            footer = "Cierre digital de la consigna."
+            pdf.drawString(40, 540, footer)
             pdf.showPage()
             pdf.showPage()
             pdf.save()
@@ -52,7 +54,9 @@ class TextFidelityTests(unittest.TestCase):
             self.assertIn("Primera pagina", text)
             self.assertIn("[Pagina 2]", text)
             self.assertIn(header, text)
-            self.assertIn("SEGUNDA PAGINA ESCANEADA", text.upper())
+            for layer in (text, raw):
+                self.assertLess(layer.index(header), layer.upper().index("SEGUNDA PAGINA ESCANEADA"))
+                self.assertLess(layer.upper().index("SEGUNDA PAGINA ESCANEADA"), layer.index(footer))
             self.assertIn("páginas 3", detail)
             self.assertIn("[Pagina 2]", raw)
 

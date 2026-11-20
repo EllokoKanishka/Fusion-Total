@@ -156,6 +156,7 @@ class ReaderNotesStore:
         self._blocked: set[Path] = set()
         self._legacy_review: set[str] = set()
         self._recovered_note_sources: dict[str, set[str]] = {}
+        self._confirmed_note_copies: dict[str, set[str]] = {}
 
     @property
     def warnings(self) -> tuple[PersistenceWarning, ...]:
@@ -174,6 +175,8 @@ class ReaderNotesStore:
     def list(self, doc_id: str, chunk_index: int | None = None) -> list[dict]:
         with self._lock:
             notes = self._read_notes(doc_id)
+            pending = self._pending_note_copies(doc_id)
+            notes = [note for note in notes if note.note_id not in pending]
         if chunk_index is not None:
             wanted = int(chunk_index)
             notes = [note for note in notes if note.chunk_index == wanted]
@@ -271,28 +274,72 @@ class ReaderNotesStore:
             self._write_notes(doc_id, remaining)
         return {"ok": True, "note_id": note_id, "deleted": True}
 
-    def recover_document_notes(self, legacy_id: str, doc_id: str, title: str, chunks: List[str]) -> None:
-        """Copy verified anchors once, retaining the original legacy file."""
-        if legacy_id == doc_id:
-            return
+    def has_saved_notes(self, doc_id: str) -> bool:
+        return self._path(doc_id).is_file() or (self.root / f"{safe_doc_id(doc_id)}.json").is_file()
+
+    def _pending_note_copies(self, doc_id: str) -> set[str]:
+        confirmed = self._confirmed_note_copies.get(doc_id, set())
+        return {
+            note.note_id
+            for source in self._recovered_note_sources.get(doc_id, ())
+            if source != doc_id
+            for note in self._read_notes(source)
+            if note.note_id not in confirmed
+        }
+
+    def legacy_notes(self, legacy_id: str, doc_id: str, title: str, chunks: List[str]) -> List[dict]:
         with self._lock:
-            current = self._read_notes(doc_id)
-            recovered_from = self._recovered_note_sources.get(doc_id, set())
-            if legacy_id in recovered_from:
-                return
-            existing = {note.note_id for note in current}
-            matching = [
-                replace(note, doc_id=doc_id)
+            current = {note.note_id: note for note in self._read_notes(doc_id)}
+            pending = self._pending_note_copies(doc_id)
+            candidates = [
+                current.get(note.note_id, note)
                 for note in self._read_notes(legacy_id)
-                if note.note_id not in existing
-                and note.source_kind == "document"
+                if note.source_kind == "document"
                 and note.title == title
-                and note.quote
-                and note.chunk_index < len(chunks)
-                and note.quote == chunks[note.chunk_index].strip()
+                and (note.note_id not in current or note.note_id in pending)
             ]
-            if matching:
-                self._write_notes(doc_id, current + matching, recovered_from | {legacy_id})
+            return [
+                {**note.to_dict(), "can_copy": self._legacy_anchor(note, chunks) is not None} for note in candidates
+            ]
+
+    @staticmethod
+    def _legacy_anchor(note: ReaderNote, chunks: List[str]) -> int | None:
+        if not note.quote:
+            return None
+        if note.chunk_index < len(chunks) and note.quote == chunks[note.chunk_index].strip():
+            return note.chunk_index
+        matches = [index for index, chunk in enumerate(chunks) if chunk.strip() == note.quote]
+        return matches[0] if len(matches) == 1 else None
+
+    def copy_legacy_note(self, legacy_id: str, doc_id: str, title: str, chunks: List[str], note_id: str) -> None:
+        with self._lock:
+            notes = self._read_notes(doc_id)
+            existing = next((note for note in notes if note.note_id == note_id), None)
+            pending = self._pending_note_copies(doc_id)
+            if existing and note_id not in pending:
+                return
+            original = next(
+                (
+                    note
+                    for note in self._read_notes(legacy_id)
+                    if note.note_id == note_id and note.source_kind == "document" and note.title == title
+                ),
+                None,
+            )
+            source = (existing or original) if original else None
+            anchor = self._legacy_anchor(source, chunks) if source else None
+            if source is None or anchor is None:
+                raise ValueError("legacy_note_anchor_unavailable")
+            verified = replace(
+                source,
+                doc_id=doc_id,
+                chunk_index=anchor,
+                chunk_number=anchor + 1,
+                anchor_number=anchor + 1,
+            )
+            updated = [note for note in notes if note.note_id != note_id]
+            confirmed = self._confirmed_note_copies.get(doc_id, set())
+            self._write_notes(doc_id, updated + [verified], confirmed | {note_id})
 
     def _path(self, doc_id: str) -> Path:
         digest = hashlib.sha256(str(doc_id or "").encode("utf-8")).hexdigest()
@@ -304,6 +351,7 @@ class ReaderNotesStore:
     def _read_notes(self, doc_id: str) -> List[ReaderNote]:
         selected = str(doc_id or "")
         self._recovered_note_sources.pop(selected, None)
+        self._confirmed_note_copies.pop(selected, None)
         canonical = self._path(selected)
         legacy = self.root / f"{safe_doc_id(selected)}.json"
         path = canonical if canonical.exists() else legacy
@@ -345,9 +393,14 @@ class ReaderNotesStore:
             preserve("notes_state_requires_review")
             return []
         if not is_legacy and isinstance(raw, dict):
+            copies = raw.get("confirmed_note_copies")
+            if isinstance(copies, list):
+                self._confirmed_note_copies[selected] = {note_id for note_id in copies if isinstance(note_id, str)}
             sources = raw.get("recovered_from")
             if isinstance(sources, list):
                 self._recovered_note_sources[selected] = {source for source in sources if isinstance(source, str)}
+                if self._recovered_note_sources[selected]:
+                    self._warn(selected, "legacy_note_assignment_needs_review", canonical)
         notes = []
         for index, item in enumerate(items):
             if not isinstance(item, dict):
@@ -386,14 +439,17 @@ class ReaderNotesStore:
             notes.append(note)
         return notes
 
-    def _write_notes(self, doc_id: str, notes: List[ReaderNote], recovered_from: set[str] | None = None) -> None:
+    def _write_notes(self, doc_id: str, notes: List[ReaderNote], confirmed: set[str] | None = None) -> None:
         if self._path(doc_id) in self._blocked:
             raise ValueError("notes_state_requires_review")
         payload: dict = {"doc_id": str(doc_id or ""), "notes": [note.to_dict() for note in notes]}
         if str(doc_id or "") in self._legacy_review:
             payload["legacy_review_required"] = True
-        if recovered_from is None:
-            recovered_from = self._recovered_note_sources.get(doc_id)
+        recovered_from = self._recovered_note_sources.get(doc_id)
         if recovered_from:
             payload["recovered_from"] = sorted(recovered_from)
+        if confirmed is None:
+            confirmed = self._confirmed_note_copies.get(doc_id)
+        if confirmed:
+            payload["confirmed_note_copies"] = sorted(confirmed)
         self._store(doc_id).write(payload)

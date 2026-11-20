@@ -99,7 +99,7 @@ def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
         out["installation"] = status()
     warm_status = getattr(getattr(responder, "context", None), "dictation_model_warm_status", None)
     if callable(warm_status):
-        out["warmup"] = warm_status()
+        out["warmup"] = warm_status(str(out.get("selected") or ""))
     return out
 
 
@@ -151,11 +151,15 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
             responder._send(200, "application/pdf", raw)
         return True
     if path == "/api/dictation/assistant/warm":
+        provider = payload.get("provider")
+        model = payload.get("model")
+        if provider not in ("local", "local14b") or not isinstance(model, str) or not model.strip():
+            raise ValueError("invalid_dictation_warm_selection")
         warm = getattr(getattr(responder, "context", None), "warm_dictation_model", None)
         if not callable(warm):
             result = {"ok": False, "error": "warmup_unavailable", "detail": "Precarga local no disponible."}
         else:
-            result = dict(warm() or {})
+            result = dict(warm(provider, model) or {})
         responder._json(200 if result.get("ok") else 503, result)
         return True
     if path == "/api/dictation/assistant/install":
