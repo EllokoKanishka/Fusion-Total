@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -20,12 +21,13 @@ from fusion_reader_v2.reader import chunk_index_for_offset, split_text
 from fusion_reader_v2.transcript_correction import validate_conservative_correction
 from fusion_reader_v2.transcript_correction import OllamaTranscriptCorrector
 from fusion_reader_v2.web.routes.documents import load_imported_document
+from fusion_reader_v2.web.routes.dictation import _dictation_pdf
 from tests.helpers import managed_test_app
 
 
 class TextFidelityTests(unittest.TestCase):
     @unittest.skipUnless(
-        all(shutil.which(tool) for tool in ("pdftotext", "pdftoppm", "tesseract")),
+        all(shutil.which(tool) for tool in ("pdftotext", "pdfimages", "pdftoppm", "tesseract")),
         "requires local PDF and OCR tools",
     )
     def test_hybrid_pdf_keeps_scanned_pages_and_reports_empty_ones(self):
@@ -40,6 +42,8 @@ class TextFidelityTests(unittest.TestCase):
             pdf = Canvas(str(document))
             pdf.drawString(40, 760, "Primera pagina del ejemplo con contenido digital suficiente para conservar.")
             pdf.showPage()
+            header = "Encabezado digital de la segunda pagina con mas de cuarenta caracteres."
+            pdf.drawString(40, 800, header)
             pdf.drawImage(str(root / "part.png"), 30, 620, width=530, height=130)
             pdf.showPage()
             pdf.showPage()
@@ -47,9 +51,29 @@ class TextFidelityTests(unittest.TestCase):
             text, detail, raw = documents.pdf_to_text(document.name, document)
             self.assertIn("Primera pagina", text)
             self.assertIn("[Pagina 2]", text)
-            self.assertIn("SEGUNDA PAGINA", text.upper())
+            self.assertIn(header, text)
+            self.assertIn("SEGUNDA PAGINA ESCANEADA", text.upper())
             self.assertIn("páginas 3", detail)
             self.assertIn("[Pagina 2]", raw)
+
+    @unittest.skipUnless(shutil.which("pdftotext"), "requires Poppler")
+    def test_dictation_pdf_preserves_greek_and_cyrillic_without_system_fonts(self):
+        text = "El λόγος y la palabra философия."
+        exists = Path.exists
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(Path, "exists", lambda path: not str(path).startswith("/usr/share/fonts/") and exists(path)),
+        ):
+            path = Path(tmp) / "dictado.pdf"
+            path.write_bytes(_dictation_pdf("Dictado", text, False))
+            result = subprocess.run(
+                ["pdftotext", str(path), "-"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        self.assertIn(text, result.stdout)
 
     def test_valid_docx_directory_entries_are_not_rejected(self):
         output = io.BytesIO()

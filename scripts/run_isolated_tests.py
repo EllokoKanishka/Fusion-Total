@@ -68,6 +68,14 @@ def guard(event, args):
             or (argv[0] == sys.executable and len(argv) >= 3 and argv[1] == "-c" and argv[2] in CHILD_CODES)
             or name in {"git", "ffmpeg", "ffprobe", "bash", "node", "pdfinfo", "systemd-analyze"}
             or (
+                name in {"pdftotext", "pdfimages", "pdftoppm", "tesseract"}
+                and all(
+                    not Path(arg).is_absolute() or Path(arg).resolve().is_relative_to(TMP)
+                    for arg in argv[1:]
+                    if isinstance(arg, str)
+                )
+            )
+            or (
                 str(CODE / "scripts/open_fusion_reader.sh") == argv[0]
                 or str(CODE / "scripts/start_pandafusion_systemd.sh") == argv[0]
             )
@@ -101,6 +109,7 @@ def guard(event, args):
 
 CHILD_CODES = set()
 for filename in (
+    "tests/integration/test_import_lifecycle.py",
     "tests/unit/test_shutdown_safety.py",
     "tests/unit/test_owned_subprocess.py",
     "tests/unit/test_desktop_lifetime.py",

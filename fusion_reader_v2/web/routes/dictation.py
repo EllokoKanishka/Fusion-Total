@@ -106,7 +106,11 @@ def _assistant_status(responder: DictationResponder, payload: dict) -> dict:
 def handle_dictation_get(responder: DictationResponder, path: str) -> bool:
     if path != "/api/dictation/assistant":
         return False
-    responder._json(200, _assistant_status(responder, responder.app.dictation_assistant_status()))
+    provider = (parse_qs(urlparse(responder.path).query).get("provider") or [""])[0]
+    result = (
+        responder.app.dictation_assistant.status(provider) if provider else responder.app.dictation_assistant_status()
+    )
+    responder._json(200, _assistant_status(responder, result))
     return True
 
 
@@ -155,6 +159,10 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
         responder._json(200 if result.get("ok") else 503, result)
         return True
     if path == "/api/dictation/assistant/install":
+        provider = payload.get("provider")
+        model = payload.get("model")
+        if provider not in ("local", "local14b") or not isinstance(model, str) or not model.strip():
+            raise ValueError("invalid_dictation_install_selection")
         install = getattr(getattr(responder, "context", None), "start_dictation_model_install", None)
         if not callable(install):
             responder._json(
@@ -162,7 +170,7 @@ def handle_dictation_post(responder: DictationResponder, path: str, payload: dic
                 {"ok": False, "error": "installer_unavailable", "detail": "Instalador local no disponible."},
             )
         else:
-            result = dict(install() or {})
+            result = dict(install(provider, model) or {})
             responder._json(200 if result.get("ok", True) else 503, result)
         return True
     if path == "/api/dictation/assistant":

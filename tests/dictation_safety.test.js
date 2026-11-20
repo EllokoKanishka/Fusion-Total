@@ -194,20 +194,31 @@ test('storage read failure is visible and never overwrites unreadable stored dat
 });
 
 test('stale windows do not overwrite newer drafts and edited conflicts retain both copies', async () => {
-  const writer = await fixture();
-  const stale = await fixture({ storage: writer.memory });
-  const conflicting = await fixture({ storage: writer.memory });
+  const seed = await fixture();
+  const [key] = seed.values.keys();
+  const history = JSON.parse(seed.values.get(key));
+  for (let index = 0; index < 28; index++) {
+    history.sessions.push({ ...history.sessions[1], id: `old-${index}`, text: `Borrador ${index}` });
+  }
+  seed.values.set(key, JSON.stringify(history));
+  const writer = await fixture({ storage: seed.memory });
+  const stale = await fixture({ storage: seed.memory });
+  const conflicting = await fixture({ storage: seed.memory });
   await writer.edit('Versión más nueva');
   await writer.flushSave();
   stale.controller.close();
-  assert.equal(JSON.parse([...writer.values.values()][0]).sessions[0].text, 'Versión más nueva');
+  assert.equal(JSON.parse(seed.values.get(key)).sessions[0].text, 'Versión más nueva');
   await conflicting.edit('Otra edición');
   await conflicting.flushSave();
-  const saved = JSON.parse([...writer.values.values()][0]);
+  const saved = JSON.parse(seed.values.get(key));
   assert.equal(saved.sessions.find(item => item.id === 'A').text, 'Versión más nueva');
   assert.equal(saved.sessions.find(item => item.id === saved.activeId).text, 'Otra edición');
   assert.match(conflicting.elements.dictationSaveStatus.textContent, /copia/);
-  for (const view of [writer, stale, conflicting]) view.controller.dispose();
+  assert.equal(saved.sessions.length, 31);
+  for (const original of history.sessions.slice(2)) {
+    assert.equal(saved.sessions.find(item => item.id === original.id).text, original.text);
+  }
+  for (const view of [seed, writer, stale, conflicting]) view.controller.dispose();
 });
 
 test('a newer draft schema survives edits and closure in an older window', async () => {

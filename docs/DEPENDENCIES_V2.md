@@ -116,6 +116,8 @@ usa principalmente biblioteca estándar:
 - `pdftotext`
   - `fusion_reader_v2/pdf_to_docx.py`
   - ruta rápida de PDF textual
+- `pdfimages`
+  - detecta páginas con contenido escaneado aunque tengan texto digital
 - `pdfinfo`
   - `fusion_reader_v2/pdf_to_docx.py`
   - conteo de páginas
@@ -421,7 +423,7 @@ python3 -m pip install -r requirements/fusion-reader-v2-optional.txt  # opcional
 
 Límites del manifiesto:
 
-- no instala `curl`, `ffmpeg`, `pdftotext`, `pdfinfo`, `pdftoppm`, `tesseract`,
+- no instala `curl`, `ffmpeg`, `pdftotext`, `pdfimages`, `pdfinfo`, `pdftoppm`, `tesseract`,
   `ss` ni otros binarios del sistema;
 - no instala AllTalk GPU, Docling GPU ni otros entornos dedicados;
 - no reemplaza `verify` ni `smoke`;

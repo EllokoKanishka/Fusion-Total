@@ -7,7 +7,7 @@ import math
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from collections import deque
 from pathlib import Path
 from typing import List
@@ -155,6 +155,7 @@ class ReaderNotesStore:
         self._warnings: deque[tuple[str, PersistenceWarning]] = deque(maxlen=64)
         self._blocked: set[Path] = set()
         self._legacy_review: set[str] = set()
+        self._recovered_note_sources: dict[str, set[str]] = {}
 
     @property
     def warnings(self) -> tuple[PersistenceWarning, ...]:
@@ -270,6 +271,29 @@ class ReaderNotesStore:
             self._write_notes(doc_id, remaining)
         return {"ok": True, "note_id": note_id, "deleted": True}
 
+    def recover_document_notes(self, legacy_id: str, doc_id: str, title: str, chunks: List[str]) -> None:
+        """Copy verified anchors once, retaining the original legacy file."""
+        if legacy_id == doc_id:
+            return
+        with self._lock:
+            current = self._read_notes(doc_id)
+            recovered_from = self._recovered_note_sources.get(doc_id, set())
+            if legacy_id in recovered_from:
+                return
+            existing = {note.note_id for note in current}
+            matching = [
+                replace(note, doc_id=doc_id)
+                for note in self._read_notes(legacy_id)
+                if note.note_id not in existing
+                and note.source_kind == "document"
+                and note.title == title
+                and note.quote
+                and note.chunk_index < len(chunks)
+                and note.quote == chunks[note.chunk_index].strip()
+            ]
+            if matching:
+                self._write_notes(doc_id, current + matching, recovered_from | {legacy_id})
+
     def _path(self, doc_id: str) -> Path:
         digest = hashlib.sha256(str(doc_id or "").encode("utf-8")).hexdigest()
         return self.root / "by-id" / f"{digest}.json"
@@ -279,6 +303,7 @@ class ReaderNotesStore:
 
     def _read_notes(self, doc_id: str) -> List[ReaderNote]:
         selected = str(doc_id or "")
+        self._recovered_note_sources.pop(selected, None)
         canonical = self._path(selected)
         legacy = self.root / f"{safe_doc_id(selected)}.json"
         path = canonical if canonical.exists() else legacy
@@ -319,6 +344,10 @@ class ReaderNotesStore:
         if not isinstance(items, list):
             preserve("notes_state_requires_review")
             return []
+        if not is_legacy and isinstance(raw, dict):
+            sources = raw.get("recovered_from")
+            if isinstance(sources, list):
+                self._recovered_note_sources[selected] = {source for source in sources if isinstance(source, str)}
         notes = []
         for index, item in enumerate(items):
             if not isinstance(item, dict):
@@ -357,10 +386,14 @@ class ReaderNotesStore:
             notes.append(note)
         return notes
 
-    def _write_notes(self, doc_id: str, notes: List[ReaderNote]) -> None:
+    def _write_notes(self, doc_id: str, notes: List[ReaderNote], recovered_from: set[str] | None = None) -> None:
         if self._path(doc_id) in self._blocked:
             raise ValueError("notes_state_requires_review")
         payload: dict = {"doc_id": str(doc_id or ""), "notes": [note.to_dict() for note in notes]}
         if str(doc_id or "") in self._legacy_review:
             payload["legacy_review_required"] = True
+        if recovered_from is None:
+            recovered_from = self._recovered_note_sources.get(doc_id)
+        if recovered_from:
+            payload["recovered_from"] = sorted(recovered_from)
         self._store(doc_id).write(payload)

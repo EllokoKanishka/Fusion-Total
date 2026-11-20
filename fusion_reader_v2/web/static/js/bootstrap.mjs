@@ -1192,7 +1192,7 @@ async function loadFile(file) {
     const data = await pollImportJob(started.job_id);
     renderStatus(data);
     const convertedKb = data.converted_bytes ? ` Texto convertido: ${Math.max(1, Math.round(data.converted_bytes / 1024))} KB.` : '';
-    els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}`;
+    els.uploadInfo.textContent = `${file.name} ${data.role === 'reference' ? 'agregado como consulta' : 'cargado como documento principal'}. ${data.total || 0} bloques listos. ${data.import_detail || ''}.${convertedKb}${data.notes_recovery_warning ? ' ' + data.notes_recovery_warning : ''}`;
     setReferenceMode(false);
     if (data.role !== 'reference' && els.autoReadToggle.checked) {
       log('Texto cargado. Generando voz del primer bloque...');
@@ -1371,7 +1371,10 @@ async function sendChat() {
   }
   try {
     addChatMessage('system', pendingThoughtLabel());
-    const data = await api('/api/chat', { message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice });
+    const data = await api('/api/chat', {
+      message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice,
+      allow_external_research: consumeExternalResearchPermission()
+    });
     const pending = els.chatLog.querySelector('.chat-msg.system:last-child');
     if (pending && /Pensando|Repensando|Respondiendo/.test(pending.textContent)) {
       pending.remove();
@@ -1443,6 +1446,13 @@ async function playDialogueAnswer(data, token = null) {
   }
 }
 
+function consumeExternalResearchPermission() {
+  const control = document.getElementById?.('allowExternalResearch');
+  if (!control?.checked) return false;
+  control.checked = false;
+  return true;
+}
+
 async function sendTypedDialogue(message) {
   if (dialogue.speaking) {
     stopDialoguePlaybackForTypedTurn();
@@ -1456,7 +1466,10 @@ async function sendTypedDialogue(message) {
   const pending = addChatMessage('system', currentReasoningMode() === 'supreme' ? 'Dialogando por voz; Supremo se baja a Pensamiento para no romper latencia...' : 'Dialogando por voz...');
   const startedAt = performance.now();
   try {
-    const data = await api('/api/dialogue/turn', { text: message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice }, { signal: token.controller.signal });
+    const data = await api('/api/dialogue/turn', {
+      text: message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice,
+      allow_external_research: consumeExternalResearchPermission()
+    }, { signal: token.controller.signal });
     if (!currentDialogueTurn(token)) return;
     if (pending && pending.isConnected) {
       pending.remove();
@@ -1899,6 +1912,7 @@ async function sendDialogueAudio(blob, mimeType) {
   const turnTrace = dialogue.trace ? { ...dialogue.trace, sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime } : { sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime };
   try {
     const params = new URLSearchParams({ filename: 'dialogue.wav', provider: chatProviderChoice });
+    if (consumeExternalResearchPermission()) params.set('allow_external_research', '1');
     params.set('audio_size_bytes', String(blob.size || 0));
     params.set('capture_ms', String(Math.round(turnTrace.captureDurationMs || turnTrace.recordedMs || 0)));
     params.set('mic_rms', String(Number(turnTrace.micRms || 0).toFixed(6)));

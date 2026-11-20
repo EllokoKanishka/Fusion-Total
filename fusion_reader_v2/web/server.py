@@ -552,7 +552,12 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 tmp_path = self._read_body_to_temp(filename)
                 try:
-                    with use_turn_provider((params.get("provider") or [""])[0], {"local", "openai"}, "local"):
+                    with use_turn_provider(
+                        (params.get("provider") or [""])[0],
+                        {"local", "openai"},
+                        "local",
+                        allow_external_research=(params.get("allow_external_research") or [""])[0] == "1",
+                    ):
                         self._result(
                             200,
                             self.app.dialogue_turn_audio(

@@ -18,7 +18,9 @@ def discover_static_assets(root: Path = ROOT) -> set[str]:
     return {f"{STATIC_ROOT}{path.relative_to(static).as_posix()}" for path in static.rglob("*") if path.is_file()}
 
 
-REQUIRED_ASSETS = discover_static_assets()
+REQUIRED_ASSETS = discover_static_assets() | {
+    f"fusion_reader_v2/assets/fonts/{name}" for name in ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "LICENSE-DejaVu.txt")
+}
 
 
 def wheel_issues(wheel: Path | str) -> list[str]:
@@ -50,7 +52,7 @@ def main() -> int:
         for item in issues:
             print(f"ERROR: {item}")
         return 1
-    if not REQUIRED_ASSETS:
+    if not discover_static_assets():
         print(f"ERROR: static_source_missing:{ROOT / STATIC_ROOT}")
         return 1
     print(f"wheel assets verified: {len(REQUIRED_ASSETS)} files in {args.wheel.name}")

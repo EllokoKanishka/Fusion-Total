@@ -21,6 +21,7 @@ from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
 from fusion_reader_v2.conversation import SelectableChatProvider
 from fusion_reader_v2.dialogue import NullSTTProvider
+from fusion_reader_v2.openclaw_bridge import NullExternalResearchBridge
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
 from fusion_reader_v2.web.jobs import register_pdf_to_docx_download
@@ -50,6 +51,90 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertTrue(cloud.calls)
             self.assertNotIn("Una pregunta privada de prueba.", str(cloud.calls))
             self.assertEqual(assistant.selected, "openai")
+
+    def test_external_research_permission_is_per_request_and_prohibition_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            bridge = NullExternalResearchBridge()
+            server.context.app._research_service.bridge = bridge
+            for path, key in (("/api/chat", "message"), ("/api/dialogue/turn", "text")):
+                request = {key: "Buscá fuentes sobre el concepto de técnica."}
+                self._request(base, path, request)
+                self._request(base, path, {**request, "allow_external_research": "true"})
+                self._request(
+                    base,
+                    path,
+                    {
+                        key: "Buscá fuentes, pero no quiero que busques en internet.",
+                        "allow_external_research": True,
+                    },
+                )
+                self.assertEqual(bridge.calls, [])
+                self._request(base, path, {**request, "allow_external_research": True})
+                self.assertEqual(bridge.calls, [(request[key], {})])
+                bridge.calls.clear()
+
+    def test_library_homonyms_and_legacy_note_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            library = server.context.library_root
+            first = library / "uno" / "clase.txt"
+            second = library / "dos" / "clase.txt"
+            for path, content in ((first, "Primera clase."), (second, "Segunda clase.")):
+                path.parent.mkdir(parents=True)
+                path.write_text(content, encoding="utf-8")
+            app.load_text(
+                "clase", first.name, first.read_text(), prefetch=False, source_path=str(first), source_type="file"
+            )
+            legacy_note = app.create_note("Anotación original")["note"]
+            app.notes.add("clase", second.name, 0, "De otro archivo", quote=second.read_text())
+            _, opened = self._request(base, "/api/load", {"book_id": "uno/clase.txt"})
+            self.assertEqual(opened["notes"]["count"], 1)
+            self.assertEqual(app.list_notes()["items"][0]["note_id"], legacy_note["note_id"])
+            _, reference = self._request(base, "/api/load", {"book_id": "dos/clase.txt", "role": "reference"})
+            self.assertTrue(reference["ok"])
+            self.assertNotEqual(reference["reference_added"]["doc_id"], opened["doc_id"])
+            _, other = self._request(base, "/api/load", {"book_id": "dos/clase.txt"})
+            self.assertEqual(other["notes"]["count"], 0)
+
+    def test_reimport_recovers_only_verified_legacy_notes_and_accepts_long_unicode_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            original = "Texto identificable del archivo anterior."
+            converted = server.context.converted_root
+            converted.mkdir(parents=True, exist_ok=True)
+            legacy_file = converted / "clase.txt"
+            legacy_file.write_text(original, encoding="utf-8")
+            app.load_text("clase", "clase.txt", original, prefetch=False, source_path=str(legacy_file))
+            note = app.create_note("Anotación anterior")["note"]
+            app.notes.add("clase", "clase.txt", 0, "Con otro anclaje", quote="Texto de un archivo homónimo.")
+
+            def reimport(filename: str, text: str) -> dict:
+                return self._request(
+                    base,
+                    "/api/import",
+                    {
+                        "filename": filename,
+                        "data_b64": base64.b64encode(text.encode()).decode(),
+                    },
+                )[1]
+
+            different = reimport("clase.txt", "Otro archivo homónimo.")
+            self.assertEqual(different["notes"]["count"], 0)
+            same = reimport("clase.txt", original)
+            self.assertEqual(same["notes"]["count"], 1)
+            self.assertTrue(app.delete_note(note["note_id"])["ok"])
+            self.assertEqual(reimport("clase.txt", original)["notes"]["count"], 0)
+            self.assertEqual(len(app.list_notes(doc_id="clase")["items"]), 2)
+            title = "\U00020000" * 58 + ".txt"
+            long_name = reimport(title, original)
+            self.assertEqual(long_name["title"], title)
+            self.assertLessEqual(len(os.fsencode(Path(long_name["converted_text"]).name)), 255)
 
     def test_import_homonyms_restore_and_a_failed_upload_preserves_the_active_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -393,12 +393,15 @@ class DictationAssistantTests(unittest.TestCase):
             local14b = BlockingProvider("qwen3:14b-q8_0")
             assistant = DictationAssistant(
                 {"local": local4b, "local14b": local14b},
-                selected="local",
+                selected="local14b",
             )
             with managed_test_app(root=root, dictation_assistant=assistant) as app:
                 settings = create_settings(environ={"HOME": tmp}, repository_root=root)
                 context = WebContext(app=app, settings=settings, runtime_info={})
-                first = context.start_dictation_model_install()
+                mismatch = context.start_dictation_model_install("local", "qwen3:14b-q8_0")
+                self.assertFalse(mismatch["ok"])
+                self.assertEqual(local4b.install_calls, 0)
+                first = context.start_dictation_model_install("local", "qwen3:4b")
                 self.assertIn(first["state"], {"queued", "running"})
                 self.assertTrue(local4b.started.wait(1))
 

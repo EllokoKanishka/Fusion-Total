@@ -831,7 +831,12 @@ class FusionReaderV2:
         source_type: str = "",
     ) -> dict:
         document = Document.from_text(doc_id, title, text)
-        references = {key: value for key, value in self._reference_documents.items() if key != document.doc_id}
+        references = {
+            key: value
+            for key, value in self._reference_documents.items()
+            if key != document.doc_id
+            and not (source_type == "file" and source_path and value.get("source_path") == source_path)
+        }
         self._publish_document(
             document, str(text or ""), str(source_path or ""), str(source_type or "text"), references
         )
@@ -893,10 +898,36 @@ class FusionReaderV2:
         }
         return out
 
+    @_document_transition
     def load_file(self, path: str | Path, prefetch: bool = True) -> dict:
-        p = Path(path)
+        p = Path(path).resolve()
         text = p.read_text(encoding="utf-8")
-        return self.load_text(p.stem, p.name, text, prefetch=prefetch, source_path=str(p), source_type="file")
+        doc_id = self._library_file_id(p)
+        legacy = (
+            self._main_document_record() if self._main_source_path == str(p) else self._reference_documents.get(p.stem)
+        )
+        result = self.load_text(doc_id, p.name, text, prefetch=prefetch, source_path=str(p), source_type="file")
+        if (
+            legacy
+            and legacy["doc_id"] == p.stem
+            and legacy["source_type"] == "file"
+            and legacy["source_path"] == str(p)
+            and legacy["text"] == text
+        ):
+            self.recover_document_notes(p.stem, doc_id, p.name, text, result)
+            result["notes"] = self._notes_service.summary()
+        return result
+
+    @staticmethod
+    def _library_file_id(path: Path) -> str:
+        return "file-" + hashlib.sha256(os.fsencode(path)).hexdigest()[:24]
+
+    def recover_document_notes(self, legacy_id: str, doc_id: str, title: str, text: str, result: dict) -> None:
+        document = Document.from_text(doc_id, title, text)
+        try:
+            self.notes.recover_document_notes(legacy_id, doc_id, document.title, document.chunks)
+        except (OSError, ValueError):
+            result["notes_recovery_warning"] = "No se pudieron recuperar las notas anteriores."
 
     @_document_transition
     def add_reference_text(
@@ -923,10 +954,13 @@ class FusionReaderV2:
             "message": f"{record['title']} agregado como documento de consulta.",
         }
 
+    @_document_transition
     def add_reference_file(self, path: str | Path) -> dict:
-        p = Path(path)
+        p = Path(path).resolve()
+        if self._main_source_path == str(p):
+            return {"ok": False, "error": "reference_matches_main_document"}
         text = p.read_text(encoding="utf-8")
-        return self.add_reference_text(p.stem, p.name, text, source_path=str(p), source_type="file")
+        return self.add_reference_text(self._library_file_id(p), p.name, text, source_path=str(p), source_type="file")
 
     def list_reference_documents(self) -> dict:
         return {"ok": True, "items": self._reference_document_items()}
@@ -2325,7 +2359,7 @@ class FusionReaderV2:
         self._append_dialogue_trace(
             {"ts": time.time(), "event": "dictation_assistant_changed", "selected_provider": selected}
         )
-        return self.dictation_assistant_status()
+        return self.dictation_assistant.status(selected)
 
     def dictation_assist(
         self,

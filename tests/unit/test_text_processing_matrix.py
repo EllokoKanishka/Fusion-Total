@@ -101,6 +101,50 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
         self.assertEqual(imported.title, "nombre controlado.txt")
         self.assertEqual(observed[0].name, "document.upload")
 
+    def test_pdf_image_inventory_and_incomplete_ocr(self) -> None:
+        title = "Encabezado digital de prueba con más de cuarenta caracteres verificables."
+        inventory = "\n".join(
+            (
+                "page num type width height color comp bpc enc interp object ID x-ppi y-ppi size ratio",
+                "----",
+                "1 0 image 1000 250 rgb 3 8 image no 1 0 120 120 10K 1%",
+                "2 1 smask 1000 250 gray 1 8 image no 2 0 120 120 10K 1%",
+                "3 2 image 20 20 rgb 3 8 image no 3 0 120 120 10K 1%",
+                "4 3 image 1000 250 rgb 3 8 image no 4 0 bad 120 10K 1%",
+                "short row",
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.pdf"
+            with mock.patch.object(documents.shutil, "which", return_value=None):
+                self.assertIsNone(documents.pdf_raster_pages(source))
+            failure = subprocess.CompletedProcess([], 1, stdout="", stderr="error")
+            with mock.patch.object(documents.shutil, "which", side_effect=lambda name: name):
+                with mock.patch.object(documents, "run_owned", return_value=failure):
+                    self.assertIsNone(documents.pdf_raster_pages(source))
+
+                def tools(command, **kwargs):
+                    if "-list" in command:
+                        return subprocess.CompletedProcess(command, 0, stdout=inventory, stderr="")
+                    Path(command[-1]).write_text(title + "\f", encoding="utf-8")
+                    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+                with mock.patch.object(documents, "run_owned", side_effect=tools):
+                    self.assertEqual(documents.pdf_raster_pages(source), {1})
+                    with mock.patch.object(documents, "ocr_pdf_to_text", side_effect=ValueError("ocr failed")):
+                        text, detail, _ = documents.pdf_to_text(source.name, source)
+                        self.assertIn(title, text)
+                        self.assertIn("OCR sin texto adicional", detail)
+                    with mock.patch.object(documents, "pdf_raster_pages", side_effect=TimeoutError):
+                        self.assertIn("inspeccionar", documents.pdf_to_text(source.name, source)[1])
+
+        self.assertEqual(documents.merge_pdf_raster_text(title, title.upper() + "\n!"), title)
+        self.assertEqual(
+            documents.merge_pdf_raster_text(title, title.replace("más", "mas") + "\nUn párrafo del raster."),
+            title + "\n\nUn párrafo del raster.",
+        )
+
     def test_pdf_cleanup_ocr_signal_and_heading_matrix(self) -> None:
         marked = documents.mark_pdf_pages("uno\f\f tres", clean=False)
         self.assertIn("[Pagina 1]", marked)
@@ -185,7 +229,8 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
                     documents.pdf_to_text(pdf_path.name, pdf_path)
 
             def extract_run(command, **_kwargs):
-                Path(command[-1]).write_text("texto interno con suficientes caracteres para lectura normal. " * 2)
+                if "-list" not in command:
+                    Path(command[-1]).write_text("texto interno con suficientes caracteres para lectura normal. " * 2)
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
             with (
@@ -207,7 +252,8 @@ class DocumentTextProcessingMatrixTests(unittest.TestCase):
             ):
                 self.assertIn("OCR", documents.pdf_to_text(pdf_path.name, pdf_path)[1])
 
-            self.assertEqual(documents.pdf_page_count(pdf_path), 0)
+            with mock.patch.object(documents.shutil, "which", return_value=None):
+                self.assertEqual(documents.pdf_page_count(pdf_path), 0)
             info = subprocess.CompletedProcess([], 0, stdout="Pages:          12\n", stderr="")
             with (
                 mock.patch.object(documents.shutil, "which", return_value="pdfinfo"),

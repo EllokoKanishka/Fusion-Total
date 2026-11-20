@@ -33,6 +33,7 @@ include = ["fusion_reader_v2*", "scripts", "scripts.gpu_compat", "scripts.lib"]
 [tool.setuptools.package-data]
 scripts = ["start_fusion_reader_v2.sh", "start_fusion_reader_v2_stt.sh", "start_reader_neural_tts_gpu_5090.sh", "start_reader_neural_tts.sh", "fusion_reader_gpu_guard.sh", "lib/env_helper.sh"]
 fusion_reader_v2 = [
+  "assets/fonts/*",
   "web/static/*",
   "web/static/js/*.mjs",
 ]

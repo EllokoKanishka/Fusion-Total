@@ -75,7 +75,8 @@ def _load_imported_document(context: WebContext, imported, role: str) -> dict:
         data = field.encode("utf-8")
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
-    doc_id = f"{imported.doc_id[:96]}-{digest.hexdigest()[:24]}"
+    stem = imported.doc_id[:96].encode("utf-8")[:200].decode("utf-8", errors="ignore")
+    doc_id = f"{stem}-{digest.hexdigest()[:24]}"
     target = context.converted_root / f"{doc_id}.txt"
     raw_target = None
     created: list[Path] = []
@@ -121,6 +122,19 @@ def _load_imported_document(context: WebContext, imported, role: str) -> dict:
         for path in created:
             path.unlink(missing_ok=True)
         raise
+    # The legacy name alone can identify several uploads. Verify its saved
+    # conversion and the note's original anchor before linking any notes.
+    if imported.doc_id != doc_id:
+        legacy = context.converted_root / f"{imported.doc_id}.txt"
+        try:
+            with legacy.open(encoding="utf-8") as handle:
+                same_text = handle.read(len(imported.text) + 1) == imported.text
+        except (OSError, UnicodeError):
+            same_text = False
+        if same_text:
+            context.app.recover_document_notes(imported.doc_id, doc_id, imported.title, imported.text, out)
+            if role != "reference":
+                out["notes"] = context.app.notes_summary()
     out["role"] = "reference" if str(role or "") == "reference" else "main"
     out["source_type"] = imported.source_type
     out["import_detail"] = imported.detail

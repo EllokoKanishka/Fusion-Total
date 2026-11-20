@@ -1209,13 +1209,13 @@ class FusionReaderV2Tests(unittest.TestCase):
         imported = root / "imported.txt"
         imported.write_text(make_reading_document("Importado", 24), encoding="utf-8")
         app = test_app(root=root)
-        app.load_file(imported, prefetch=False)
+        opened = app.load_file(imported, prefetch=False)
         app.jump(2)
         created = app.create_note("Nota persistente")
         self.assertTrue(created["ok"])
         reopened = test_app(root=root)
         restored = reopened.status()
-        self.assertEqual(restored["doc_id"], "imported")
+        self.assertEqual(restored["doc_id"], opened["doc_id"])
         self.assertEqual(restored["current"], 2)
         notes = reopened.list_notes(current_only=True)["items"]
         self.assertEqual(len(notes), 1)

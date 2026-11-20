@@ -395,7 +395,9 @@ def write_transcript_pdf(
 
 
 def register_pdf_fonts() -> tuple[str, str]:
+    bundled = Path(__file__).with_name("assets") / "fonts"
     candidates = [
+        (bundled / "DejaVuSans.ttf", bundled / "DejaVuSans-Bold.ttf"),
         (
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),

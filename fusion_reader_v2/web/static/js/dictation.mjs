@@ -10,7 +10,6 @@ const CONFIRMATION_REQUEST_TIMEOUT_MS = 20000;
 const CONFIRMATION_PLAYBACK_TIMEOUT_MS = 20000;
 const STORAGE_KEY = 'pandafusion.dictation.v1';
 const SESSION_SCHEMA_VERSION = 2;
-const MAX_SAVED_SESSIONS = 30;
 const MAX_REVIEW_REQUESTS = 6;
 
 function cleanText(value) {
@@ -595,6 +594,7 @@ export function createDictationController({
   let manualTimer = 0;
   let assistantInstallTimer = 0;
   let assistantChoice = '';
+  let assistantCatalog = [];
   let wakeExpiryTimer = 0;
   let manualBaseline = null;
   let stream = null;
@@ -716,6 +716,7 @@ export function createDictationController({
 
   function renderAssistantStatus(data) {
     const available = Array.isArray(data && data.available) ? data.available : [];
+    assistantCatalog = available;
     const select = elements.dictationAssistantSelect;
     if (!assistantChoice) {
       const saved = String(data?.selected || data?.id || 'rules');
@@ -760,9 +761,15 @@ export function createDictationController({
       : `Instalar ${selected.model || 'modelo local'}`;
   }
 
+  function assistantStatusPath() {
+    return assistantChoice && assistantChoice !== 'rules'
+      ? `/api/dictation/assistant?provider=${encodeURIComponent(assistantChoice)}`
+      : '/api/dictation/assistant';
+  }
+
   async function refreshAssistantStatus() {
     try {
-      renderAssistantStatus(await api('/api/dictation/assistant'));
+      renderAssistantStatus(await api(assistantStatusPath()));
     } catch (error) {
       renderAssistantStatus({ selected: 'rules', ready: true, available: [] });
       addActivity(`No pude consultar los asistentes: ${error.message}.`);
@@ -788,7 +795,7 @@ export function createDictationController({
     windowRef.clearTimeout(assistantInstallTimer);
     assistantInstallTimer = 0;
     try {
-      const data = await api('/api/dictation/assistant');
+      const data = await api(assistantStatusPath());
       renderAssistantStatus(data);
       const installation = data.installation || {};
       if (['queued', 'running'].includes(String(installation.state || ''))) {
@@ -803,7 +810,11 @@ export function createDictationController({
   }
 
   async function installAssistantModel() {
-    const label = cleanText(elements.dictationAssistantSelect.selectedOptions?.[0]?.textContent) || 'el modelo local';
+    const provider = elements.dictationAssistantSelect.value;
+    const selected = assistantCatalog.find(item => item.id === provider);
+    const model = selected?.model;
+    if (!model || !['local', 'local14b'].includes(provider)) return;
+    const label = selected.label || model;
     const approved = dialog
       ? await dialog.confirm({ title: `¿Instalar ${label}?`, message: 'La descarga se realiza una vez y puede ocupar varios GB.', acceptLabel: 'Descargar e instalar' })
       : windowRef.confirm(`¿Descargar e instalar ${label}? La descarga se hace una sola vez y puede ocupar varios GB.`);
@@ -811,8 +822,14 @@ export function createDictationController({
     elements.dictationAssistantInstallBtn.disabled = true;
     elements.dictationAssistantInstallBtn.textContent = 'Preparando…';
     try {
-      const data = await api('/api/dictation/assistant/install', {});
-      addActivity(`Instalación iniciada: ${data.model || label}. Podés seguir usando el dictado.`);
+      const data = await api('/api/dictation/assistant/install', { provider, model });
+      if (data.model && data.model !== model) {
+        addActivity(`Ya se está instalando ${data.model}. Cuando termine, podés instalar ${label}.`);
+      } else if (data.state === 'done') {
+        addActivity(`${label} ya está instalado.`);
+      } else {
+        addActivity(`Instalación iniciada: ${label}. Podés seguir usando el dictado.`);
+      }
       await pollAssistantInstallation();
     } catch (error) {
       const detail = error && error.data && error.data.detail ? error.data.detail : error.message;
@@ -948,7 +965,7 @@ export function createDictationController({
       const next = {
         schemaVersion: SESSION_SCHEMA_VERSION,
         activeId: current.id,
-        sessions: [current, ...latest.filter(item => item?.id && item.id !== current.id)].slice(0, MAX_SAVED_SESSIONS)
+        sessions: [current, ...latest.filter(item => item?.id && item.id !== current.id)]
       };
       storage.setItem(STORAGE_KEY, JSON.stringify(next));
       sessionStore = next;
@@ -982,7 +999,7 @@ export function createDictationController({
           sessionStore = {
             schemaVersion: SESSION_SCHEMA_VERSION,
             activeId: String(saved.activeId || ''),
-            sessions: saved.sessions.slice(0, MAX_SAVED_SESSIONS).filter(item => item && typeof item === 'object')
+            sessions: saved.sessions.filter(item => item && typeof item === 'object')
           };
         } else if (saved.schemaVersion != null) {
           storageReadFailed = true;

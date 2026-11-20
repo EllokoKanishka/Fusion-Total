@@ -164,13 +164,16 @@ class DictationAssistant:
             )
         return items
 
-    def status(self) -> dict:
+    def status(self, provider_id: str = "") -> dict:
         catalog = self.catalog()
-        active = next((item for item in catalog if item["id"] == self.selected), catalog[0])
-        if self.selected == "rules":
+        selected = provider_id or self.selected
+        if selected not in {"rules", *self.providers}:
+            raise ValueError("invalid_dictation_assistant")
+        active = next((item for item in catalog if item["id"] == selected), catalog[0])
+        if selected == "rules":
             health = {"ok": True, "detail": "ready", "provider": "rules"}
         else:
-            provider = self.providers[self.selected]
+            provider = self.providers[selected]
             health = dict(observe_health(provider) or {})
             if health.get("model_present") is False:
                 health["ok"] = False
@@ -178,10 +181,10 @@ class DictationAssistant:
         return {
             "ok": True,
             **active,
-            "selected": self.selected,
+            "selected": selected,
             "ready": bool(health.get("ok")),
             "detail": str(health.get("detail") or ""),
-            "active_provider": str(health.get("provider") or self.selected),
+            "active_provider": str(health.get("provider") or selected),
             "available": catalog,
         }
 

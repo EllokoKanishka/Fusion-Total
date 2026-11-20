@@ -23,8 +23,8 @@ class Context:
     def dictation_model_install_status(self) -> dict:
         return {"ok": True, "state": "idle", "terminal": True}
 
-    def start_dictation_model_install(self) -> dict:
-        return {"ok": True, "state": "queued", "terminal": False, "model": "qwen3:4b"}
+    def start_dictation_model_install(self, provider: str, model: str) -> dict:
+        return {"ok": True, "state": "queued", "terminal": False, "model": model, "provider": provider}
 
     def dictation_model_warm_status(self) -> dict:
         return {"ok": True, "state": "cold", "terminal": True}
@@ -34,6 +34,8 @@ class Context:
 
 
 class Responder:
+    path = ""
+
     def __init__(self) -> None:
         self.context = Context()
         self.responses: list[tuple[int, dict]] = []
@@ -159,7 +161,14 @@ class WebRouteModuleTests(unittest.TestCase):
         self.assertEqual(responder.responses[-1][1]["selected"], "rules")
         self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant", {"provider": "local"}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["selected"], "local")
-        self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant/install", {}))  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "invalid_dictation_install_selection"):
+            handle_dictation_post(responder, "/api/dictation/assistant/install", {})  # type: ignore[arg-type]
+        self.assertTrue(
+            handle_dictation_post(
+                responder, "/api/dictation/assistant/install", {"provider": "local", "model": "qwen3:4b"}
+            )
+        )  # type: ignore[arg-type]
+        self.assertEqual(responder.responses[-1][1]["provider"], "local")
         self.assertEqual(responder.responses[-1][1]["state"], "queued")
         self.assertTrue(handle_dictation_post(responder, "/api/dictation/assistant/warm", {}))  # type: ignore[arg-type]
         self.assertEqual(responder.responses[-1][1]["state"], "ready")

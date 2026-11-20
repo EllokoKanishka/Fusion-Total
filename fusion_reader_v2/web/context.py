@@ -291,12 +291,19 @@ class WebContext:
                     }
                 )
 
-    def start_dictation_model_install(self) -> dict:
+    def start_dictation_model_install(self, provider_id: str = "", expected_model: str = "") -> dict:
         assistant = self.app.dictation_assistant
-        selected = str(getattr(assistant, "selected", "rules") or "rules")
+        selected = provider_id or str(getattr(assistant, "selected", "rules") or "rules")
         providers = getattr(assistant, "providers", {})
         provider = providers.get(selected)
         model = str(getattr(provider, "default_model", "") or "").strip()
+        if expected_model and model != expected_model:
+            return {
+                "ok": False,
+                "state": "error",
+                "terminal": True,
+                "detail": "El modelo cambió. Revisá la selección antes de instalar.",
+            }
         installer = getattr(provider, "install_model", None)
         if provider is None or not model or not callable(installer):
             return {

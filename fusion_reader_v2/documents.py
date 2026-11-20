@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+from difflib import SequenceMatcher
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
@@ -507,6 +508,59 @@ def odt_to_text(data: bytes, *, limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS) 
     return _bounded_document_text(lines, limits)
 
 
+def pdf_raster_pages(path: Path) -> set[int] | None:
+    """Find pages with a body-sized raster image in Poppler's image inventory."""
+    tool = shutil.which("pdfimages")
+    if not tool:
+        return None
+    result = run_owned(
+        [tool, "-list", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cancel_event=_conversion_cancel.get(),
+    )
+    if result.returncode != 0:
+        return None
+    pages = set()
+    for line in result.stdout.splitlines()[2:]:
+        cells = line.split()
+        if len(cells) < 14 or cells[2] != "image":
+            continue
+        try:
+            page, width, height, xppi, yppi = (int(cells[i]) for i in (0, 3, 4, 12, 13))
+        except ValueError:
+            continue
+        if xppi > 0 and yppi > 0 and width / xppi >= 2.5 and height / yppi >= 1.25:
+            pages.add(page)
+    return pages
+
+
+def merge_pdf_raster_text(digital: str, recognized: str) -> str:
+    """Keep exact digital lines and add only OCR lines that bring new text."""
+
+    def key(line: str) -> str:
+        return "".join(char for char in line.casefold() if char.isalnum())
+
+    digital_lines = [key(line) for line in digital.splitlines() if line.strip()]
+    additions = []
+    for line in recognized.splitlines():
+        normalized = key(line)
+        if not normalized or any(
+            normalized == existing
+            or (
+                8 <= len(normalized) <= 240
+                and 8 <= len(existing) <= 240
+                and SequenceMatcher(None, normalized, existing).ratio() >= 0.85
+            )
+            for existing in digital_lines
+        ):
+            continue
+        additions.append(line)
+    extra = "\n".join(additions).strip()
+    return digital.rstrip() + "\n\n" + extra if meaningful_chars(extra) >= 8 else digital
+
+
 def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = None) -> tuple[str, str, str]:
     tool = shutil.which("pdftotext")
     if not tool:
@@ -531,7 +585,15 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
         pages = extracted.split("\f")
         if len(pages) > 1 and pages[-1] == "":
             pages.pop()
-        missing = [index for index, page in enumerate(pages, 1) if meaningful_chars(page) < 40]
+        try:
+            detected_rasters = pdf_raster_pages(path)
+        except (OSError, TimeoutError):
+            detected_rasters = None
+        raster_pages = detected_rasters or set()
+        inspection_warning = (
+            "" if detected_rasters is not None else ". No se pudieron inspeccionar las imágenes del PDF."
+        )
+        missing = [index for index, page in enumerate(pages, 1) if meaningful_chars(page) < 40 or index in raster_pages]
         if missing:
             try:
                 ocr = ocr_pdf_to_text(path, progress=progress, page_numbers=missing)
@@ -542,9 +604,18 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
                 for match in re.finditer(r"(?ms)^\[Pagina (\d+)\]\n(.*?)(?=^\[Pagina \d+\]\n|\Z)", ocr)
             }
             used_ocr = False
+            unverified = []
             for page in missing:
                 recognized = found.get(page, "")
-                if meaningful_chars(recognized) > meaningful_chars(pages[page - 1]):
+                digital = pages[page - 1]
+                if page in raster_pages and meaningful_chars(digital) >= 40:
+                    merged = merge_pdf_raster_text(digital, recognized)
+                    if merged == digital:
+                        unverified.append(str(page))
+                    else:
+                        pages[page - 1] = merged
+                        used_ocr = True
+                elif meaningful_chars(recognized) > meaningful_chars(digital):
                     pages[page - 1] = recognized
                     used_ocr = True
             unresolved = [str(page) for page in missing if not meaningful_chars(pages[page - 1])]
@@ -555,10 +626,12 @@ def pdf_to_text(filename: str, path: Path, progress: ProgressCallback | None = N
             )
             if unresolved:
                 detail += f". Sin texto legible en las páginas {', '.join(unresolved)}"
+            if unverified:
+                detail += f". OCR sin texto adicional verificable en las páginas {', '.join(unverified)}"
             raw_marked = mark_pdf_pages("\f".join(pages), clean=False)
-            return clean_pdf_text(raw_marked), detail, raw_marked
+            return clean_pdf_text(raw_marked), detail + inspection_warning, raw_marked
         report_progress(progress, "converted", 1, 1, "PDF con texto interno listo.")
-        return marked, "pdf convertido con pdftotext y marcas de pagina", raw_marked
+        return marked, "pdf convertido con pdftotext y marcas de pagina" + inspection_warning, raw_marked
     report_progress(progress, "ocr_start", 0, 0, "PDF escaneado detectado. Iniciando OCR...")
     ocr_text = ocr_pdf_to_text(path, progress=progress)
     report_progress(progress, "converted", 1, 1, "OCR terminado.")

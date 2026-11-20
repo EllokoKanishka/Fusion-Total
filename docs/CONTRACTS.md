@@ -83,12 +83,17 @@ Model selection for browser turns:
   cloud consent and includes its provider selection in every turn.
 - Requests without an explicit provider cannot inherit an OpenAI preference.
   Cloud reader turns omit the shared chat and dialogue history.
-- External research submits the user's explicit query without document
-  excerpts, notes or laboratory focus. A prohibition on external search
-  takes precedence over a request for sources.
+- External research in the web API requires `allow_external_research: true`
+  for chat and typed dialogue, or `allow_external_research=1` for audio
+  dialogue. The browser clears the permission after each submitted turn.
+  An affirmative search request is still required. The bridge receives
+  only the query, and a prohibition takes precedence over the permission.
 
 Dictation routes:
 
+- `GET /api/dictation/assistant?provider=local` probes the selected tab's
+  model. `POST /api/dictation/assistant/install` requires the displayed
+  `provider` and `model`. The server checks them against its configuration.
 - `POST /api/dictation/transcribe`: raw browser audio; query parameters
   `filename` and `commands=0|1`; returns `transcript`, STT metadata and one
   bounded `instruction` object;
@@ -333,10 +338,10 @@ can return an excerpt without moving playback. A reference to recent speech
 alone does not save a note: an explicit save/note command is required. Existing
 STT compatibility forms (`Tomando a esto que acabo de decir`) remain supported.
 
-External research requires an initial affirmative request clause (including
-polite/modal forms). Negated instructions and discussion of quoted search
-phrases do not invoke the external bridge. This is a conservative grammar,
-not an unrestricted natural-language intent classifier.
+External research requires the per-turn permission and an initial affirmative
+request clause, including polite or modal forms. Negated instructions and
+discussion of quoted search phrases do not invoke the external bridge.
+The parser recognizes a bounded set of request and prohibition forms.
 
 In free mode, new reader notes and laboratory focus are supplied only when
 explicitly requested (`analizá mis notas`, `analizá el foco del laboratorio`,

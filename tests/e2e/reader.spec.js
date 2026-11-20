@@ -29,6 +29,23 @@ test.afterAll(async () => {
   await new Promise(resolve => server.once('exit', resolve));
 });
 
+test('external research permission applies to one submitted chat turn', async ({ page }) => {
+  const consent = page.locator('#allowExternalResearch');
+  await page.goto(baseURL);
+  await expect(consent).not.toBeChecked();
+  await consent.check();
+  for (const allowed of [true, false]) {
+    await page.locator('#chatInput').fill('Buscá fuentes sobre el concepto de técnica.');
+    const responsePromise = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/chat');
+    await page.locator('#sendChatBtn').click();
+    const response = await responsePromise;
+    expect(response.request().postDataJSON().allow_external_research).toBe(allowed);
+    if (!allowed) await expect(page.locator('#chatLog')).toContainText('Activá «Buscar en internet»');
+    await expect(consent).not.toBeChecked();
+  }
+});
+
 test('voice-first reader daily flow uses one request per action', async ({ page }) => {
   const requestCounts = new Map();
   page.on('request', request => {

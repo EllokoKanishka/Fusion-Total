@@ -336,6 +336,9 @@ La instalación y las fronteras de privacidad están en
 
 ## Investigación externa
 
+Marcá «Buscar en internet (una consulta)» y pedí la búsqueda de forma
+explícita. La casilla se desmarca al enviar la consulta por escrito o por voz.
+
 Configuración por entorno:
 
 ```text

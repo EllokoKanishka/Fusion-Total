@@ -40,7 +40,12 @@ def handle_dialogue_post(responder: DialogueResponder, path: str, payload: dict)
         return True
     if path == "/api/dialogue/turn":
         chunk_value = payload.get("chunk_index")
-        with use_turn_provider(payload.get("provider", ""), {"local", "openai"}, "local"):
+        with use_turn_provider(
+            payload.get("provider", ""),
+            {"local", "openai"},
+            "local",
+            allow_external_research=payload.get("allow_external_research") is True,
+        ):
             responder._result(
                 200,
                 responder.app.dialogue_turn_text(
@@ -52,7 +57,12 @@ def handle_dialogue_post(responder: DialogueResponder, path: str, payload: dict)
         return True
     if path == "/api/chat":
         chunk_value = payload.get("chunk_index")
-        with use_turn_provider(payload.get("provider", ""), {"local", "openai"}, "local"):
+        with use_turn_provider(
+            payload.get("provider", ""),
+            {"local", "openai"},
+            "local",
+            allow_external_research=payload.get("allow_external_research") is True,
+        ):
             responder._result(
                 200,
                 responder.app.chat(

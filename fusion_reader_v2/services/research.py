@@ -4,6 +4,7 @@ import re
 import unicodedata
 
 from fusion_reader_v2.openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
+from fusion_reader_v2.turn_provider import external_research_permission
 
 
 class ResearchService:
@@ -39,7 +40,8 @@ class ResearchService:
         target = re.sub(r'«[^»]*»|“[^”]*”|"[^"]*"', " ", target)
         target = re.sub(r"(?<!\w)'[^']*'(?!\w)", " ", target)
         if re.search(
-            r"\b(?:no|nunca|sin)\s+(?:(?:que|usar|uses|utilizar|utilices|consultar|consultes|buscar|busques|investigar|investigues|salgas|salir|acceder|accedas)\s+){0,3}"
+            r"\b(?:no|nunca|sin)\s+(?:(?:quiero|quisiera|permito|autorizo|te|pido)\s+){0,3}"
+            r"(?:(?:que|usar|uses|utilizar|utilices|consultar|consultes|buscar|busques|investigar|investigues|salgas|salir|acceder|accedas)\s+){0,3}"
             r"(?:en\s+|a\s+)?(?:internet|(?:la\s+)?web|la red|fuentes externas|afuera|fuera)\b",
             target,
         ):
@@ -66,6 +68,11 @@ class ResearchService:
         )
 
     def research(self, message: str) -> ExternalResearchResult:
+        if external_research_permission.get() is False:
+            message = "Activá «Buscar en internet» para esta consulta."
+            return ExternalResearchResult(
+                False, answer=message, spoken_answer=message, detail="external_research_permission_required"
+            )
         return self.bridge.research(message, snapshot={})
 
     def health(self) -> dict:
