@@ -130,10 +130,18 @@
       </header>
 
       <section class="reader">
-        <div id="chunk" class="chunk empty">Subí un TXT o MD para empezar.</div>
+        <div id="chunk" class="chunk empty" tabindex="0">Subí un TXT o MD para empezar.</div>
+        <div id="readerEditor" class="reader-editor" hidden>
+          <textarea id="readerEditText" class="reader-edit-text" aria-label="Texto completo del documento" spellcheck="true"></textarea>
+          <div class="reader-edit-actions">
+            <button id="readerEditSave" class="primary compact-btn" type="button">Guardar copia Word</button>
+            <button id="readerEditCancel" class="compact-btn" type="button">Cancelar</button>
+            <span id="readerEditStatus" class="log" role="status"></span>
+          </div>
+        </div>
       </section>
 
-      <section class="controls">
+      <section id="readerControls" class="controls">
         <div class="row">
           <button id="prevBtn" class="compact-btn">Anterior</button>
           <button id="readBtn" class="primary compact-btn">Leer</button>
@@ -159,6 +167,7 @@
               <option value="off">Desactivado</option>
             </select>
           </label>
+          <button id="readerEditOpen" class="compact-btn" type="button" disabled>Editar texto</button>
         </div>
         <div class="reader-player" aria-label="Controles de lectura">
           <button id="readerPlayerToggleBtn" class="compact-btn" type="button" disabled>▶ Reproducir</button>
@@ -172,28 +181,30 @@
     </main>
 
     <section class="lab">
-      <h2>Laboratorio</h2>
-      <div id="labFocus" class="lab-focus"><strong>Foco del laboratorio</strong>Sin foco activo.</div>
-      <div id="chatLog" class="chat-log" aria-live="polite">
-        <div class="chat-msg system">Cargá un documento y preguntame por lo que está en pantalla.</div>
-      </div>
-      <textarea id="chatInput" class="chat-input" placeholder="Escribí sobre el texto actual..."></textarea>
-      <div class="lab-toolbar">
-        <button id="sendChatBtn" class="primary compact-btn">Enviar</button>
-        <label class="toggle compact-toggle"><input id="allowExternalResearch" type="checkbox" autocomplete="off"> Buscar en internet (una consulta)</label>
-        <button id="clearLabHistoryBtn" class="compact-btn" type="button">Borrar historial</button>
-        <button id="dialogueBtn" class="primary compact-btn">Dialogar</button>
-        <button id="freeModeBtn" class="mode-toggle-btn compact-btn" type="button">Modo libre</button>
-        <div class="reasoning-tabs" aria-label="Modo de razonamiento">
-          <button id="reasoningNormalBtn" class="reasoning-tab" type="button">Normal</button>
-          <button id="reasoningThinkingBtn" class="reasoning-tab" type="button">Pensar</button>
-          <button id="reasoningSupremeBtn" class="reasoning-tab" type="button">Supremo</button>
-          <button id="reasoningPensamientoCriticoBtn" class="reasoning-tab" type="button">Pensamiento crítico</button>
+      <h2><button id="labToggle" class="lab-toggle" type="button" aria-expanded="true" aria-controls="labContent">Laboratorio</button></h2>
+      <div id="labContent" class="lab-content">
+        <div id="labFocus" class="lab-focus"><strong>Foco del laboratorio</strong>Sin foco activo.</div>
+        <div id="chatLog" class="chat-log" aria-live="polite">
+          <div class="chat-msg system">Cargá un documento y preguntame por lo que está en pantalla.</div>
         </div>
-        <div id="dialogueInfo" class="dialogue-info">Diálogo apagado.</div>
-        <div id="reasoningCaption" class="reasoning-caption">Pensamiento activo.</div>
+        <textarea id="chatInput" class="chat-input" placeholder="Escribí sobre el texto actual..."></textarea>
+        <div class="lab-toolbar">
+          <button id="sendChatBtn" class="primary compact-btn">Enviar</button>
+          <label class="toggle compact-toggle"><input id="allowExternalResearch" type="checkbox" autocomplete="off"> Buscar en internet (una consulta)</label>
+          <button id="clearLabHistoryBtn" class="compact-btn" type="button">Borrar historial</button>
+          <button id="dialogueBtn" class="primary compact-btn">Dialogar</button>
+          <button id="freeModeBtn" class="mode-toggle-btn compact-btn" type="button">Modo libre</button>
+          <div class="reasoning-tabs" aria-label="Modo de razonamiento">
+            <button id="reasoningNormalBtn" class="reasoning-tab" type="button">Normal</button>
+            <button id="reasoningThinkingBtn" class="reasoning-tab" type="button">Pensar</button>
+            <button id="reasoningSupremeBtn" class="reasoning-tab" type="button">Supremo</button>
+            <button id="reasoningPensamientoCriticoBtn" class="reasoning-tab" type="button">Pensamiento crítico</button>
+          </div>
+          <div id="dialogueInfo" class="dialogue-info">Diálogo apagado.</div>
+          <div id="reasoningCaption" class="reasoning-caption">Pensamiento activo.</div>
+        </div>
+        <audio id="dialoguePlayer"></audio>
       </div>
-      <audio id="dialoguePlayer"></audio>
     </section>
     <aside class="right-sidebar" aria-label="Panel lateral derecho">
       <div class="reference-panel">

@@ -19,6 +19,7 @@ export function createReadingHighlight({ player, container, indicator, request }
   let currentSpan = null;
   let generation = 0;
   let controller = null;
+  let settleTimings = null;
   let pollTimer = null;
   let frame = null;
   let disposed = false;
@@ -70,6 +71,11 @@ export function createReadingHighlight({ player, container, indicator, request }
     }
   }
 
+  function finishTimings() {
+    settleTimings?.();
+    settleTimings = null;
+  }
+
   function clearTimings() {
     generation += 1;
     controller?.abort();
@@ -82,6 +88,7 @@ export function createReadingHighlight({ player, container, indicator, request }
     cancelFrame();
     indicator.textContent = '';
     indicator.title = '';
+    finishTimings();
   }
 
   function clearAudio() {
@@ -118,7 +125,7 @@ export function createReadingHighlight({ player, container, indicator, request }
     clearTimings();
     trackedSource = player.src;
     audioUrl = audioURL;
-    if (enabled) requestTimings();
+    return enabled ? requestTimings() : Promise.resolve();
   }
 
   function requestTimings() {
@@ -130,6 +137,7 @@ export function createReadingHighlight({ player, container, indicator, request }
     const started = performance.now();
     let firstRequest = true;
     indicator.textContent = 'Sincronizando palabras…';
+    const ready = new Promise(resolve => { settleTimings = resolve; });
     async function poll() {
       try {
         const result = await request(requestedUrl, signal, firstRequest);
@@ -157,14 +165,17 @@ export function createReadingHighlight({ player, container, indicator, request }
         indicator.textContent = partial ? 'Resaltado parcial' : 'Palabras sincronizadas';
         indicator.title = partial ? 'Algunas palabras se marcan al alcanzar la siguiente palabra reconocida.' : '';
         sync();
+        finishTimings();
       } catch (error) {
         if (disposed || token !== generation || signal.aborted) return;
         words = [];
         sync();
         indicator.textContent = 'Resaltado no disponible para este audio.';
+        finishTimings();
       }
     }
     poll();
+    return ready;
   }
 
   const events = ['timeupdate', 'seeked', 'ended', 'ratechange', 'loadedmetadata'];

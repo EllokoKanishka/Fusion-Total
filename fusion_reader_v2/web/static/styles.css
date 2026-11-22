@@ -262,9 +262,71 @@ main {
   background: var(--surface-deep);
   padding: 18px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
   min-height: 0;
+}
+.lab-content {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  min-height: 0;
+}
+.lab-content[hidden] {
+  display: none;
+}
+.lab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 3px 6px 3px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+.lab-toggle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.lab-toggle[aria-expanded="false"]::before {
+  transform: rotate(-45deg);
+}
+.lab-toggle:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+.app.lab-collapsed .lab {
+  grid-template-rows: auto;
+  min-height: 0;
+  padding-block: 5px;
+}
+@media (min-width: 981px) {
+  .app.lab-collapsed:not(.dictation-open) {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+}
+@media (max-width: 980px) {
+  .app.lab-collapsed:not(.dictation-open) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+  .app.lab-collapsed > main {
+    min-height: calc(100dvh - 36px);
+  }
+}
+html[data-skin="neon"] .app.lab-collapsed .lab {
+  clip-path: none;
+}
+html[data-skin="neon"] .app.lab-collapsed .lab h2::after {
+  content: none;
 }
 h1, h2 {
   margin: 0;
@@ -717,6 +779,34 @@ html[data-skin="neon"] .reader {
   letter-spacing: 0.01em;
   color: var(--text);
   overflow-wrap: anywhere;
+}
+.reader-editor {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  width: min(100%, 94ch);
+  min-width: 0;
+  min-height: 0;
+  gap: 10px;
+}
+.reader-editor[hidden], .chunk[hidden], .controls[hidden] {
+  display: none;
+}
+.reader-edit-text {
+  width: 100%;
+  min-height: 8rem;
+  padding: 12px 14px;
+  resize: none;
+  font-size: clamp(17px, 1.35vw, 21px);
+  line-height: 1.55;
+}
+.reader-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+html[data-skin="neon"] main.reader-editing {
+  grid-template-rows: 64px minmax(0, 1fr);
 }
 .chunk.empty {
   color: var(--muted);

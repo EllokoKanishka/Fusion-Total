@@ -55,6 +55,21 @@ def chunk_index_for_offset(text: str, chunks: list[str], offset: int) -> int:
     if clamped <= 0:
         return 0
 
+    view, source_positions = _source_character_map(source)
+    search_from = 0
+    for index, chunk in enumerate(chunks):
+        needle = re.sub(r"\s+", " ", str(chunk or "")).strip()
+        found = view.find(needle, search_from)
+        if found < 0:
+            raise ValueError("chunk_not_in_source")
+        end = found + len(needle)
+        if clamped < source_positions[end - 1] + 1:
+            return index
+        search_from = end
+    return len(chunks) - 1
+
+
+def _source_character_map(source: str) -> tuple[str, list[int]]:
     normalized_chars: list[str] = []
     positions: list[int] = []
     index = 0
@@ -75,21 +90,37 @@ def chunk_index_for_offset(text: str, chunks: list[str], offset: int) -> int:
         for word in re.finditer(r"\S+", paragraph):
             if flattened:
                 flattened.append(" ")
-                source_positions.append(positions[start + word.start()])
+                source_positions.append(source_positions[-1] + 1)
             flattened.extend(word.group())
             source_positions.extend(positions[start + word.start() : start + word.end()])
-    view = "".join(flattened)
+    return "".join(flattened), source_positions
+
+
+def chunk_selection_utf16(text: str, chunks: list[str], block: int, start: int, end: int) -> tuple[int, int]:
+    """Map a browser selection in a rendered block to the full edit buffer."""
+    if not 0 <= block < len(chunks) or not 0 <= start <= end:
+        raise ValueError("invalid_chunk_selection")
+    view, positions = _source_character_map(text)
     search_from = 0
-    for index, chunk in enumerate(chunks):
-        needle = re.sub(r"\s+", " ", str(chunk or "")).strip()
+    for index, chunk in enumerate(chunks[: block + 1]):
+        needle = re.sub(r"\s+", " ", chunk).strip()
         found = view.find(needle, search_from)
-        if found < 0:
+        if not needle or found < 0:
             raise ValueError("chunk_not_in_source")
-        end = found + len(needle)
-        if clamped < source_positions[end - 1] + 1:
-            return index
-        search_from = end
-    return len(chunks) - 1
+        search_from = found + len(needle)
+        if index < block:
+            continue
+        if end > len(chunk.encode("utf-16-le")) // 2:
+            raise ValueError("invalid_chunk_selection")
+
+        def full_offset(offset: int) -> int:
+            prefix = chunk[: utf16_offset_to_index(chunk, offset)]
+            relative = len(re.sub(r"\s+", " ", prefix).lstrip())
+            source_index = positions[found + relative] if relative < len(needle) else positions[search_from - 1] + 1
+            return len(text[:source_index].encode("utf-16-le")) // 2
+
+        return full_offset(start), full_offset(end)
+    raise ValueError("invalid_chunk_selection")
 
 
 def utf16_offset_to_index(text: str, offset: int) -> int:

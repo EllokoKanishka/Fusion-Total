@@ -218,6 +218,70 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertEqual(long_name["title"], title)
             self.assertLessEqual(len(os.fsencode(Path(long_name["converted_text"]).name)), 255)
 
+    def test_editing_saves_a_word_copy_and_uses_it_for_reading(self) -> None:
+        from docx import Document as WordDocument
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = self._start(root)
+            base = f"http://127.0.0.1:{server.server_port}"
+            original = root / "Guion.docx"
+            source = WordDocument()
+            source.add_paragraph("Comienzo del documento.")
+            source.add_paragraph("Segunda sección de lectura filosófica. " * 270)
+            source.add_paragraph("Último párrafo del documento.")
+            source.save(original)
+            initial_bytes = original.read_bytes()
+            _, imported = self._request(
+                base,
+                "/api/import",
+                {
+                    "filename": original.name,
+                    "data_b64": base64.b64encode(initial_bytes).decode(),
+                },
+            )
+            self.assertGreater(imported["total"], 1)
+            _, snapshot = self._request(base, "/api/reader/edit")
+            self.assertIn("Último párrafo del documento.", snapshot["text"])
+            self.assertIn("\n\n", snapshot["text"])
+
+            downloads = server.context.settings.paths.downloads
+            downloads.mkdir(parents=True, exist_ok=True)
+            existing = downloads / "Guion - editado.docx"
+            existing.write_bytes(initial_bytes)
+
+            text = snapshot["text"].replace("Último párrafo del documento.", "Cierre corregido.\nLínea nueva.")
+            body = {**snapshot, "text": text}
+            app = server.context.app
+            limit = app._session_store.max_bytes
+            try:
+                app._session_store.max_bytes = 256
+                with self.assertRaises(urllib.error.HTTPError):
+                    self._request(base, "/api/reader/edit", body)
+                self.assertEqual(set(downloads.iterdir()), {existing})
+                self.assertEqual(app.session.status()["doc_id"], imported["doc_id"])
+            finally:
+                app._session_store.max_bytes = limit
+
+            _, edited = self._request(base, "/api/reader/edit", body)
+            self.assertNotEqual(edited["doc_id"], imported["doc_id"])
+            copy = Path(edited["edited_copy"]["path"])
+            self.assertEqual(copy.parent, downloads)
+            self.assertEqual(copy.suffix, ".docx")
+            self.assertNotEqual(copy, existing)
+            self.assertEqual(existing.read_bytes(), initial_bytes)
+            self.assertEqual(original.read_bytes(), initial_bytes)
+            self.assertEqual(WordDocument(copy).paragraphs[-1].text, "Cierre corregido.\nLínea nueva.")
+
+            _, reopened = self._request(base, "/api/reader/edit")
+            self.assertIn("Cierre corregido.\nLínea nueva.", reopened["text"])
+            self.assertEqual(reopened["doc_id"], edited["doc_id"])
+            files = set(downloads.iterdir())
+            with self.assertRaises(urllib.error.HTTPError) as stale:
+                self._request(base, "/api/reader/edit", body)
+            self.assertEqual(stale.exception.code, 409)
+            self.assertEqual(set(downloads.iterdir()), files)
+
     def test_import_homonyms_restore_and_a_failed_upload_preserves_the_active_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server = self._start(Path(tmp))

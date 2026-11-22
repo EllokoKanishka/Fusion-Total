@@ -39,8 +39,12 @@ Propiedades:
 - no depende del LLM;
 - el resaltado acumulativo usa `audio.currentTime`, incluidos saltos y cambios de velocidad;
   las marcas se obtienen del STT local sobre el WAV existente y se cachean por audio y texto.
-  La sincronización es opcional y asíncrona: nunca regenera voz ni impide leer si falta STT.
-  Las palabras no reconocidas se incorporan al alcanzar la siguiente marca real; la UI indica resaltado parcial.
+  La reproducción automática puede esperar hasta ocho segundos por las marcas.
+  Si la sincronización tarda más, la voz empieza y las marcas se incorporan cuando llegan.
+  Las palabras sin marca propia se incorporan al alcanzar la siguiente marca real.
+  La UI indica cuándo el resaltado es parcial.
+- el Laboratorio se puede plegar para ampliar el área de lectura.
+- desde el lector se puede abrir el editor y guardar el texto como una copia de Word.
 - acepta texto pegado como documento virtual `quick_text` dentro del mismo
   `ReaderSession`; conserva el original sólo en memoria, permite comenzar desde
   el inicio o desde el cursor y nunca lo restaura tras reiniciar;

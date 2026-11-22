@@ -8,7 +8,7 @@ from fusion_reader_v2.web.routes.dictation import handle_dictation_get, handle_d
 from fusion_reader_v2.web.routes.health import handle_health_get
 from fusion_reader_v2.web.routes.notes import handle_notes_get, handle_notes_post
 from fusion_reader_v2.web.routes.preparation import handle_preparation_get, handle_preparation_post
-from fusion_reader_v2.web.routes.reading import handle_reading_post
+from fusion_reader_v2.web.routes.reading import handle_reading_get, handle_reading_post
 from fusion_reader_v2.web.routes.tools import handle_tools_get, handle_tools_post
 from fusion_reader_v2.web.routes.media import handle_media_get, handle_media_post
 
@@ -38,6 +38,7 @@ class Router:
             lambda: handle_health_get(responder, path),
             lambda: handle_audio_get(responder, path, raw_path),
             lambda: handle_preparation_get(responder, path),
+            lambda: handle_reading_get(responder, path, raw_path),
             lambda: handle_notes_get(responder, path, raw_path),
             lambda: handle_dialogue_get(responder, path),
             lambda: handle_dictation_get(responder, path),
@@ -75,6 +76,7 @@ def create_router() -> Router:
         "/api/status",
         "/api/build",
         "/api/library",
+        "/api/reader/edit",
         "/api/voice/voices",
         "/api/voices",
         "/api/voice/metrics",
@@ -106,6 +108,7 @@ def create_router() -> Router:
         "/api/import-file/start",
         "/api/import-file",
         "/api/load",
+        "/api/reader/edit",
         "/api/quick-text",
         "/api/import",
         "/api/reference/promote",

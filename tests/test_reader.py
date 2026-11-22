@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from concurrent.futures import Future
 from fusion_reader_v2 import split_text
-from fusion_reader_v2.reader import Document, chunk_index_for_offset
+from fusion_reader_v2.reader import Document, chunk_index_for_offset, chunk_selection_utf16
 from tests.helpers import (
     test_app,
     NullTTSProvider,
@@ -28,6 +28,15 @@ class ReaderTests(unittest.TestCase):
 
         self.assertEqual(index, 1)
         self.assertIn("Segundo", document.chunks[index])
+
+    def test_edit_selection_maps_to_the_visible_occurrence_in_the_full_document(self):
+        text = "👋 La escuela.\n\n0\n\nLa   escuela."
+        chunks = ["👋 La escuela.", "La escuela."]
+        start, end = chunk_selection_utf16(text, chunks, 1, 3, 10)
+        encoded = text.encode("utf-16-le")
+        edited = (encoded[: start * 2] + "casa".encode("utf-16-le") + encoded[end * 2 :]).decode("utf-16-le")
+        self.assertEqual(edited, "👋 La escuela.\n\n0\n\nLa   casa.")
+        self.assertEqual(chunk_selection_utf16(text, chunks, 0, 6, 13), (6, 13))
 
     def test_quick_text_uses_reader_session_and_cursor_without_persisting(self):
         root = Path(tempfile.mkdtemp())

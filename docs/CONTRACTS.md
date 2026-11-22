@@ -212,6 +212,14 @@ the original source, accounting for normalized whitespace and skipped noise
 paragraphs. A single word longer than the hard chunk limit is split without
 dropping characters; the original document text remains available unchanged.
 
+
+`GET /api/reader/edit` returns the full active text with its document ID and
+generation. Optional `block`, `start` and `end` parameters map a selection
+from a zero-based reader block to UTF-16 offsets in the full text.
+`POST /api/reader/edit` accepts the returned document ID and generation
+along with the revised text. It saves a separate Word copy in Downloads
+and loads it for reading. A replaced document rejects stale edits.
+
 Text extraction accepts safe directory entries in DOCX/ODT archives while
 retaining traversal, encryption and archive size checks. RTF text extraction
 decodes declared ANSI code pages, hexadecimal escapes, scoped Unicode fallback

@@ -3,11 +3,17 @@ from __future__ import annotations
 import base64
 import binascii
 from typing import Protocol
+from urllib.parse import parse_qs, urlparse
 
 from fusion_reader_v2 import FusionReaderV2, import_document_bytes
 from fusion_reader_v2.config import Settings
 from fusion_reader_v2.web.context import WebContext
-from fusion_reader_v2.web.routes.documents import load_imported_document, resolve_library_path
+from fusion_reader_v2.web.routes.documents import (
+    document_edit_snapshot,
+    load_imported_document,
+    resolve_library_path,
+    save_edited_document,
+)
 from fusion_reader_v2.web.downloads import cached_audio_path
 
 
@@ -26,7 +32,23 @@ class ReadingResponder(Protocol):
     def _result(self, status: int, payload: dict) -> None: ...
 
 
+def handle_reading_get(responder: ReadingResponder, path: str, raw_path: str) -> bool:
+    if path != "/api/reader/edit":
+        return False
+    params = parse_qs(urlparse(raw_path).query)
+    selection = (
+        (int(params["block"][0]), int(params["start"][0]), int(params["end"][0]))
+        if "block" in params and "start" in params and "end" in params
+        else None
+    )
+    responder._json(200, document_edit_snapshot(responder.context, selection))
+    return True
+
+
 def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -> bool:
+    if path == "/api/reader/edit":
+        responder._json(200, save_edited_document(responder.context, payload))
+        return True
     if path == "/api/read/timings":
         audio_url = str(payload.get("audio_url") or "")
         text = responder.app.session.current_chunk()
@@ -157,4 +179,4 @@ def handle_reading_post(responder: ReadingResponder, path: str, payload: dict) -
     return False
 
 
-__all__ = ["handle_reading_post"]
+__all__ = ["handle_reading_get", "handle_reading_post"]

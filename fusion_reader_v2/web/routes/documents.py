@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
 
-from fusion_reader_v2.documents import converted_document_id
+from fusion_reader_v2.documents import converted_document_id, import_document_bytes, safe_filename
+from fusion_reader_v2.reader import chunk_selection_utf16
+from fusion_reader_v2.web.errors import APIError
+from fusion_reader_v2.web.downloads import unique_download_target
 from fusion_reader_v2.web.context import WebContext
 
 ALLOWED_LIBRARY_SUFFIXES = {".txt", ".md"}
@@ -59,6 +64,87 @@ def resolve_library_path(context: WebContext, book_id: str) -> Path:
                 return path
             break
     raise FileNotFoundError("book_not_found")
+
+
+def document_edit_snapshot(context: WebContext, selection: tuple[int, int, int] | None = None) -> dict:
+    with context.app._document_lock:
+        document = context.app.session.document
+        if not document or not document.chunks:
+            raise APIError("no_document_loaded", "Cargá un documento para editarlo.", 409)
+        if len(document.text) > context.settings.limits.quick_text_max_chars:
+            raise APIError("document_edit_too_large", "El texto supera el límite del editor.", 413)
+        text = document.text.replace("\r\n", "\n").replace("\r", "\n")
+        result = {
+            "ok": True,
+            "doc_id": document.doc_id,
+            "document_generation": context.app._document_generation,
+            "text": text,
+        }
+        if selection is not None:
+            try:
+                start, end = chunk_selection_utf16(text, document.chunks, *selection)
+            except ValueError as exc:
+                raise APIError(
+                    "reader_selection_changed", "La selección cambió. Volvé a seleccionar el texto.", 409
+                ) from exc
+            result.update({"selection_start": start, "selection_end": end})
+        return result
+
+
+def save_edited_document(context: WebContext, payload: dict) -> dict:
+    from docx import Document as WordDocument
+
+    text = payload.get("text")
+    generation = payload.get("document_generation")
+    doc_id = payload.get("doc_id")
+    if not isinstance(text, str) or not text.strip():
+        raise APIError("empty_document_edit", "La copia tiene que contener texto.")
+    if not isinstance(doc_id, str) or type(generation) is not int:
+        raise ValueError("invalid_document_edit")
+    if len(text) > context.settings.limits.quick_text_max_chars:
+        raise APIError("document_edit_too_large", "El texto supera el límite del editor.", 413)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    with context.app._document_lock:
+        document = context.app.session.document
+        if not document or (document.doc_id, context.app._document_generation) != (doc_id, generation):
+            raise APIError("document_edit_stale", "Cambió el documento activo. Tu texto sigue en el editor.", 409)
+        if text == document.text.replace("\r\n", "\n").replace("\r", "\n"):
+            return {**context.app.status(), "edit_unchanged": True}
+        title = document.title
+
+    stem = re.sub(r" - editado(?:_\d+)?$", "", Path(safe_filename(title)).stem)
+    stem = stem.encode("utf-8")[:160].decode("utf-8", errors="ignore").rstrip() or "Documento"
+    output = BytesIO()
+    word = WordDocument()
+    try:
+        for paragraph in text.split("\n\n"):
+            word.add_paragraph(paragraph)
+        word.save(output)
+    except (ValueError, UnicodeError) as exc:
+        raise APIError("invalid_document_edit_text", "El texto incluye caracteres que Word no admite.") from exc
+
+    data = output.getvalue()
+    with context.import_publication({"document_generation": generation}):
+        target = unique_download_target(context, f"{stem} - editado.docx")
+        imported = import_document_bytes(target.name, data)
+        if not imported.text:
+            raise APIError("empty_document_edit", "La copia tiene que contener texto.")
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".panda-edit-") as temporary:
+            temporary.write(data)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            os.link(temporary.name, target)
+        try:
+            result = _load_imported_document(context, imported, "main")
+            if not result.get("ok", True):
+                target.unlink(missing_ok=True)
+                return result
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        result["edited_copy"] = {"filename": target.name, "path": str(target)}
+        return result
 
 
 def load_imported_document(

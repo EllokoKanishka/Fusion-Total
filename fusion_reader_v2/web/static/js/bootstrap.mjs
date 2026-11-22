@@ -14,6 +14,7 @@ import { createReadingHighlight } from './reading_highlight.mjs';
 import { startDesktopLifetime } from './desktop_lifetime.mjs';
 
 const SKIN_STORAGE_KEY = 'pandafusion.skin.v1';
+const LAB_COLLAPSED_STORAGE_KEY = 'pandafusion.lab.collapsed.v1';
 const SKINS = new Set(['classic', 'neon']);
 
 function setSkin(value, { persist = true } = {}) {
@@ -71,8 +72,13 @@ let lastRenderedBlockText = '';
 let audioLifecycleSequence = 0;
 let activeReadController = null;
 let activeReadRequest = 0;
+let pendingReaderPlayback = null;
+const READER_HIGHLIGHT_START_WAIT_MS = 8_000;
 let voiceCatalogRefreshInFlight = false;
 let readerSeeking = false;
+let readerEdit = null;
+let readerEditBusy = false;
+let readerEditInput = null;
 const READER_RATE_STORAGE_KEY = 'pandafusion.reader.rate.v1';
 const busyControls = createBusyControlState(
   (availability, busyLeaseCount) => applyControlState(els, availability, busyLeaseCount),
@@ -80,6 +86,24 @@ const busyControls = createBusyControlState(
   els.noteInput ? els.noteInput.value : ''
 );
 const dialogue = createDialogueState();
+function setLaboratoryCollapsed(collapsed) {
+  els.appRoot.classList.toggle('lab-collapsed', collapsed);
+  els.labToggle.setAttribute('aria-expanded', String(!collapsed));
+  els.labContent.hidden = collapsed;
+  if (collapsed && (dialogue.active || dialogue.starting)) stopDialogue();
+}
+
+try {
+  setLaboratoryCollapsed(window.localStorage.getItem(LAB_COLLAPSED_STORAGE_KEY) === 'true');
+} catch {
+  setLaboratoryCollapsed(false);
+}
+els.labToggle.addEventListener('click', () => {
+  const collapsed = els.labToggle.getAttribute('aria-expanded') === 'true';
+  setLaboratoryCollapsed(collapsed);
+  try { window.localStorage.setItem(LAB_COLLAPSED_STORAGE_KEY, String(collapsed)); } catch (_) {}
+});
+
 const preparation = createPreparationController({ api, elements: els, beginBusyLease, wait, log });
 const renderPrepareStatus = preparation.renderStatus;
 const prepareDocument = preparation.start;
@@ -187,6 +211,7 @@ function seekReaderPlayer() {
 
 function toggleReaderPlayer() {
   if (!els.player.src) return;
+  pendingReaderPlayback = null;
   if (els.player.paused) {
     els.player.play().catch(() => log('No pude iniciar la reproducción.'));
   } else {
@@ -555,6 +580,126 @@ function resetReaderViewport() {
   }
 }
 
+function syncReaderEditControls() {
+  if (!els.readerEditOpen) return;
+  els.readerEditOpen.disabled = readerEditBusy || !status?.document?.loaded;
+  els.readerEditSave.disabled = readerEditBusy;
+  els.readerEditCancel.disabled = readerEditBusy;
+  els.readerEditText.readOnly = readerEditBusy;
+}
+
+function showReaderEditor(open) {
+  els.readerEditor.hidden = !open;
+  els.chunk.hidden = open;
+  els.readerControls.hidden = open;
+  els.readerEditor.closest('main').classList.toggle('reader-editing', open);
+  if (open) {
+    els.readerEditText.focus();
+  } else {
+    readerEdit = null;
+    els.readerEditText.value = '';
+    els.readerEditStatus.textContent = '';
+    readingHighlight.sync();
+  }
+}
+
+function readerTextSelection() {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !status?.document?.loaded || els.chunk.hidden) return null;
+  const range = selection.getRangeAt(0);
+  if (!els.chunk.contains(range.startContainer) || !els.chunk.contains(range.endContainer)) return null;
+  const prefix = document.createRange();
+  prefix.selectNodeContents(els.chunk);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const start = prefix.toString().length;
+  return { block: visibleChunkIndex(), start, end: start + range.toString().length };
+}
+
+function startEditAtSelection(action = null) {
+  if (readerEditInput) {
+    if (action) readerEditInput.push(action);
+    return true;
+  }
+  if (!els.readerEditOpen || readerEdit || readerEditBusy) return false;
+  const selection = readerTextSelection();
+  if (!selection) return false;
+  readerEditInput = action ? [action] : [];
+  void openReaderEditor(selection).finally(() => { readerEditInput = null; });
+  return true;
+}
+
+async function openReaderEditor(selection = null) {
+  if (readerEdit || readerEditBusy || !status?.document?.loaded) return;
+  readerEditBusy = true;
+  syncReaderEditControls();
+  try {
+    const suffix = selection ? `?${new URLSearchParams(selection)}` : '';
+    const snapshot = await api(`/api/reader/edit${suffix}`);
+    if (snapshot.doc_id !== status?.doc_id || snapshot.document_generation !== status?.document_generation) {
+      await refresh();
+      log('Cambió el documento activo. Volvé a abrir el editor.');
+      return;
+    }
+    invalidatePendingRead();
+    els.player.pause();
+    els.readerEditText.value = snapshot.text;
+    readerEdit = {
+      doc_id: snapshot.doc_id,
+      document_generation: snapshot.document_generation,
+      original: els.readerEditText.value
+    };
+    els.readerEditText.readOnly = false;
+    showReaderEditor(true);
+    if (selection) {
+      els.readerEditText.setSelectionRange(snapshot.selection_start, snapshot.selection_end);
+      // Apply the key that opened the editor as a native, undoable edit.
+      for (const { command, value } of readerEditInput || []) {
+        document.execCommand(command, false, value);
+      }
+    }
+  } catch (error) {
+    log(`No pude abrir el editor. ${error.data?.detail || error.message}`);
+  } finally {
+    readerEditBusy = false;
+    syncReaderEditControls();
+  }
+}
+
+async function saveReaderEdit() {
+  if (!readerEdit || readerEditBusy) return;
+  readerEditBusy = true;
+  syncReaderEditControls();
+  els.readerEditStatus.textContent = 'Guardando la copia de Word…';
+  try {
+    const { doc_id, document_generation } = readerEdit;
+    const data = await api('/api/reader/edit', { doc_id, document_generation, text: els.readerEditText.value });
+    if (data.edited_copy) resetAudioLifecycle();
+    showReaderEditor(false);
+    renderStatus(data);
+    log(data.edited_copy ? `Copia guardada en ${data.edited_copy.path}` : 'El documento sigue igual.');
+  } catch (error) {
+    els.readerEditStatus.textContent = error.data?.detail || error.message;
+  } finally {
+    readerEditBusy = false;
+    syncReaderEditControls();
+    if (!readerEdit) els.readerEditOpen.focus();
+  }
+}
+
+async function cancelReaderEdit() {
+  if (!readerEdit || readerEditBusy) return;
+  if (els.readerEditText.value !== readerEdit.original) {
+    const discard = await pandaDialog.confirm({
+      title: '¿Descartar la edición?',
+      message: 'Se perderán los cambios de esta edición.',
+      danger: true
+    });
+    if (!discard) return;
+  }
+  showReaderEditor(false);
+  els.readerEditOpen.focus();
+}
+
 function renderStatus(data) {
   const selectedNotesDocId = data.doc_id || LAB_NOTES_DOC_ID;
   const notesState = notesController.state();
@@ -562,6 +707,7 @@ function renderStatus(data) {
   const nextDocId = String(data.doc_id || data.document && data.document.doc_id || '');
   const nextBlockIndex = Number(data.current || data.document && data.document.current || 0);
   status = data;
+  syncReaderEditControls();
   busyControls.setStatus(data, els.noteInput ? els.noteInput.value : '');
   renderReasoningStatus(data.reasoning || {});
   renderProfileStatus(data.profile || {});
@@ -1071,6 +1217,7 @@ function renderReferenceDocuments(items) {
 }
 
 function invalidatePendingRead() {
+  pendingReaderPlayback = null;
   audioLifecycleSequence += 1;
   activeReadRequest += 1;
   if (activeReadController) {
@@ -1106,9 +1253,22 @@ function playAudio(data, expectedSequence, expectedRequest) {
   }
   els.player.src = data.audio_url;
   setReaderPlaybackRate(els.readerPlaybackRate.value, { persist: false });
-  readingHighlight.load(data.audio_url);
-  els.player.play().catch(() => {
-    log('Audio generado. Tocá play si el navegador bloqueó la reproducción automática.');
+  const source = els.player.src;
+  const playback = {};
+  pendingReaderPlayback = playback;
+  const alignmentReady = readingHighlight.load(data.audio_url);
+  let timeout;
+  const maximumWait = new Promise(resolve => {
+    timeout = window.setTimeout(resolve, READER_HIGHLIGHT_START_WAIT_MS);
+  });
+  void Promise.race([alignmentReady, maximumWait]).then(() => {
+    window.clearTimeout(timeout);
+    if (pendingReaderPlayback !== playback) return;
+    pendingReaderPlayback = null;
+    if (els.player.src !== source || !els.player.paused) return;
+    els.player.play().catch(() => {
+      log('Audio generado. Tocá play si el navegador bloqueó la reproducción automática.');
+    });
   });
   return true;
 }
@@ -2000,6 +2160,35 @@ els.cancelPrepareBtn.addEventListener('click', cancelPrepare);
 els.audioExportMode.addEventListener('change', syncAudioExportInputs);
 els.audioExportBtn.addEventListener('click', startAudioExport);
 els.audioExportCancelBtn.addEventListener('click', cancelAudioExport);
+els.readerEditOpen?.addEventListener('click', () => openReaderEditor());
+els.chunk.addEventListener('dblclick', () => startEditAtSelection());
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return;
+  if (event.target !== document.body && !els.chunk.contains(event.target)) return;
+  const command = {
+    Backspace: 'delete',
+    Delete: 'forwardDelete',
+    Enter: 'insertText',
+  }[event.key];
+  if (!command && Array.from(event.key).length !== 1) return;
+  if (startEditAtSelection({ command: command || 'insertText', value: event.key === 'Enter' ? '\n' : event.key })) {
+    event.preventDefault();
+  }
+});
+document.addEventListener('paste', event => {
+  if (event.defaultPrevented || (event.target !== document.body && !els.chunk.contains(event.target))) return;
+  const value = event.clipboardData?.getData('text/plain');
+  if (value && startEditAtSelection({ command: 'insertText', value })) event.preventDefault();
+});
+els.readerEditSave?.addEventListener('click', saveReaderEdit);
+els.readerEditCancel?.addEventListener('click', cancelReaderEdit);
+els.readerEditText?.addEventListener('keydown', event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    saveReaderEdit();
+  }
+});
+
 els.clearDocBtn.addEventListener('click', clearDocument);
 els.saveNoteBtn.addEventListener('click', saveCurrentNote);
 els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));
@@ -2132,7 +2321,12 @@ els.pdfToWordTool.addEventListener('drop', event => {
   convertPdfToWord(files && files[0]);
 });
 
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', event => {
+  if (readerEdit && els.readerEditText.value !== readerEdit.original) {
+    event.preventDefault();
+    event.returnValue = '';
+    return;
+  }
   readingHighlight.dispose();
   if (activeReadController) activeReadController.abort();
   preparation.dispose();
