@@ -10,6 +10,7 @@ from typing import Mapping
 from urllib.parse import urlparse
 
 from .network import is_local_endpoint_host
+from .turn_provider import LABORATORY_PROVIDERS
 
 
 class ConfigurationError(ValueError):
@@ -196,7 +197,7 @@ class ProviderSettings:
             raise ConfigurationError("invalid external research provider")
         if self.stt_provider not in {"auto", "server", "cli", "none"}:
             raise ConfigurationError("invalid STT provider")
-        if self.chat_provider not in {"local", "openai"}:
+        if self.chat_provider not in LABORATORY_PROVIDERS:
             raise ConfigurationError("invalid chat provider")
         if self.dictation_assistant not in {"rules", "local", "local14b", "openai"}:
             raise ConfigurationError("invalid dictation assistant")
@@ -248,6 +249,7 @@ class ResourceSettings:
     reserve_mib: int = 4096
     llm_working_set_mib: int = 18000
     small_llm_working_set_mib: int = 6000
+    ollama_bin: str = ""
 
     def validate(self):
         if self.ollama_mode not in {"dedicated", "shared"}:
@@ -321,6 +323,7 @@ def create_settings(
     settings = Settings(
         resources=ResourceSettings(
             ollama_mode=env.get("FUSION_READER_OLLAMA_MODE", "dedicated"),
+            ollama_bin=env.get("FUSION_READER_OLLAMA_BIN", "").strip(),
             private_ollama_port=_integer(env, "FUSION_READER_PRIVATE_OLLAMA_PORT", 11435, minimum=1),
             models_dir=_path(
                 env.get("FUSION_READER_OLLAMA_MODELS_DIR")

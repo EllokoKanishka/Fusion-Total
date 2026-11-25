@@ -20,6 +20,53 @@ from tests.helpers import close_test_app, test_app
 
 
 class OpenAIProviderTests(unittest.TestCase):
+    def test_usage_reports_openai_quota_windows_and_the_last_registered_tokens(self) -> None:
+        provider = OpenClawChatProvider(command="/test/openclaw")
+        chat = {
+            "result": {
+                "payloads": [{"text": "OK"}],
+                "meta": {"agentMeta": {"usage": {"total": 170, "cacheRead": 120, "private": 10}}},
+            }
+        }
+        snapshot = {
+            "usage": {
+                "providers": [
+                    {"provider": "anthropic", "windows": [{"label": "5h", "usedPercent": 20}]},
+                    {
+                        "provider": "openai",
+                        "accountEmail": "belongs-in-provider-only@example.org",
+                        "windows": [
+                            {"label": "5h", "usedPercent": 42, "resetAt": 1795502068000},
+                            {"label": "Week", "usedPercent": 95.5},
+                            {"label": "other", "usedPercent": 6},
+                            {"label": "5h", "usedPercent": True},
+                        ],
+                    },
+                ]
+            }
+        }
+        with mock.patch.object(provider, "available", return_value=True), mock.patch(
+            "fusion_reader_v2.conversation.run_owned",
+            side_effect=[
+                subprocess.CompletedProcess([], 0, json.dumps(chat), ""),
+                subprocess.CompletedProcess([], 0, json.dumps(snapshot), ""),
+            ],
+        ) as run:
+            self.assertTrue(provider.chat([{"role": "user", "content": "Hola"}]).ok)
+            self.assertEqual(
+                provider.usage_status(),
+                {
+                    "ok": True,
+                    "windows": [
+                        {"label": "5 horas", "remaining_percent": 58, "reset_at": 1795502068000},
+                        {"label": "Semanal", "remaining_percent": 4.5, "reset_at": None},
+                    ],
+                    "last_call": {"total": 170, "cacheRead": 120},
+                },
+            )
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ["/test/openclaw", "status", "--usage", "--agent", "fusion-dialogue"])
+
     def test_openclaw_provider_uses_isolated_agent_and_parses_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             command = Path(tmp) / "openclaw"

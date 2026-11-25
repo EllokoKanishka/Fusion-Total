@@ -292,10 +292,13 @@ class FusionReaderV2Tests(unittest.TestCase):
                 subprocess.CompletedProcess(["openclaw"], 0, stdout=json.dumps(success_payload), stderr=""),
             ]
             result = bridge.research("Buscá tesis sobre Fedro.")
-        self.assertTrue(result.ok)
         self.assertEqual(run.call_count, 2)
         sleep.assert_called_once()
-        self.assertIn("Encontré una tesis relevante.", result.answer)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.detail, "openclaw_search_unverified")
+        self.assertEqual(result.sources, [])
+        self.assertEqual(result.query, "Buscá tesis sobre Fedro.")
+        self.assertNotIn("Encontré una tesis relevante.", result.answer)
 
     def legacy_document_from_text_uses_page_sized_chunks_by_default(self):
         from fusion_reader_v2.reader import Document
@@ -2046,15 +2049,6 @@ class FusionReaderV2Tests(unittest.TestCase):
                 os.environ.pop("FUSION_READER_CHAT_NUM_PREDICT", None)
             else:
                 os.environ["FUSION_READER_CHAT_NUM_PREDICT"] = previous_predict
-
-    def legacy_dialogue_shortener_closes_cut_text_without_ellipsis(self):
-        app = test_app()
-        app.dialogue_tts_max_chars = 90
-        text = " ".join(["esta respuesta larga necesita cerrar sin quedarse colgada"] * 8)
-        shortened = app._shorten_dialogue_answer(text)
-        self.assertLessEqual(len(shortened), 91)
-        self.assertTrue(shortened.endswith("."))
-        self.assertNotIn("...", shortened)
 
     def legacy_import_docx_document(self):
         root = Path(tempfile.mkdtemp())

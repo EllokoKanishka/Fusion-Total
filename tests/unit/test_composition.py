@@ -42,6 +42,27 @@ class CompositionTests(unittest.TestCase):
             self.assertEqual(bundle.dictation_assistant.providers["local14b"].default_model, "qwen3:14b-q8_0")
             self.assertFalse(settings.paths.runtime.exists())
 
+    def test_laboratory_q4_models_use_the_same_local_ollama(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = self._settings(Path(tmp))
+            provider = create_providers(settings).conversation.provider
+            models = {
+                "gemma": "gemma4:26b-a4b-it-q4_K_M",
+                "lfm": "lfm2.5:24b-a2b-q4_K_M",
+            }
+            for provider_id, model in models.items():
+                with self.subTest(provider=provider_id):
+                    provider.select(provider_id)
+                    self.assertEqual(provider.default_model, model)
+                    self.assertEqual(provider.active.base_url, settings.providers.ollama_url)
+                    self.assertEqual(provider.active.context_length, 8192)
+                    self.assertEqual(provider.active.minimum_num_predict, 4096 if provider_id == "lfm" else 0)
+                    self.assertEqual(provider.active.default_temperature, 0.1 if provider_id == "lfm" else None)
+                    entry = next(row for row in provider.catalog() if row["id"] == provider_id)
+                    self.assertFalse(entry["cloud"])
+            with self.assertRaisesRegex(ValueError, "invalid_chat_provider"):
+                provider.select("command-r")
+
     def test_dictation_assistant_selection_is_independent_from_dialogue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = create_settings(

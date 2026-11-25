@@ -4,12 +4,52 @@ from fusion_reader_v2.veils import veil_catalog as build_veil_catalog
 
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from fusion_reader_v2.openclaw_bridge import ExternalResearchResult
+
+from .research import WebIntent
 
 
 class ReasoningCatalog(Protocol):
     def reasoning_status(self, mode: str = "") -> dict: ...
+
+LaboratoryScope = tuple[str, str, int, str]
+
+
+@dataclass(frozen=True)
+class LaboratoryResearchRequest:
+    text: str
+    cursor: int
+    previous_answer: str = ""
+    previous_question: str = ""
+    web_intent: WebIntent | None = None
+
+
+@dataclass
+class LaboratoryResearch:
+    pending: LaboratoryResearchRequest | None = None
+    last_attempt: LaboratoryResearchRequest | None = None
+    previous_request: LaboratoryResearchRequest | None = None
+    last_search: ExternalResearchResult | None = None
+    opened_url: str = ""
+    opened_context: str = ""
+    opened_link: dict[str, str] = field(default_factory=dict)
+    opened_digest: str = ""
+
+    @property
+    def sources(self) -> list[dict]:
+        return self.last_search.sources if self.last_search is not None else []
+
+
+@dataclass
+class _LaboratoryThread:
+    history: list[dict] = field(default_factory=list)
+    focus: dict = field(default_factory=dict)
+    research: LaboratoryResearch = field(default_factory=LaboratoryResearch)
 
 
 class DialogueService:
@@ -24,6 +64,7 @@ class DialogueService:
         persist: Callable[[], None],
         trace: Callable[[dict], None],
         services_status: Callable[[], dict],
+        restore_laboratory: Callable[[LaboratoryScope], tuple[list[dict], LaboratoryResearch]] | None = None,
     ) -> None:
         self.conversation = conversation
         self.reasoning_mode = reasoning_mode
@@ -34,10 +75,72 @@ class DialogueService:
         self.persist = persist
         self.trace = trace
         self.services_status = services_status
+        self.restore_laboratory = restore_laboratory
         self.chat_lock = threading.Lock()
         self.chat_history: list[dict] = []
         self.dialogue_lock = threading.Lock()
         self.dialogue_history: list[dict] = []
+        self._laboratory_lock = threading.Lock()
+        self._laboratory_threads: OrderedDict[LaboratoryScope, _LaboratoryThread] = OrderedDict()
+
+    def _laboratory_thread(self, key: LaboratoryScope) -> _LaboratoryThread:
+        thread = self._laboratory_threads.get(key)
+        if thread is None:
+            if self.restore_laboratory is None:
+                thread = _LaboratoryThread()
+            else:
+                history, research = self.restore_laboratory(key)
+                thread = _LaboratoryThread(history=history, research=research)
+            self._laboratory_threads[key] = thread
+        self._laboratory_threads.move_to_end(key)
+        if len(self._laboratory_threads) > 48:
+            self._laboratory_threads.popitem(last=False)
+        return thread
+
+    def laboratory_history(self, key: LaboratoryScope) -> tuple[list[dict], list[dict]]:
+        with self._laboratory_lock:
+            history = self._laboratory_thread(key).history
+            return history, list(history)
+
+    def laboratory_research(self, key: LaboratoryScope) -> LaboratoryResearch:
+        with self._laboratory_lock:
+            return self._laboratory_thread(key).research
+
+    def laboratory_focus(self, key: LaboratoryScope) -> dict:
+        with self._laboratory_lock:
+            thread = self._laboratory_threads.get(key)
+            return dict(thread.focus) if thread is not None else {}
+
+    def set_laboratory_focus(self, key: LaboratoryScope, focus: dict) -> None:
+        with self._laboratory_lock:
+            self._laboratory_thread(key).focus = focus
+
+    def drop_laboratory_focus(self, doc_id: str) -> None:
+        with self._laboratory_lock:
+            for thread in self._laboratory_threads.values():
+                if thread.focus.get("doc_id") == doc_id:
+                    thread.focus = {}
+
+    def remember_laboratory_turn(
+        self, history: list[dict], question: str, answer: str, *, research_failed: bool = False
+    ) -> None:
+        if not answer.strip():
+            return
+        stamp = time.time()
+        with self._laboratory_lock:
+            history.extend(
+                {
+                    "role": role, "content": content[:4000], "ts": stamp,
+                    **({"research_failed": True} if research_failed else {}),
+                }
+                for role, content in (("user", question), ("assistant", answer))
+            )
+            del history[:-8]
+
+    def clear_laboratory_session(self, session: str = "") -> int:
+        with self._laboratory_lock:
+            keys = [key for key in self._laboratory_threads if not session or key[0] == session]
+            return sum(len(self._laboratory_threads.pop(key).history) for key in keys)
 
     def effective_reasoning(self, *, dialogue: bool = False) -> dict:
         requested = str(self.reasoning_mode or "thinking")
@@ -57,16 +160,26 @@ class DialogueService:
             "reason": reason,
         }
 
-    def remember_chat_turn(self, user_message: str, assistant_answer: str) -> None:
-        with self.chat_lock:
+    def remember_turn(self, user_message: str, assistant_answer: str, *, dialogue: bool = False) -> None:
+        lock = self.dialogue_lock if dialogue else self.chat_lock
+        with lock:
+            history = self.dialogue_history if dialogue else self.chat_history
             stamp = time.time()
             if user_message:
-                self.chat_history.append({"role": "user", "content": user_message, "ts": stamp})
+                history.append({"role": "user", "content": user_message, "ts": stamp})
             if assistant_answer:
-                self.chat_history.append({"role": "assistant", "content": assistant_answer, "ts": stamp})
-            del self.chat_history[:-20]
+                history.append({"role": "assistant", "content": assistant_answer, "ts": stamp})
+            limit = 16 if dialogue else 20
+            del history[:-limit]
+
+    def last_assistant_answer(self, *, dialogue: bool) -> str:
+        lock = self.dialogue_lock if dialogue else self.chat_lock
+        with lock:
+            history = self.dialogue_history if dialogue else self.chat_history
+            return next((str(item["content"]) for item in reversed(history) if item.get("role") == "assistant"), "")
 
     def clear_history(self) -> dict:
+        self.clear_laboratory_session()
         with self.chat_lock:
             chat_turns = len(self.chat_history)
             self.chat_history.clear()

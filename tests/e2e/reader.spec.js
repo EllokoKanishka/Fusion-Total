@@ -29,21 +29,64 @@ test.afterAll(async () => {
   await new Promise(resolve => server.once('exit', resolve));
 });
 
-test('external research permission applies to one submitted chat turn', async ({ page }) => {
+test('external research stays enabled until the user switches it off', async ({ page, context }) => {
   const consent = page.locator('#allowExternalResearch');
   await page.goto(baseURL);
   await expect(consent).not.toBeChecked();
-  await consent.check();
-  for (const allowed of [true, false]) {
-    await page.locator('#chatInput').fill('Buscá fuentes sobre el concepto de técnica.');
+  async function submit(message, allowed) {
+    await page.locator('#chatInput').fill(message);
     const responsePromise = page.waitForResponse(response =>
       new URL(response.url()).pathname === '/api/chat');
     await page.locator('#sendChatBtn').click();
     const response = await responsePromise;
     expect(response.request().postDataJSON().allow_external_research).toBe(allowed);
-    if (!allowed) await expect(page.locator('#chatLog')).toContainText('Activá «Buscar en internet»');
-    await expect(consent).not.toBeChecked();
   }
+  await consent.check();
+  await submit('Buscá fuentes sobre el concepto de técnica.', true);
+  await submit('¿Cómo definirías técnica?', true);
+  await expect(consent).toBeChecked();
+  await page.reload();
+  await expect(consent).toBeChecked();
+
+  const other = await context.newPage();
+  await other.goto(baseURL);
+  const otherConsent = other.locator('#allowExternalResearch');
+  await expect(otherConsent).toBeChecked();
+  await otherConsent.uncheck();
+  await expect(consent).not.toBeChecked();
+  await submit('Buscá fuentes sobre el concepto de técnica.', false);
+  await expect(page.locator('#chatLog')).toContainText('Activá «Buscar en internet»');
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+  await other.close();
+});
+
+test('Laboratory keeps separate conversations and restores the selected one after reload', async ({ page }) => {
+  await page.goto(baseURL);
+  const panel = page.locator('#laboratoryConversations');
+  const chat = page.locator('#chatLog');
+  const send = async message => {
+    await page.locator('#chatInput').fill(message);
+    await page.locator('#sendChatBtn').click();
+    await expect(panel.getByRole('button', { name: message, exact: true })).toBeVisible();
+  };
+
+  const first = 'Primera conversación, sobre los sofistas.';
+  const second = 'Segunda conversación, sobre la memoria.';
+  await send(first);
+  await page.getByRole('button', { name: 'Nueva', exact: true }).click();
+  await expect(chat).not.toContainText(first);
+  await send(second);
+
+  await panel.getByRole('button', { name: first, exact: true }).click();
+  await expect(chat).toContainText(first);
+  await expect(chat).not.toContainText(second);
+  await page.reload();
+  await expect(chat).toContainText(first);
+  await expect(panel.getByRole('button', { name: first, exact: true })).toHaveAttribute('aria-current', 'true');
+  await panel.getByRole('button', { name: second, exact: true }).click();
+  await expect(chat).toContainText(second);
+  await expect(chat).not.toContainText(first);
 });
 
 test('two windows waiting for the same draft lock preserve both edits', async ({ page, context }) => {

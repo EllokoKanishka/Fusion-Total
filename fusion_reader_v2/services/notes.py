@@ -84,8 +84,8 @@ class NotesService:
             {"ok": True, "note": note, "items": self.notes.list(document.doc_id)}, document.doc_id
         )
 
-    def create_laboratory(self, text: str) -> dict:
-        clean_text = self.resolve_laboratory_text(text)
+    def create_laboratory(self, text: str, *, history: builtins.list[dict] | None = None) -> dict:
+        clean_text = self.resolve_laboratory_text(text, history=history)
         if not clean_text:
             return {"ok": False, "error": "empty_note"}
         try:
@@ -94,7 +94,7 @@ class NotesService:
                 LABORATORY_NOTES_TITLE,
                 0,
                 clean_text,
-                quote=self.recent_laboratory_quote(),
+                quote=self.recent_laboratory_quote(history=history),
                 source_kind="laboratory",
             )
         except ValueError as exc:
@@ -156,8 +156,8 @@ class NotesService:
         block = note.get("chunk_number") or 1
         return f"Listo, guardé esa nota en el bloque {block}." if spoken else f"Nota guardada en el bloque {block}."
 
-    def recent_laboratory_quote(self) -> str:
-        history = self._recent_laboratory_history()[-4:]
+    def recent_laboratory_quote(self, *, history: builtins.list[dict] | None = None) -> str:
+        history = (self._recent_laboratory_history() if history is None else history)[-4:]
         lines: builtins.list[str] = []
         for item in history:
             role = str(item.get("role") or "").strip().lower()
@@ -197,16 +197,18 @@ class NotesService:
         # Untimed legacy histories and ties retain the previous dialogue-first rule.
         return dialogue_history or chat_history
 
-    def resolve_laboratory_text(self, text: str) -> str:
+    def resolve_laboratory_text(self, text: str, *, history: builtins.list[dict] | None = None) -> str:
         clean = str(text or "").strip()
         if not clean:
             return ""
         if self.is_generic_laboratory_text(clean):
-            return self.recent_laboratory_target() or clean
+            target = self.recent_laboratory_target(history=history)
+            return target or (clean if history is None else "")
         return clean
 
-    def recent_laboratory_target(self) -> str:
-        history = self._recent_laboratory_history()
+    def recent_laboratory_target(self, *, history: builtins.list[dict] | None = None) -> str:
+        if history is None:
+            history = self._recent_laboratory_history()
         for preferred_role in ("assistant", "user"):
             for item in reversed(history):
                 role = str(item.get("role") or "").strip().lower()
@@ -228,19 +230,23 @@ class NotesService:
             )
         )
 
-    def should_create_laboratory(self, text: str) -> bool:
+    def should_create_laboratory(self, text: str, *, history: builtins.list[dict] | None = None) -> bool:
         if self.session.document is None:
             return True
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).lower()
         if not clean or not self.looks_like_recent_speech_reference(clean):
             return False
+        if history is not None:
+            return True
         with self.dialogue_lock:
             if self.dialogue_history:
                 return True
         with self.chat_lock:
             return bool(self.chat_history)
 
-    def should_route_generic_to_laboratory(self, text: str, note_text: str) -> bool:
+    def should_route_generic_to_laboratory(
+        self, text: str, note_text: str, *, history: builtins.list[dict] | None = None
+    ) -> bool:
         if self.session.document is None:
             return True
         if not self.is_generic_pointer(note_text):
@@ -250,6 +256,8 @@ class NotesService:
             r"\b(?:documento|texto|pantalla|bloque|p[aá]rrafo|cap[ií]tulo|fragmento)\b", clean, flags=re.IGNORECASE
         ):
             return False
+        if history is not None:
+            return bool(history)
         with self.dialogue_lock:
             if self.dialogue_history:
                 return True

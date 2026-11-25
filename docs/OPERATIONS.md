@@ -310,6 +310,25 @@ provider sin iniciar ni cargar modelos pesados.
 4. relanzar Panda para recuperar su proceso dedicado y reintentar una pregunta corta;
    no reiniciar ni descargar modelos del Ollama compartido
 
+Para actualizar solo el motor dedicado, configurá `FUSION_READER_OLLAMA_BIN`
+con el binario de esa instalación. Las descargas de Panda apuntan al endpoint
+privado y usan el almacén indicado en `FUSION_READER_OLLAMA_MODELS_DIR`.
+
+## OpenAI al abrir el Laboratorio
+
+Cada ventana del lector empieza con OpenAI. El selector permite cambiar de
+modelo para esa sesión. La búsqueda, apertura e importación de fuentes pasan
+por Panda y usan los mismos permisos con cualquier modelo del Laboratorio. «Uso de OpenAI» consulta a OpenClaw al desplegarse o al
+pulsar «Actualizar uso». Muestra la cuota disponible de ChatGPT en las ventanas
+de 5 horas y semanal. Los tokens de la última llamada registrada corresponden
+a una llamada al modelo del Laboratorio, con el desglose de caché si está
+disponible.
+
+En esta instalación, `openclaw --profile panda-fusion models list --provider ollama`
+muestra los modelos locales publicados por el Ollama dedicado. El perfil usa
+el endpoint privado mientras Panda está abierto. El asistente OpenAI mantiene
+su agente `fusion-dialogue` y su autenticación existente.
+
 ## Si OpenAI mediante OpenClaw no responde
 
 1. volver a `IA: Local 14B`; la lectura y la voz siguen disponibles
@@ -337,8 +356,16 @@ La instalación y las fronteras de privacidad están en
 
 ## Investigación externa
 
-Marcá «Buscar en internet (una consulta)» y pedí la búsqueda de forma
-explícita. La casilla se desmarca al enviar la consulta por escrito o por voz.
+Activá «Buscar en internet» y pedí la búsqueda de forma explícita.
+Panda recuerda el ajuste en el mismo navegador hasta que lo desactives.
+Se aplica tanto a las consultas por escrito como a las de voz.
+
+Con OpenAI seleccionado, `fusion-dialogue` interpreta el pasaje, arma las
+consultas y evalúa los resultados. SearXNG ejecuta la búsqueda. Panda limita
+cuánto espera por los motores científicos para aprovechar los que respondan a tiempo.
+Si la categoría científica agota el plazo o queda vacía, prueba Crossref y
+Semantic Scholar dentro de SearXNG. El agente `fusion-research` es el respaldo
+ante fallos del buscador. La traza de voz identifica el proveedor que respondió.
 
 Configuración por entorno:
 

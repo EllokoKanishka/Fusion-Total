@@ -77,8 +77,13 @@ class ConversationSafetyTests(unittest.TestCase):
                 "No quiero que busques fuentes externas",
                 "Buscá en el documento la frase «buscar en internet»",
                 "Buscá en este documento la frase buscar en internet",
+                "Buscá en el primer bloque la frase buscar en internet",
                 "Buscá las fuentes en este PDF",
                 "Revisá en mis notas las referencias",
+                "Bien, pero ahora no busques información en internet.",
+                "No, lo que te pedí es que con respecto al primer bloque del documento no busques en internet.",
+                "Con respecto a cómo buscar información en internet, explicame el concepto.",
+                "Sobre el ejemplo « buscá información en internet », ¿qué verbo se usa?",
                 'Buscá la frase "papers sobre Kant"',
                 "Buscá la antítesis",
             ):

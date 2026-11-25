@@ -51,6 +51,11 @@ def consumer_inventory(app, context=None):
         ("external_research", getattr(app, "external_research", None)),
         ("reading_alignment", getattr(context, "reading_timings", None)),
     ]
+    entries[1:1] = [
+        (f"chat_{provider_id}", provider)
+        for provider_id, provider in chat_providers.items()
+        if provider_id not in {"local", "openai"}
+    ]
     rows = []
     for role, provider in entries:
         endpoint = getattr(provider, "base_url", "") or getattr(provider, "stt_url", "")

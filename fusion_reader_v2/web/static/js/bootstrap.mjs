@@ -14,7 +14,9 @@ import { createReadingHighlight } from './reading_highlight.mjs';
 import { startDesktopLifetime } from './desktop_lifetime.mjs';
 
 const SKIN_STORAGE_KEY = 'pandafusion.skin.v1';
+const COLLAPSED_PANEL_STORAGE_KEY = 'pandafusion.panel.collapsed.v1';
 const LAB_COLLAPSED_STORAGE_KEY = 'pandafusion.lab.collapsed.v1';
+const EXTERNAL_RESEARCH_STORAGE_KEY = 'pandafusion.lab.external_research.v1';
 const SKINS = new Set(['classic', 'neon']);
 
 function setSkin(value, { persist = true } = {}) {
@@ -43,6 +45,22 @@ function initializeSkin() {
 }
 
 const els = collectElements();
+const externalResearchToggle = document.getElementById('allowExternalResearch');
+if (externalResearchToggle) {
+  try {
+    externalResearchToggle.checked = window.localStorage.getItem(EXTERNAL_RESEARCH_STORAGE_KEY) === 'true';
+  } catch (_) {}
+  externalResearchToggle.addEventListener('change', () => {
+    try {
+      window.localStorage.setItem(EXTERNAL_RESEARCH_STORAGE_KEY, String(externalResearchToggle.checked));
+    } catch (_) {}
+  });
+  window.addEventListener('storage', event => {
+    if (event.storageArea === window.localStorage && (event.key === EXTERNAL_RESEARCH_STORAGE_KEY || !event.key)) {
+      externalResearchToggle.checked = event.newValue === 'true';
+    }
+  });
+}
 startDesktopLifetime();
 const readingHighlight = createReadingHighlight({
   player: els.player, container: els.chunk, indicator: els.readingHighlightStatus,
@@ -86,23 +104,32 @@ const busyControls = createBusyControlState(
   els.noteInput ? els.noteInput.value : ''
 );
 const dialogue = createDialogueState();
-function setLaboratoryCollapsed(collapsed) {
-  els.appRoot.classList.toggle('lab-collapsed', collapsed);
-  els.labToggle.setAttribute('aria-expanded', String(!collapsed));
-  els.labContent.hidden = collapsed;
-  if (collapsed && (dialogue.active || dialogue.starting)) stopDialogue();
+function setCollapsedPanel(panel, { persist = true } = {}) {
+  const readerCollapsed = panel === 'reader';
+  const labCollapsed = panel === 'lab';
+  els.appRoot.classList.toggle('reader-collapsed', readerCollapsed);
+  els.appRoot.classList.toggle('lab-collapsed', labCollapsed);
+  els.readerToggle.setAttribute('aria-expanded', String(!readerCollapsed));
+  els.readerToggle.title = readerCollapsed ? 'Mostrar lector' : 'Plegar lector y ampliar el Laboratorio';
+  els.labToggle.setAttribute('aria-expanded', String(!labCollapsed));
+  els.labContent.hidden = labCollapsed;
+  if (labCollapsed && (dialogue.active || dialogue.starting)) stopDialogue();
+  if (persist) {
+    try { window.localStorage.setItem(COLLAPSED_PANEL_STORAGE_KEY, panel); } catch (_) {}
+  }
 }
 
+let collapsedPanel = '';
 try {
-  setLaboratoryCollapsed(window.localStorage.getItem(LAB_COLLAPSED_STORAGE_KEY) === 'true');
-} catch {
-  setLaboratoryCollapsed(false);
+  collapsedPanel = window.localStorage.getItem(COLLAPSED_PANEL_STORAGE_KEY)
+    ?? (window.localStorage.getItem(LAB_COLLAPSED_STORAGE_KEY) === 'true' ? 'lab' : '');
+} catch (_) {}
+setCollapsedPanel(collapsedPanel, { persist: false });
+for (const [panel, toggle] of [['reader', els.readerToggle], ['lab', els.labToggle]]) {
+  toggle.addEventListener('click', () => {
+    setCollapsedPanel(toggle.getAttribute('aria-expanded') === 'true' ? panel : '');
+  });
 }
-els.labToggle.addEventListener('click', () => {
-  const collapsed = els.labToggle.getAttribute('aria-expanded') === 'true';
-  setLaboratoryCollapsed(collapsed);
-  try { window.localStorage.setItem(LAB_COLLAPSED_STORAGE_KEY, String(collapsed)); } catch (_) {}
-});
 
 const preparation = createPreparationController({ api, elements: els, beginBusyLease, wait, log });
 const renderPrepareStatus = preparation.renderStatus;
@@ -267,7 +294,16 @@ function formatDialogueTrace(data, trace, responseWallMs) {
   }
   parts.push(`intención ${fmtMs(server.intent_ms || 0)}`);
   parts.push(`nota ${fmtMs(server.note_ms || 0)}`);
-  parts.push(`chat ${fmtMs(data && data.chat_ms)}`);
+  if (data?.external_research) {
+    const provider = { searxng: 'SearXNG', openclaw_bridge: 'OpenClaw', reader_sources: 'enlaces guardados', reader_source: 'fuente pública' }[data.external_provider];
+    parts.push(provider
+      ? `investigación ${provider} ${fmtMs(server.external_ms || 0)}`
+      : 'búsqueda sin ejecutar');
+  } else if (data?.detail === 'external_research_intent_unclear') {
+    parts.push('búsqueda pendiente de aclaración');
+  } else {
+    parts.push(`chat ${fmtMs(data && data.chat_ms)}`);
+  }
   parts.push(`voz ${fmtMs(data && data.tts_ms)}`);
   parts.push(`desde fin de habla ${fmtMs(fromStopMs)}`);
   parts.push(`total servidor ${fmtMs(server.server_total_ms || data && data.duration_ms || 0)}`);
@@ -700,7 +736,11 @@ async function cancelReaderEdit() {
   els.readerEditOpen.focus();
 }
 
-function renderStatus(data) {
+function renderStatus(data, scopedLaboratory = false) {
+  const sameContext = status?.document_generation === data.document_generation
+    && status?.laboratory_mode?.mode === data.laboratory_mode?.mode;
+  if (status?.document_generation != null && data.document_generation != null && !sameContext) invalidateLaboratoryTurn();
+  if (!scopedLaboratory) data.laboratory_focus = sameContext ? status?.laboratory_focus : {};
   const selectedNotesDocId = data.doc_id || LAB_NOTES_DOC_ID;
   const notesState = notesController.state();
   const shouldRefreshNotes = selectedNotesDocId !== notesState.docId || data.current !== notesState.current || Boolean(data.notes && data.notes.count !== notesState.items.length);
@@ -977,12 +1017,16 @@ async function clearDocument() {
 async function setLaboratoryMode(mode) {
   const targetMode = String(mode || '').trim();
   try {
+    invalidateLaboratoryTurn();
     const data = await api('/api/laboratory/mode', { mode: targetMode });
     if (!status) {
       status = {};
     }
     status.laboratory_mode = data;
     renderLaboratoryMode(data);
+    status.laboratory_focus = {};
+    renderLabFocus({});
+    await refresh().catch(() => {});
     log(`${data.label || 'Modo de laboratorio'} activado.`);
     if (dialogue.active && !dialogue.processing && !dialogue.speaking) {
       setDialogueInfo(`Escuchando... ${dialogueModeSummary({})} ${laboratoryModeSummary()}`);
@@ -1018,11 +1062,42 @@ function renderVeilStatus(veilInfo) {
   els.veilSelect.title = item.description || '';
 }
 
-let chatProviderChoice = 'local';
+const startupChatProvider = els.chatProviderSelect?.value || 'openai';
+let chatProviderChoice = startupChatProvider;
+const LABORATORY_SESSION_KEY = 'pandafusion.lab.active.v1';
+let laboratorySession = crypto.randomUUID();
+try {
+  const saved = window.sessionStorage.getItem(LABORATORY_SESSION_KEY);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(saved || '')) laboratorySession = saved;
+  window.sessionStorage.setItem(LABORATORY_SESSION_KEY, laboratorySession);
+} catch (_) {}
+let laboratoryView = 0;
+let activeChatRequest = null;
+let changingChatProvider = false;
+let laboratoryBefore = null;
+let deletingLaboratoryConversation = false;
+
+function cancelChatRequest() {
+  activeChatRequest?.abort();
+  activeChatRequest = null;
+  if (els.cancelChatBtn) els.cancelChatBtn.hidden = true;
+}
+
+function invalidateLaboratoryTurn() {
+  cancelChatRequest();
+  if (dialogue.active || dialogue.starting) stopDialogue();
+}
+let laboratorySelection = 0;
+let laboratoryListRequest = 0;
+const laboratoryDrafts = new Map();
 
 function renderChatProviderStatus(providerInfo) {
   const item = providerInfo && typeof providerInfo === 'object' ? providerInfo : {};
   const selected = chatProviderChoice;
+  if (els.openaiUsageMenu) {
+    els.openaiUsageMenu.hidden = selected !== 'openai';
+    if (els.openaiUsageMenu.hidden) els.openaiUsageMenu.open = false;
+  }
   const available = Array.isArray(item.available) ? item.available : [];
   if (available.length > 0) {
     els.chatProviderSelect.replaceChildren();
@@ -1038,31 +1113,83 @@ function renderChatProviderStatus(providerInfo) {
   const active = available.find(provider => String(provider.id || '') === selected) || item;
   els.chatProviderSelect.title = active.cloud
     ? 'OpenAI vía el agente aislado fusion-dialogue. La voz continúa siendo local.'
-    : 'Modelo local 14B. El contenido no sale de la computadora.';
+    : `${active.label || 'Modelo local'}. Procesamiento en esta computadora.`;
   if (selected === 'openai' && item.detail === 'openclaw_auth_required') {
     els.chatProviderSelect.title = 'ChatGPT requiere volver a iniciar sesión para Panda.';
   }
 }
 
+async function refreshOpenAIUsage() {
+  const output = els.openaiUsageStatus;
+  const button = els.openaiUsageRefresh;
+  if (!output || !button || button.disabled) return;
+  button.disabled = true;
+  output.textContent = 'Consultando el uso de tu cuenta…';
+  try {
+    const data = await api('/api/chat/openai/usage');
+    output.replaceChildren();
+    const addLine = text => {
+      const line = document.createElement('p');
+      line.textContent = text;
+      output.append(line);
+    };
+    const windows = Array.isArray(data.windows) ? data.windows : [];
+    if (!windows.length) addLine('Cuota de ChatGPT no disponible en este momento.');
+    for (const window of windows) {
+      const percent = Number(window.remaining_percent).toLocaleString('es-AR');
+      const reset = window.reset_at
+        ? new Date(window.reset_at).toLocaleString('es-AR', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : '';
+      addLine(`${window.label} · ${percent}% disponible${reset ? ` · Reinicio ${reset}` : ''}`);
+    }
+    if (data.last_call?.total) {
+      const total = data.last_call.total.toLocaleString('es-AR');
+      const cached = data.last_call.cacheRead ? data.last_call.cacheRead.toLocaleString('es-AR') : '';
+      addLine(`Última llamada registrada · ${total} tokens procesados${cached ? ` (${cached} de caché)` : ''}`);
+    }
+  } catch (_) {
+    output.textContent = 'Cuota de ChatGPT no disponible en este momento.';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+els.openaiUsageMenu?.addEventListener('toggle', () => {
+  if (els.openaiUsageMenu.open) void refreshOpenAIUsage();
+});
+els.openaiUsageRefresh?.addEventListener('click', () => void refreshOpenAIUsage());
+
 async function setChatProvider(providerId) {
   const target = String(providerId || '').trim();
-  chatProviderChoice = target || 'local';
+  if (!target || changingChatProvider || target === chatProviderChoice) return;
+  changingChatProvider = true;
+  els.chatProviderSelect.disabled = true;
+  invalidateLaboratoryTurn();
   try {
     const data = await api('/api/chat/provider', { provider: target });
     if (!data.ok) throw new Error(data.error || 'No se pudo cambiar la IA');
-    if (chatProviderChoice !== target) return;
+    if (data.id !== target) throw new Error('El servidor confirmó otro modelo');
+    chatProviderChoice = target;
     if (!status) status = {};
     status.chat_provider = data;
     renderChatProviderStatus(data);
-    const destination = data.cloud ? 'OpenAI mediante OpenClaw' : 'el modelo local 14B';
-    if (data.detail === 'openclaw_auth_required') {
+    status.laboratory_focus = {};
+    renderLabFocus({});
+    await refresh().catch(() => {});
+    const destination = data.label || target;
+    if (data.detail === 'model_not_installed') {
+      log(`Los pesos de ${destination} todavía no están instalados.`);
+    } else if (data.detail === 'openclaw_auth_required') {
       log('ChatGPT requiere volver a iniciar sesión para Panda. La autorización guardada fue invalidada.');
     } else {
       log(`IA seleccionada: ${destination}. La conexión se comprueba al responder.`);
     }
   } catch (err) {
     log(`No pude cambiar el proveedor de diálogo: ${err.message}`);
-    if (status && status.chat_provider) renderChatProviderStatus(status.chat_provider);
+    els.chatProviderSelect.value = chatProviderChoice;
+  } finally {
+    changingChatProvider = false;
+    els.chatProviderSelect.disabled = false;
   }
 }
 
@@ -1273,14 +1400,168 @@ function playAudio(data, expectedSequence, expectedRequest) {
   return true;
 }
 
-function addChatMessage(kind, text) {
+function addChatMessage(kind, text, target = els.chatLog) {
   const node = document.createElement('div');
   node.className = `chat-msg ${kind}`;
   const label = kind === 'user' ? 'Vos' : kind === 'assistant' ? 'Laboratorio' : 'Sistema';
   node.textContent = `${label}: ${text}`;
-  els.chatLog.appendChild(node);
-  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  target.appendChild(node);
+  if (target === els.chatLog) target.scrollTop = target.scrollHeight;
   return node;
+}
+
+function addLaboratoryAnswer(data, { archived = false, target = els.chatLog } = {}) {
+  const answer = data.answer || '(sin respuesta)';
+  const text = data.truncated ? `${answer}\n[Respuesta cortada por el límite de generación.]` : answer;
+  const node = addChatMessage('assistant', text, target);
+  const sources = Array.isArray(data.external_sources) ? data.external_sources : [];
+  const links = document.createElement('ul');
+  for (const source of sources) {
+    let url;
+    try {
+      url = new URL(source.url);
+    } catch {
+      continue;
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+    const link = document.createElement('a');
+    link.href = source.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = source.title || url.hostname;
+    const item = document.createElement('li');
+    item.append(link);
+    links.append(item);
+  }
+  if (links.childElementCount) {
+    node.append(links);
+    if (target === els.chatLog) target.scrollTop = target.scrollHeight;
+  }
+  if (!archived) {
+    if (data.archive_warning) addChatMessage('system', data.archive_warning);
+    void refreshLaboratoryConversations();
+  }
+}
+
+async function refreshLaboratoryConversations() {
+  if (!els.laboratoryConversations) return;
+  const request = ++laboratoryListRequest;
+  try {
+    const data = await api('/api/laboratory/conversations');
+    if (request !== laboratoryListRequest) return;
+    const list = els.laboratoryConversations;
+    list.replaceChildren();
+    const items = Array.isArray(data.items) ? data.items : [];
+    els.laboratoryConversationsInfo.textContent = items.length ? '' : 'Todavía no hay conversaciones guardadas.';
+    for (const item of items) {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'compact-btn';
+      button.textContent = item.title || 'Conversación';
+      if (item.id === laboratorySession) button.setAttribute('aria-current', 'true');
+      button.addEventListener('click', () => void openLaboratoryConversation(item.id));
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'compact-btn danger-btn laboratory-conversation-delete';
+      deleteButton.textContent = 'Borrar';
+      deleteButton.setAttribute('aria-label', `Borrar conversación: ${button.textContent}`);
+      deleteButton.addEventListener('click', () => void clearLaboratoryHistory(item.id, button.textContent));
+      li.append(button, deleteButton);
+      list.append(li);
+    }
+  } catch (_) {
+    if (request === laboratoryListRequest) {
+      els.laboratoryConversationsInfo.textContent = 'No pude cargar el historial.';
+    }
+  }
+}
+
+function setLaboratoryBefore(before) {
+  laboratoryBefore = before ?? null;
+  if (els.laboratoryOlder) els.laboratoryOlder.hidden = laboratoryBefore === null;
+}
+
+function appendArchivedTurns(turns, target) {
+  for (const turn of turns) {
+    addChatMessage('user', turn.question, target);
+    addLaboratoryAnswer({ ...turn, external_sources: turn.sources }, { archived: true, target });
+  }
+}
+
+async function loadOlderLaboratoryTurns() {
+  const button = els.laboratoryOlder;
+  if (button.disabled || laboratoryBefore === null) return;
+  const session = laboratorySession;
+  const view = laboratoryView;
+  button.disabled = true;
+  try {
+    const params = new URLSearchParams({ session, before: laboratoryBefore });
+    const data = await api(`/api/laboratory/conversation?${params}`);
+    if (session !== laboratorySession || view !== laboratoryView) return;
+    const earlier = document.createDocumentFragment();
+    appendArchivedTurns(data.turns || [], earlier);
+    const height = els.chatLog.scrollHeight;
+    const top = els.chatLog.scrollTop;
+    els.chatLog.prepend(earlier);
+    els.chatLog.scrollTop = top + els.chatLog.scrollHeight - height;
+    setLaboratoryBefore(data.next_before);
+  } catch (_) {
+    if (session === laboratorySession && view === laboratoryView) {
+      addChatMessage('system', 'No pude cargar los turnos anteriores.');
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function displayLaboratoryConversation(session, turns, before = null) {
+  if (session !== laboratorySession) {
+    invalidateLaboratoryTurn();
+    laboratoryDrafts.set(laboratorySession, els.chatInput.value);
+    laboratorySession = session;
+    laboratoryView += 1;
+    els.chatInput.value = laboratoryDrafts.get(session) || '';
+    try { window.sessionStorage.setItem(LABORATORY_SESSION_KEY, session); } catch (_) {}
+    renderLabFocus({});
+  }
+  els.chatLog.replaceChildren();
+  if (!turns.length) addChatMessage('system', 'Escribí o empezá a conversar.');
+  setLaboratoryBefore(before);
+  appendArchivedTurns(turns, els.chatLog);
+}
+
+async function openLaboratoryConversation(session) {
+  if (session === laboratorySession) return;
+  const selection = ++laboratorySelection;
+  try {
+    const data = await api(`/api/laboratory/conversation?session=${encodeURIComponent(session)}`);
+    if (selection !== laboratorySelection) return;
+    displayLaboratoryConversation(session, Array.isArray(data.turns) ? data.turns : [], data.next_before);
+    void refreshLaboratoryConversations();
+    void refresh().catch(() => {});
+  } catch (_) {
+    if (selection === laboratorySelection) addChatMessage('system', 'No pude abrir la conversación.');
+  }
+}
+
+function startLaboratoryConversation() {
+  laboratorySelection += 1;
+  displayLaboratoryConversation(crypto.randomUUID(), []);
+  void refreshLaboratoryConversations();
+  els.chatInput.focus();
+}
+
+async function restoreLaboratoryConversation() {
+  const session = laboratorySession;
+  const view = laboratoryView;
+  try {
+    const data = await api(`/api/laboratory/conversation?session=${encodeURIComponent(session)}`);
+    if (laboratorySession === session && laboratoryView === view && data.turns?.length
+        && !els.chatLog.querySelector('.chat-msg.user')) {
+      displayLaboratoryConversation(session, data.turns, data.next_before);
+    }
+  } catch (_) {}
 }
 
 function setDialogueInfo(text) {
@@ -1288,8 +1569,11 @@ function setDialogueInfo(text) {
 }
 
 async function refresh() {
-  const data = await api('/api/status');
-  renderStatus(data);
+  const session = laboratorySession;
+  const provider = chatProviderChoice;
+  const params = new URLSearchParams({ laboratory_session: session, provider });
+  const data = await api(`/api/status?${params}`);
+  if (session === laboratorySession && provider === chatProviderChoice) renderStatus(data, true);
 }
 
 function canReadFile(file) {
@@ -1514,6 +1798,7 @@ async function readNextWhenAudioEnds() {
 }
 
 async function sendChat() {
+  if (changingChatProvider || activeChatRequest) return;
   const message = els.chatInput.value.trim();
   if (!message) {
     return;
@@ -1529,30 +1814,53 @@ async function sendChat() {
     }
     return;
   }
+  const session = laboratorySession;
+  const view = laboratoryView;
+  const controller = new AbortController();
+  activeChatRequest = controller;
+  if (els.cancelChatBtn) els.cancelChatBtn.hidden = false;
+  let pending;
   try {
-    addChatMessage('system', pendingThoughtLabel());
+    pending = addChatMessage('system', pendingThoughtLabel());
     const data = await api('/api/chat', {
       message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice,
-      allow_external_research: consumeExternalResearchPermission()
-    });
-    const pending = els.chatLog.querySelector('.chat-msg.system:last-child');
-    if (pending && /Pensando|Repensando|Respondiendo/.test(pending.textContent)) {
-      pending.remove();
+      laboratory_session: session,
+      document_generation: status?.document_generation,
+      allow_external_research: externalResearchEnabled()
+    }, { signal: controller.signal });
+    if (controller.signal.aborted || session !== laboratorySession || view !== laboratoryView) {
+      void refreshLaboratoryConversations();
+      return;
     }
-    addChatMessage('assistant', data.answer || '(sin respuesta)');
+    pending?.remove();
+    addLaboratoryAnswer(data);
     if (data.note) {
       await refreshNotes();
     }
     await refresh().catch(() => {});
     log(`Chat listo con ${data.model || 'modelo local'} en ${data.duration_ms || 0} ms. ${currentReasoningLabel()} (${data.reasoning_passes || 1} pasada${Number(data.reasoning_passes || 1) === 1 ? '' : 's'}).`);
   } catch (err) {
+    if (controller.signal.aborted) return;
+    if (session !== laboratorySession || view !== laboratoryView) {
+      void refreshLaboratoryConversations();
+      return;
+    }
+    pending?.remove();
     if (renderGracefulResearchFailure(err.data || null)) {
       await refresh().catch(() => {});
       return;
     }
-    addChatMessage('system', `Falló el chat: ${err.message}`);
+    const detail = err.data?.detail === 'generation_limit'
+      ? 'El modelo agotó el límite de generación. Probá con un pedido más acotado.'
+      : `Falló el chat: ${err.message}`;
+    addChatMessage('system', detail);
     log(`Falló el chat: ${err.message}`);
   } finally {
+    pending?.remove();
+    if (activeChatRequest === controller) {
+      activeChatRequest = null;
+      if (els.cancelChatBtn) els.cancelChatBtn.hidden = true;
+    }
     releaseBusy();
   }
 }
@@ -1596,7 +1904,7 @@ async function playDialogueAnswer(data, token = null) {
     }
   } else if (data.answer && data.provider === 'text_ack') {
     dialogue.speaking = true;
-    speakLocal(data.answer, () => {
+    speakLocal(data.spoken_answer || data.answer, () => {
       if (token && !currentDialogueTurn(token)) return;
       dialogue.speaking = false;
       if (dialogue.active) {
@@ -1606,11 +1914,8 @@ async function playDialogueAnswer(data, token = null) {
   }
 }
 
-function consumeExternalResearchPermission() {
-  const control = document.getElementById?.('allowExternalResearch');
-  if (!control?.checked) return false;
-  control.checked = false;
-  return true;
+function externalResearchEnabled() {
+  return Boolean(document.getElementById?.('allowExternalResearch')?.checked);
 }
 
 async function sendTypedDialogue(message) {
@@ -1628,7 +1933,9 @@ async function sendTypedDialogue(message) {
   try {
     const data = await api('/api/dialogue/turn', {
       text: message, chunk_index: visibleChunkIndex(), provider: chatProviderChoice,
-      allow_external_research: consumeExternalResearchPermission()
+      laboratory_session: laboratorySession,
+      document_generation: status?.document_generation,
+      allow_external_research: externalResearchEnabled()
     }, { signal: token.controller.signal });
     if (!currentDialogueTurn(token)) return;
     if (pending && pending.isConnected) {
@@ -1637,7 +1944,7 @@ async function sendTypedDialogue(message) {
     if (data.model === 'reader_control') {
       addChatMessage('system', 'Respuesta detenida.');
     } else {
-      addChatMessage('assistant', data.answer || '(sin respuesta)');
+      addLaboratoryAnswer(data);
     }
     if (data.note) {
       await refreshNotes();
@@ -1672,17 +1979,34 @@ async function sendTypedDialogue(message) {
   }
 }
 
-async function clearLaboratoryHistory() {
+async function clearLaboratoryHistory(session = laboratorySession, title = '') {
+  if (deletingLaboratoryConversation) return;
+  deletingLaboratoryConversation = true;
   const releaseBusy = beginBusyLease();
   try {
-    const data = await api('/api/laboratory/reset', {});
-    els.chatLog.innerHTML = '';
-    addChatMessage('system', 'Historial de laboratorio borrado.');
-    log(`Historial de laboratorio borrado (${data.chat_items || 0} chat, ${data.dialogue_items || 0} diálogo).`);
+    const confirmed = await pandaDialog.confirm({
+      title: '¿Borrar esta conversación?',
+      message: title ? `Se borrará «${title}» y sus turnos guardados.` : 'Se borrarán los turnos de la conversación actual.',
+      acceptLabel: 'Sí, borrar',
+      danger: true
+    });
+    if (!confirmed) return;
+    laboratorySelection += 1;
+    if (session === laboratorySession) invalidateLaboratoryTurn();
+    await api('/api/laboratory/reset', { laboratory_session: session });
+    if (session === laboratorySession) {
+      els.chatInput.value = '';
+      startLaboratoryConversation();
+      addChatMessage('system', 'Conversación borrada.');
+      if (status) status.laboratory_focus = {};
+    }
+    laboratoryDrafts.delete(session);
+    void refreshLaboratoryConversations();
+    log('Conversación borrada del historial del Laboratorio.');
   } catch (err) {
-    addChatMessage('system', `No pude borrar el historial: ${err.message}`);
-    log(`No pude borrar el historial: ${err.message}`);
+    addChatMessage('system', `No pude borrar la conversación: ${err.message}`);
   } finally {
+    deletingLaboratoryConversation = false;
     releaseBusy();
   }
 }
@@ -2011,6 +2335,10 @@ function beginDialogueRecording() {
   dialogue.recording = true;
   dialogue.finalizing = false;
   dialogue.chunkIndex = visibleChunkIndex();
+  dialogue.documentGeneration = status?.document_generation;
+  dialogue.session = laboratorySession;
+  dialogue.chatProvider = chatProviderChoice;
+  dialogue.laboratoryMode = status?.laboratory_mode?.mode;
   dialogue.startedAt = now;
   dialogue.turnStartedAt = now;
   dialogue.trace = {
@@ -2066,13 +2394,23 @@ async function sendDialogueAudio(blob, mimeType) {
     setDialogueInfo(`Escuchando... ${currentReasoningLabel()}. ${laboratoryModeSummary()}`);
     return;
   }
+  if (dialogue.session !== laboratorySession || dialogue.chatProvider !== chatProviderChoice
+    || dialogue.laboratoryMode !== status?.laboratory_mode?.mode) {
+    setDialogueInfo('Cambió el contexto del laboratorio. Repetí el pedido.');
+    return;
+  }
   const token = beginDialogueTurn();
   const requestStartedAt = performance.now();
   const audioMime = mimeType || blob.type || 'audio/webm';
   const turnTrace = dialogue.trace ? { ...dialogue.trace, sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime } : { sendStartedAt: requestStartedAt, blobSize: blob.size, audioMime };
   try {
-    const params = new URLSearchParams({ filename: 'dialogue.wav', provider: chatProviderChoice });
-    if (consumeExternalResearchPermission()) params.set('allow_external_research', '1');
+    const params = new URLSearchParams({
+      filename: 'dialogue.wav', provider: dialogue.chatProvider, laboratory_session: dialogue.session
+    });
+    if (dialogue.documentGeneration != null) {
+      params.set('document_generation', String(dialogue.documentGeneration));
+    }
+    if (externalResearchEnabled()) params.set('allow_external_research', '1');
     params.set('audio_size_bytes', String(blob.size || 0));
     params.set('capture_ms', String(Math.round(turnTrace.captureDurationMs || turnTrace.recordedMs || 0)));
     params.set('mic_rms', String(Number(turnTrace.micRms || 0).toFixed(6)));
@@ -2115,7 +2453,7 @@ async function sendDialogueAudio(blob, mimeType) {
     if (data.model === 'reader_control') {
       addChatMessage('system', 'Respuesta detenida.');
     } else {
-      addChatMessage('assistant', data.answer || '(sin respuesta)');
+      addLaboratoryAnswer(data);
     }
     if (data.note) {
       await refreshNotes();
@@ -2193,7 +2531,10 @@ els.clearDocBtn.addEventListener('click', clearDocument);
 els.saveNoteBtn.addEventListener('click', saveCurrentNote);
 els.noteInput.addEventListener('input', () => busyControls.setNoteText(els.noteInput.value));
 els.sendChatBtn.addEventListener('click', sendChat);
-els.clearLabHistoryBtn.addEventListener('click', clearLaboratoryHistory);
+els.cancelChatBtn?.addEventListener('click', cancelChatRequest);
+els.laboratoryOlder?.addEventListener('click', loadOlderLaboratoryTurns);
+els.clearLabHistoryBtn.addEventListener('click', () => void clearLaboratoryHistory());
+els.newLabConversation?.addEventListener('click', startLaboratoryConversation);
 els.reasoningNormalBtn.addEventListener('click', () => setReasoningMode('normal'));
 els.reasoningThinkingBtn.addEventListener('click', () => setReasoningMode('thinking'));
 els.reasoningSupremeBtn.addEventListener('click', () => setReasoningMode('supreme'));
@@ -2339,6 +2680,8 @@ window.addEventListener('beforeunload', event => {
   try { els.dialoguePlayer.pause(); } catch (_) {}
 });
 
+void refreshLaboratoryConversations();
+if (els.laboratoryConversations) void restoreLaboratoryConversation();
 refresh()
   .then(() => Promise.all([refreshVoices(), mediaController.poll()]))
   .catch(err => log(`Arranque incompleto: ${err.message}`));

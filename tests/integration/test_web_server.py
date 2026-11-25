@@ -15,21 +15,786 @@ import urllib.request
 import wave
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from uuid import uuid4
 
 from fusion_reader_v2 import DictationAssistant, NullChatProvider
 from fusion_reader_v2.config import ConfigurationError, SecuritySettings, create_settings
 from fusion_reader_v2.conversation import SelectableChatProvider
 from fusion_reader_v2.dialogue import NullSTTProvider
-from fusion_reader_v2.openclaw_bridge import NullExternalResearchBridge
+from fusion_reader_v2.openclaw_bridge import ExternalResearchResult, NullExternalResearchBridge
 from fusion_reader_v2.pdf_to_docx import ConversionResult, JobStatus
 from fusion_reader_v2.web import server as web_server
 from fusion_reader_v2.web.jobs import register_pdf_to_docx_download
 from fusion_reader_v2.web.routes import tools as tools_routes
-from tests.helpers import SyntheticWavTTSProvider, managed_test_app
+from tests.helpers import SyntheticWavTTSProvider, make_reading_sections, managed_test_app
 
 
 class WebServerIntegrationTests(unittest.TestCase):
+    def test_disconnected_laboratory_request_does_not_publish_late_answer(self) -> None:
+        from http.client import HTTPConnection
+        from fusion_reader_v2.laboratory_turn import LaboratoryTurnCancelled
+
+        entered = threading.Event()
+        release = threading.Event()
+        cancelled = threading.Event()
+        session = str(uuid4())
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            app = server.context.app
+            archive = app.archive_laboratory_turn
+
+            def delayed(*args, **kwargs):
+                entered.set()
+                self.assertTrue(release.wait(4))
+                return {"ok": True, "answer": "Respuesta tardía", "model": "test"}
+
+            def publish(*args, **kwargs):
+                try:
+                    return archive(*args, **kwargs)
+                except LaboratoryTurnCancelled:
+                    cancelled.set()
+                    raise
+
+            client = HTTPConnection("127.0.0.1", server.server_port)
+            with patch.object(app, "chat", side_effect=delayed), patch.object(
+                app, "archive_laboratory_turn", side_effect=publish
+            ):
+                try:
+                    client.request(
+                        "POST", "/api/chat",
+                        json.dumps({"message": "Pregunta", "laboratory_session": session}),
+                        {"Content-Type": "application/json"},
+                    )
+                    self.assertTrue(entered.wait(3))
+                    client.close()
+                    release.set()
+                    self.assertTrue(cancelled.wait(3))
+                    self.assertEqual(app.archived_laboratory_turns(session)["turns"], [])
+                finally:
+                    release.set()
+                    client.close()
+
+    def test_laboratory_preserves_search_failure_and_executes_an_indirect_portal_request(self) -> None:
+        from urllib.parse import urlencode
+
+        from fusion_reader_v2.services.laboratory_archive import ArchiveScope, LaboratoryArchive
+        from fusion_reader_v2.services.research import WebIntent
+
+        initial = "¿Podés buscar las principales noticias sobre geopolítica de hoy?"
+        failure = "Busqué noticias de hoy sobre geopolítica. Los resultados con fecha no eran suficientemente pertinentes."
+        portal = (
+            "Ok, pero la pregunta es esta. ¿Vos podés acceder a la red para entrar a algún portal de noticias "
+            "y fijarte en la parte de geopolítica cuáles son los principales títulos?"
+        )
+        grant = "Bueno, yo te habilito a hacer una búsqueda externa."
+        report = {"title": "Titular de la sección", "url": "https://news.un.org/es/story/2026/11/1542201"}
+        stt = NullSTTProvider(portal)
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            app = server.context.app
+            app.set_laboratory_mode("free")
+            model = NullChatProvider("Pertinentes al pedido de geopolítica.")
+            app.conversation.provider = model
+            app.conversation.classify_laboratory_web_request = classify = Mock(
+                return_value='{"operation":"headlines","topic":"geopolítica","today":false}'
+            )
+            app._research_service.bridge = NullExternalResearchBridge(
+                ExternalResearchResult(
+                    False, answer=failure, detail="external_research_news_no_relevant_results", provider="searxng"
+                )
+            )
+            port = server.server_port
+            base = f"http://127.0.0.1:{port}"
+            session = str(uuid4())
+            turn = {"laboratory_session": session, "provider": "openai"}
+
+            def chat(text: str, allowed: bool = True) -> dict:
+                return self._request(
+                    base, "/api/chat", {**turn, "message": text, "allow_external_research": allowed}
+                )[1]
+
+            def speak(allowed: bool) -> dict:
+                request = urllib.request.Request(
+                    base + "/api/dialogue/turn?" + urlencode({**turn, "allow_external_research": int(allowed)}),
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return json.load(response)
+
+            self.assertEqual(chat(initial)["answer"], failure)
+            self.assertIn("geopolítica", chat("¿Pertinentes a qué?")["answer"])
+            transcript = [m["content"] for m in model.calls[-1][0]]
+            self.assertIn(initial, transcript)
+            self.assertIn(failure, transcript)
+
+            response = ExternalResearchResult(
+                True, answer="Encontré un titular en Noticias ONU.", detail="external_research_headlines",
+                provider="un_news", query="geopolítica", sources=[report],
+            )
+            with patch("fusion_reader_v2.facade.public_international_headlines", return_value=response) as headline:
+                self.assertEqual(speak(False)["detail"], "external_research_permission_required")
+                headline.assert_not_called()
+                archive = LaboratoryArchive(app.session_state_path.with_suffix(".laboratory.sqlite3"))
+                scope = ArchiveScope(session, "openai", "", "free")
+                self.assertEqual(archive.restore(scope)[1].pending.web_intent, WebIntent("headlines", "geopolítica", True))
+                app._dialogue_service.clear_laboratory_session(session)
+                stt.text = grant
+                resumed = speak(True)
+                self.assertEqual(resumed["external_provider"], "un_news")
+                self.assertEqual(resumed["external_sources"][0]["url"], report["url"])
+                headline.assert_called_once_with("geopolítica", today=True)
+                self.assertEqual(chat(grant)["detail"], "external_research_links")
+                headline.assert_called_once()
+                self.assertEqual(classify.call_count, 1)
+                chat("Te leo un ejemplo. ¿Podés entrar a la red para ver los titulares?")
+                self.assertEqual(classify.call_count, 1)
+
+    def test_public_source_is_read_saved_and_archived_in_its_own_thread(self) -> None:
+        from hashlib import sha256
+        from urllib.parse import urlencode
+
+        from fusion_reader_v2.services.laboratory_archive import ArchiveScope, LaboratoryArchive
+        from fusion_reader_v2.services.source_reader import OpenedSource
+
+        paper = "https://publisher.example/elaboracion"
+        pdf = "https://publisher.example/elaboracion.pdf"
+        body = "[Pagina 1] La lectura crítica requiere distinguir una deducción de sus premisas."
+        raw = b"%PDF-1.4 publisher bytes"
+        found = [
+            {"title": "Otro artículo", "url": "https://publisher.example/otro"},
+            {"title": "Elaboración crítica", "url": paper},
+        ]
+        retrieval = OpenedSource(
+            paper, pdf, "Elaboración crítica", body, "pdf", pdf=raw, digest=sha256(raw).hexdigest()
+        )
+        stt = NullSTTProvider("Descargalo y agregalo como documento de apoyo.")
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            app = server.context.app
+            app.load_text("prueba", "Principal", "Un texto de prueba.", prefetch=False)
+            app._research_service.bridge = NullExternalResearchBridge(
+                ExternalResearchResult(True, provider="searxng", sources=found)
+            )
+            base = f"http://127.0.0.1:{server.server_port}"
+            session = str(uuid4())
+            turn = {
+                "laboratory_session": session,
+                "document_generation": app._document_generation,
+                "chunk_index": 0,
+            }
+
+            def chat(message: str, *, allowed: bool = True, **overrides) -> dict:
+                return self._request(
+                    base,
+                    "/api/chat",
+                    {**turn, "message": message, "allow_external_research": allowed, **overrides},
+                )[1]
+
+            with patch("fusion_reader_v2.services.source_reader.read_source", return_value=retrieval) as fetch:
+                self.assertEqual(
+                    chat("Abrí el segundo enlace.", allowed=False)["detail"], "external_research_permission_required"
+                )
+                fetch.assert_not_called()
+                opened = chat("Buscá un paper sobre lectura crítica y abrí el segundo resultado.")
+                self.assertEqual(opened["detail"], "external_source_opened")
+                self.assertEqual(opened["external_sources"][0]["url"], pdf)
+                self.assertEqual(fetch.call_args.args[0]["url"], paper)
+                self.assertEqual(app.session.document.title, "Principal")
+                self.assertEqual(app.status()["reference_documents"], [])
+
+                request = urllib.request.Request(
+                    base + "/api/dialogue/turn?" + urlencode({**turn, "allow_external_research": 1}),
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    saved = json.load(response)
+                self.assertEqual(saved["detail"], "external_source_saved")
+                path = app.audio_export_root / "Elaboración crítica.pdf"
+                self.assertEqual(path.read_bytes(), raw)
+                self.assertEqual(len(app.status()["reference_documents"]), 1)
+                self.assertEqual(app.session.document.title, "Principal")
+                self.assertEqual(fetch.call_count, 1)
+
+            other = str(uuid4())
+            other_reply = chat("Abrí el segundo enlace.", laboratory_session=other)
+            self.assertEqual(other_reply["detail"], "external_source_required")
+            archive = LaboratoryArchive(app.session_state_path.with_suffix(".laboratory.sqlite3"))
+            self.assertEqual(len(archive.turns(session)), 3)
+            self.assertEqual(len(archive.turns(other)), 1)
+            scope = ArchiveScope(session, "local", "prueba", app.laboratory_mode)
+            _, research = archive.restore(scope)
+            self.assertEqual(research.opened_digest, sha256(raw).hexdigest())
+            self.assertIn(body, research.opened_context)
+            archive.remove(other)
+            archive.record(ArchiveScope(other, "local", "", "free"), "Tarde", "Un turno demorado", [], None, None)
+            self.assertEqual(archive.turns(other), [])
+            self.assertEqual(len(archive.turns(session)), 3)
+
+    def test_laboratory_research_plans_topics_and_resumes_the_approved_request(self) -> None:
+        from urllib.parse import urlencode
+
+        passage = (
+            "La soberanía cognitiva requiere preservar la autonomía del juicio. "
+            "La educación debe discutir qué delegamos a la inteligencia artificial."
+        )
+        query = "soberanía cognitiva autonomía juicio educación"
+        url = "https://example.org/articles/soberania.pdf?source=" + "x" * 560
+        sources = [
+            {"title": "Soberanía cognitiva y autonomía del juicio", "url": url, "note": "Una tesis sobre educación."},
+            {
+                "title": "Juicio profesional y educación superior",
+                "url": "https://example.org/articles/evaluacion.pdf",
+                "note": "Sobre las limitaciones de la educación.",
+            },
+            {
+                "title": "Real Decreto sobre el Documento Nacional",
+                "url": "https://www.boe.es/buscar/",
+                "note": "Bloque 1 del documento.",
+            },
+        ]
+        opening = "¿Podrías buscar información en la red con respecto a lo que dice en el bloque 1 del documento?"
+        correction = (
+            "Sí, yo lo que pedí es lo siguiente. El texto habla sobre varios temas. "
+            "Lo que yo quería es que interpretes sobre qué temas está hablando y busques información académica "
+            "sobre esos temas que vos identificás."
+        )
+        stt = NullSTTProvider(opening)
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            app = server.context.app
+            model = NullChatProvider(json.dumps({"topics": [{"topic": "Soberanía cognitiva", "query": query}]}))
+            bridge = NullExternalResearchBridge(ExternalResearchResult(True, sources=sources))
+            app.conversation.provider = model
+            app.conversation.review_research_sources = review = Mock(return_value='{"relevant":[1]}')
+            app._research_service.bridge = bridge
+            app.load_text("prueba", "expo final.pdf", passage, prefetch=False)
+            app.set_reasoning_mode("normal")
+            base = f"http://127.0.0.1:{server.server_port}"
+            turn = {
+                "laboratory_session": str(uuid4()),
+                "document_generation": app._document_generation,
+                "chunk_index": 0,
+            }
+
+            def audio(allowed: bool) -> dict:
+                request = urllib.request.Request(
+                    base + "/api/dialogue/turn?" + urlencode({**turn, "allow_external_research": int(allowed)}),
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=6) as response:
+                    return json.load(response)
+
+            out = audio(True)
+            self.assertEqual(out["external_query"], query)
+            self.assertEqual(bridge.calls, [(query, {})])
+            self.assertIn(passage, model.calls[-1][0][-1]["content"])
+            self.assertEqual(review.call_args.args[0][1]["title"], "Juicio profesional y educación superior")
+            self.assertEqual([item["url"] for item in out["external_sources"]], [url])
+            self.assertNotIn("BOE", out["answer"])
+            self.assertNotIn(url, out["spoken_answer"])
+
+            stt.text = "Ok, pero ¿me podrías dejar acá los links como para que yo entre directamente?"
+            links = audio(False)
+            self.assertEqual(links["external_sources"][0]["url"], url)
+            self.assertIn(url, links["answer"])
+            self.assertEqual(len(bridge.calls), 1)
+
+            stt.text = correction
+            self.assertEqual(audio(False)["detail"], "external_research_permission_required")
+            self.assertEqual(len(bridge.calls), 1)
+            stt.text = "Bueno, ¿podés realizarla?"
+            self.assertEqual(audio(False)["detail"], "external_research_permission_required")
+            _, other = self._request(
+                base,
+                "/api/chat",
+                {
+                    **turn,
+                    "laboratory_session": str(uuid4()),
+                    "message": "Podés realizarla?",
+                    "allow_external_research": True,
+                },
+            )
+            self.assertFalse(other.get("external_research", False))
+            self.assertEqual(len(bridge.calls), 1)
+            stt.text = "A ver, ahí te habilité la búsqueda en internet, fíjate."
+            self.assertEqual(audio(True)["external_query"], query)
+            self.assertEqual(bridge.calls, [(query, {}), (query, {})])
+
+            stt.text = correction
+            self.assertEqual(audio(False)["detail"], "external_research_permission_required")
+            self._request(base, "/api/chat", {**turn, "message": "No busques en internet."})
+            stt.text = "Bueno, ¿podés realizarla?"
+            self.assertFalse(audio(True).get("external_research", False))
+            self.assertEqual(len(bridge.calls), 2)
+
+            stt.text = "Podés separar los temas de este bloque y buscar bibliografía en el documento."
+            self.assertFalse(audio(True).get("external_research", False))
+            self.assertEqual(len(bridge.calls), 2)
+
+            stt.text = (
+                "A ver, ¿podés buscar, quiero decir, separar los temas que trata este bloque y buscar alguna, algún..."
+            )
+            self.assertEqual(audio(True)["detail"], "external_research_confirmation")
+            self.assertEqual(len(bridge.calls), 2)
+            stt.text = "Ok, dejé prendida la búsqueda para más tarde."
+            self.assertFalse(audio(True).get("external_research", False))
+            self.assertEqual(len(bridge.calls), 2)
+            stt.text = "Ok, dejé prendida la búsqueda, así que podés buscar."
+            self.assertEqual(audio(True)["external_query"], query)
+            self.assertEqual(len(bridge.calls), 3)
+
+            review.return_value = "No pude evaluar las fuentes."
+            stt.text = opening
+            invalid_review = audio(True)
+            self.assertEqual(invalid_review["detail"], "external_research_review_unavailable")
+            self.assertEqual(invalid_review["external_sources"], [])
+
+    def test_academic_article_can_integrate_the_titles_from_the_previous_turn(self) -> None:
+        question = "Está bien, ahora podés buscarme algún artículo académico que englobe estos títulos."
+        earlier = "Los ejes son phármakon, memoria técnica y juicio docente en la educación."
+        origin = "Stiegler discute la filosofía de la técnica y la educación."
+        criteria = ["Phármakon", "Memoria técnica", "Juicio docente"]
+        query = "phármakon memoria técnica juicio docente educación"
+        sources = [
+            {
+                "title": "Juicio docente en la educación",
+                "url": "https://example.org/docencia",
+                "note": "Análisis del juicio docente.",
+            },
+            {
+                "title": "Phármakon, memoria técnica y juicio docente",
+                "url": "https://example.org/interseccion",
+                "note": "Relaciona phármakon, memoria técnica y juicio docente.",
+            },
+        ]
+        stt = NullSTTProvider(question)
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            app.load_text("prueba", "Lectura", origin, prefetch=False)
+            app.conversation.provider = NullChatProvider(earlier)
+            app.set_reasoning_mode("normal")
+            app.conversation.plan_research_topics = plan = Mock(
+                return_value=json.dumps({"criteria": criteria, "topics": [{"topic": "Cruce", "query": query}]})
+            )
+            coverage = [
+                {"index": 1, "evidence": "Phármakon"},
+                {"index": 2, "evidence": "memoria técnica"},
+                {"index": 3, "evidence": "juicio docente"},
+            ]
+            app.conversation.review_research_sources = review = Mock(
+                return_value=json.dumps(
+                    {"coverage": [{"id": 1, "criteria": coverage[2:]}, {"id": 2, "criteria": coverage}]}
+                )
+            )
+            app._research_service.bridge = bridge = NullExternalResearchBridge(
+                ExternalResearchResult(True, provider="searxng", sources=sources)
+            )
+            scope = str(uuid4())
+            turn = {"laboratory_session": scope, "document_generation": app._document_generation}
+
+            def submit(message: str, enabled: bool = True) -> dict:
+                try:
+                    return self._request(
+                        base, "/api/chat", {**turn, "message": message, "allow_external_research": enabled}
+                    )[1]
+                except urllib.error.HTTPError as error:
+                    with error:
+                        return json.load(error)
+
+            self.assertEqual(submit(question)["detail"], "external_research_topic_required")
+            self.assertEqual(bridge.calls, [])
+            self.assertEqual(submit("Listá los ejes.")["answer"], earlier)
+            self.assertEqual(submit(question, False)["detail"], "external_research_permission_required")
+            self.assertEqual(bridge.calls, [])
+            self.assertEqual(submit(question)["external_sources"][0]["url"], sources[1]["url"])
+            self.assertEqual(plan.call_args.args[1], earlier)
+            self.assertIn(question, plan.call_args.args[0])
+            self.assertEqual(review.call_args.args[0][0]["criteria"], criteria)
+            self.assertEqual(bridge.calls, [(query, {})])
+
+            submit("Volvé a enumerar los ejes del bloque 1.")
+            review.return_value = json.dumps(
+                {"coverage": [{"id": 1, "criteria": coverage[2:]}, {"id": 2, "criteria": coverage[:2]}]}
+            )
+            voice = urllib.request.Request(
+                f"{base}/api/dialogue/turn?filename=turn.wav&laboratory_session={scope}&allow_external_research=1",
+                data=b"RIFF synthetic",
+                headers={"Content-Type": "audio/wav"},
+            )
+            with urllib.request.urlopen(voice, timeout=6) as response:
+                partial = json.load(response)
+            self.assertEqual(partial["detail"], "external_research_partial_coverage")
+            self.assertEqual(plan.call_args.args[1], f"{earlier}\n\nPasaje de origen de la lista:\n{origin}")
+            self.assertEqual([source["url"] for source in partial["external_sources"]], [sources[1]["url"]])
+            self.assertIn("Cobertura pendiente de confirmar: Juicio docente", partial["answer"])
+
+            submit("Volvé a enumerar los ejes.")
+            review.return_value = json.dumps(
+                {
+                    "coverage": [
+                        {"id": 1, "criteria": [{"index": 1, "evidence": "Análisis del juicio docente"}]},
+                        {
+                            "id": 2,
+                            "criteria": [{"index": 1, "evidence": "El phármakon constituye la base del artículo"}],
+                        },
+                    ]
+                }
+            )
+            missing = submit(question)
+            self.assertEqual(missing["detail"], "external_research_no_integrative_source")
+            self.assertEqual(missing["external_provider"], "searxng")
+            self.assertEqual(missing["external_sources"], [])
+
+    def test_written_contextual_search_uses_the_block_year_and_search_receipt(self) -> None:
+        message = "buscá información sobre educación 2026 referido a esto"
+        passage = "La educación discute la influencia de la inteligencia artificial en la autoría académica."
+        query = "educación inteligencia artificial autoría"
+        url = "https://example.org/investigacion"
+        provenance_question = "¿Cómo los buscaste y cómo los encontraste?"
+        retry_question = "Ok, ¿y podrías recuperar mi confianza buscando realmente en la red?"
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=NullSTTProvider(provenance_question))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            app.load_text("prueba", "Lectura", passage, prefetch=False)
+            app.conversation.plan_research_topics = plan = Mock(
+                return_value=json.dumps({"topics": [{"topic": "Educación e IA", "query": query}]})
+            )
+            app.conversation.review_research_sources = Mock(return_value='{"relevant":[1]}')
+            app._research_service.bridge = bridge = NullExternalResearchBridge(
+                ExternalResearchResult(
+                    True,
+                    provider="searxng",
+                    sources=[
+                        {"title": "Educación e inteligencia artificial", "url": url, "engine": "semantic scholar"}
+                    ],
+                )
+            )
+            turn = {"laboratory_session": str(uuid4()), "document_generation": app._document_generation}
+
+            def submit(text: str, enabled: bool = True) -> dict:
+                try:
+                    return self._request(
+                        base, "/api/chat", {**turn, "message": text, "allow_external_research": enabled}
+                    )[1]
+                except urllib.error.HTTPError as error:
+                    with error:
+                        return json.load(error)
+
+            self.assertEqual(submit(message, False)["detail"], "external_research_permission_required")
+            self.assertEqual(bridge.calls, [])
+            found = submit(message)
+            self.assertEqual(found["external_provider"], "searxng")
+            self.assertEqual(found["external_query"], f"{query} 2026")
+            self.assertEqual(plan.call_args.args, (message, passage))
+            self.assertEqual(found["external_sources"][0]["url"], url)
+            proof = submit("¿Y cómo hiciste la búsqueda?")
+            self.assertIn("SearXNG", proof["answer"])
+            self.assertIn(f"{query} 2026", proof["answer"])
+            submit("Escúchame.")
+            proof = submit(provenance_question, False)
+            self.assertEqual(proof["detail"], "external_research_provenance")
+            self.assertIn("semantic scholar", proof["answer"])
+            self.assertIn("Seleccionado por su relación con «Educación e IA»", proof["answer"])
+            self.assertIn("descarga o lectura del archivo completo", proof["answer"])
+            self.assertEqual(proof["external_sources"][0]["url"], url)
+            voice = urllib.request.Request(
+                f"{base}/api/dialogue/turn?filename=turn.wav&laboratory_session={turn['laboratory_session']}",
+                data=b"RIFF synthetic",
+                headers={"Content-Type": "audio/wav"},
+            )
+            with urllib.request.urlopen(voice, timeout=6) as response:
+                audio_proof = json.load(response)
+            self.assertEqual(audio_proof["detail"], "external_research_provenance")
+            self.assertEqual(audio_proof["external_query"], proof["external_query"])
+            self.assertEqual(audio_proof["external_sources"], proof["external_sources"])
+            self.assertIn("descarga o lectura del archivo completo", audio_proof["spoken_answer"])
+            self.assertIn("Seleccionado por su relación con «Educación e IA»", audio_proof["spoken_answer"])
+            self.assertNotIn(url, audio_proof["spoken_answer"])
+            self.assertEqual(len(bridge.calls), 1)
+            submit("Pero eso lo acabaste de hacer vos misma.")
+            self.assertEqual(submit(retry_question)["external_query"], f"{query} 2026")
+            self.assertEqual(len(bridge.calls), 2)
+
+            generic = "Bien, puedes buscar información académica y dejarme los links, buscarla en la red."
+            self.assertEqual(submit(generic)["external_query"], query)
+            self.assertEqual(plan.call_args.args, (generic, passage))
+            complex_request = (
+                "Hola, ¿podés ver el bloque 1? ¿Podés resumir las principales ideas del bloque "
+                "y de cada una de esas ideas buscar información académica en internet y dejarme los links?"
+            )
+            self.assertEqual(submit(complex_request)["external_query"], query)
+            submit("Eso no fue lo que pedí.")
+            self.assertEqual(
+                submit("Bueno, está muy bien, entonces repáralo ahora y búscalos.")["external_query"], query
+            )
+            self.assertEqual(len(bridge.calls), 5)
+
+    def test_laboratory_research_uses_spoken_context_and_retries_the_same_request(self) -> None:
+        prior = "Los temas son la autoría, la soberanía cognitiva y la delegación del juicio docente."
+        passage = "El bloque propone discutir la autoría, la soberanía cognitiva y la delegación del juicio."
+        query = "soberanía cognitiva delegación juicio"
+        first = (
+            "Bueno, escúchame, toma lo que dice en el bloque 1, lo que habías dicho antes, "
+            "que separaste los temas y busca información académica sobre esos temas."
+        )
+        second = "Ok, ¿podés buscar información académica sobre esos puntos?"
+        retry = "A ver, intentá ahora de nuevo."
+        stt = NullSTTProvider(retry)
+        unavailable = ExternalResearchResult(
+            False, answer="El buscador tardó demasiado.", provider="searxng", detail="searxng_timeout"
+        )
+        article = {
+            "title": "Soberanía cognitiva y delegación del juicio",
+            "url": "https://example.org/juicio",
+            "note": "Investigación sobre el juicio docente.",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            app = server.context.app
+            app.conversation.provider = NullChatProvider(prior)
+            app.conversation.plan_research_topics = plan = Mock(
+                return_value=json.dumps({"topics": [{"topic": "Juicio", "query": query}]})
+            )
+            app.conversation.review_research_sources = Mock(return_value='{"relevant":[1]}')
+            app._research_service.bridge = bridge = NullExternalResearchBridge(unavailable)
+            app.load_text("prueba", "expo final.pdf", passage, prefetch=False)
+            app.set_reasoning_mode("normal")
+            base = f"http://127.0.0.1:{server.server_port}"
+            scope = str(uuid4())
+            turn = {"laboratory_session": scope, "document_generation": app._document_generation}
+            voice = urllib.request.Request(
+                f"{base}/api/dialogue/turn?filename=turn.wav&laboratory_session={scope}&allow_external_research=1",
+                data=b"RIFF synthetic",
+                headers={"Content-Type": "audio/wav"},
+            )
+
+            def audio(text: str) -> dict:
+                stt.text = text
+                with urllib.request.urlopen(voice, timeout=6) as response:
+                    return json.load(response)
+
+            self.assertFalse(audio(retry).get("external_research", False))
+            _, structured = self._request(
+                base, "/api/chat", {**turn, "message": "Separá los temas del primer bloque en una lista breve."}
+            )
+            self.assertEqual(structured["answer"], prior)
+
+            self.assertEqual(audio(first)["detail"], "searxng_timeout")
+            self.assertEqual(plan.call_args.args[1], passage)
+            self.assertIn(prior, plan.call_args.args[0])
+            self.assertEqual(audio(second)["detail"], "searxng_timeout")
+            self.assertEqual(plan.call_args.args, (second, prior))
+
+            bridge.result = ExternalResearchResult(
+                True, provider="searxng", sources=[article, {**article, "url": "https://example.org/duplicate"}]
+            )
+            app.conversation.review_research_sources.return_value = '{"relevant":[1,2]}'
+            result = audio(retry)
+            self.assertEqual(result["detail"], "external_research_ok")
+            self.assertEqual(result["external_provider"], "searxng")
+            self.assertEqual(result["trace"]["external_provider"], "searxng")
+            self.assertEqual(plan.call_args.args, (second, prior))
+            self.assertEqual([source["url"] for source in result["external_sources"]], [article["url"]])
+            self.assertEqual(bridge.calls, [(query, {})] * 3)
+
+            self._request(base, "/api/chat", {**turn, "message": "Gracias."})
+            self.assertFalse(audio(retry).get("external_research", False))
+            self.assertEqual(len(bridge.calls), 3)
+
+    def test_laboratory_continuity_across_channels_and_context_boundaries(self) -> None:
+        stt = NullSTTProvider("¿Podés desarrollar esa interpretación?")
+        local = NullChatProvider("Interpretación local privada del texto.")
+        cloud = NullChatProvider("Tesis pública de la autonomía escolar.")
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            app.conversation.provider = SelectableChatProvider({"openai": cloud, "local": local}, "local")
+            app.set_reasoning_mode("normal")
+            app.load_text("opening", "Doc de prueba", " PASAJE_DE_PRUEBA. " * 140, prefetch=False)
+            scope = str(uuid4())
+            turn = {"laboratory_session": scope, "document_generation": app._document_generation}
+
+            self._request(base, "/api/chat", {**turn, "message": "IDEA_LOCAL_PRIVADA."})
+            self._request(base, "/api/chat", {**turn, "message": "¿Qué opinás del pasaje?", "provider": "openai"})
+            self.assertNotIn("IDEA_LOCAL_PRIVADA", str(cloud.calls[-1][0]))
+
+            voice = urllib.request.Request(
+                base + f"/api/dialogue/turn?filename=voice.wav&provider=openai&laboratory_session={scope}",
+                data=b"RIFF synthetic",
+                headers={"Content-Type": "audio/wav"},
+            )
+            with urllib.request.urlopen(voice, timeout=5.0) as response:
+                self.assertEqual(json.load(response)["transcript"], stt.text)
+            prompt = cloud.calls[-1][0]
+            self.assertIn({"role": "assistant", "content": cloud.answer}, prompt)
+            self.assertNotIn("IDEA_LOCAL_PRIVADA", str(prompt))
+            self.assertNotIn("DOCUMENTO COMPLETO DISPONIBLE", str(prompt))
+
+            app._research_service.bridge = NullExternalResearchBridge(
+                ExternalResearchResult(
+                    True,
+                    answer="CONSULTA_INTERNA_DE_PRUEBA",
+                    sources=[
+                        {
+                            "title": "Fuente sobre autonomía",
+                            "url": "https://example.org/paper",
+                            "note": "EXTRACTO_PRIVADO",
+                        }
+                    ],
+                )
+            )
+            self._request(
+                base,
+                "/api/chat",
+                {
+                    **turn,
+                    "provider": "openai",
+                    "message": "Buscá fuentes sobre CONSULTA_INTERNA_DE_PRUEBA.",
+                    "allow_external_research": True,
+                },
+            )
+            self._request(
+                base,
+                "/api/dialogue/turn",
+                {**turn, "provider": "openai", "text": "¿Cuál era el enlace de la fuente que encontraste?"},
+            )
+            followup = str(cloud.calls[-1][0])
+            self.assertIn("https://example.org/paper", followup)
+            self.assertNotIn("CONSULTA_INTERNA_DE_PRUEBA", followup)
+            self.assertNotIn("EXTRACTO_PRIVADO", followup)
+
+            other_window = {**turn, "provider": "openai", "laboratory_session": str(uuid4())}
+            self._request(base, "/api/chat", {**other_window, "message": "Retomá lo de antes."})
+            self.assertNotIn(cloud.answer, str(cloud.calls[-1][0]))
+            self._request(base, "/api/laboratory/reset", {"laboratory_session": scope})
+            self._request(base, "/api/chat", {**turn, "message": "Retomá lo de antes.", "provider": "openai"})
+            self.assertNotIn(cloud.answer, str(cloud.calls[-1][0]))
+
+            self._request(base, "/api/laboratory/mode", {"mode": "free"})
+            self._request(
+                base, "/api/chat", {**turn, "message": "Charlemos sobre el contexto de Kant.", "provider": "openai"}
+            )
+            self.assertNotIn(cloud.answer, str(cloud.calls[-1][0]))
+            self.assertNotIn("PASAJE_DE_PRUEBA", str(cloud.calls[-1][0]))
+
+            app.load_text("new", "Nuevo texto", "OTRO_PASAJE.", prefetch=False)
+            count = len(cloud.calls)
+            _, stale = self._request(base, "/api/chat", {**turn, "message": "¿Qué dice?", "provider": "openai"})
+            self.assertEqual(stale["detail"], "laboratory_document_changed")
+            self.assertEqual(count, len(cloud.calls))
+            self._request(
+                base,
+                "/api/chat",
+                {
+                    **turn,
+                    "document_generation": app._document_generation,
+                    "message": "Sigamos charlando.",
+                    "provider": "openai",
+                },
+            )
+            self.assertNotIn(cloud.answer, str(cloud.calls[-1][0]))
+
+    def test_laboratory_interprets_actions_on_the_same_grounding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp))
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            model = NullChatProvider("La autonomía exige justificación pública.")
+            bridge = NullExternalResearchBridge()
+            app.conversation.provider = model
+            app._research_service.bridge = bridge
+            app.set_reasoning_mode("normal")
+            first = "Autonomía y razón pública. " * 70
+            second = "La delegación del juicio. " * 70
+            app.load_text("charla", "charla.pdf", f"{first}\n\n{second}", prefetch=False)
+            app.jump(2)
+            turn = {"laboratory_session": str(uuid4()), "document_generation": app._document_generation}
+
+            self._request(base, "/api/chat", {**turn, "message": "¿Qué dice este bloque?", "chunk_index": 0})
+            context = model.calls[-1][0][1]["content"]
+            self.assertIn("Bloque visible: 1", context)
+            self.assertEqual(app.session.cursor, 1)
+
+            _, note = self._request(
+                base, "/api/dialogue/turn", {**turn, "text": "Tomá nota de eso que acabás de decir."}
+            )
+            self.assertEqual(note["note"]["text"], model.answer)
+            _, discussion = self._request(
+                base, "/api/dialogue/turn", {**turn, "text": "La idea del juicio es importante, no guardes eso."}
+            )
+            self.assertNotIn("note", discussion)
+
+            _, result = self._request(
+                base,
+                "/api/dialogue/turn",
+                {
+                    **turn,
+                    "text": "Buscá en internet sobre lo que acabás de decir.",
+                    "allow_external_research": True,
+                },
+            )
+            self.assertIn("autonomía", result["external_query"])
+            self.assertEqual(bridge.calls[-1][1], {})
+            self.assertEqual(len(bridge.calls), 1)
+
+            self._request(base, "/api/chat", {**turn, "message": "Compará el bloque 1 con el bloque 2."})
+            prompt = str(model.calls[-1][0])
+            self.assertIn("PASAJES PEDIDOS PARA COMPARAR", prompt)
+            self.assertIn("Autonomía y razón pública", prompt)
+            self.assertIn("delegación del juicio", prompt)
+            self.assertEqual(app.session.cursor, 1)
+
+            self._request(base, "/api/chat", {**turn, "message": "Mirá el primer bloque, a ver qué te parece."})
+            _, focused = self._request(base, f"/api/status?laboratory_session={turn['laboratory_session']}")
+            self.assertEqual(focused["laboratory_focus"]["chunk_number"], 1)
+            _, other = self._request(base, f"/api/status?laboratory_session={uuid4()}")
+            self.assertEqual(other["laboratory_focus"], {})
+            _, cloud = self._request(
+                base, f"/api/status?provider=openai&laboratory_session={turn['laboratory_session']}"
+            )
+            self.assertEqual(cloud["laboratory_focus"], {})
+            self.assertIn("FOCO ACTUAL DEL LABORATORIO", str(model.calls[-1][0]))
+            self._request(
+                base,
+                "/api/dialogue/turn",
+                {**turn, "text": "Compará este bloque con el primer bloque.", "chunk_index": 1},
+            )
+            context = next(
+                message["content"] for message in model.calls[-1][0] if "PASAJES PEDIDOS" in message["content"]
+            )
+            comparison = context.split("PASAJES PEDIDOS PARA COMPARAR:", 1)[1]
+            self.assertLess(comparison.index("Bloque 2"), comparison.index("Bloque 1"))
+            self.assertEqual(app.session.cursor, 1)
+            self.assertEqual(app._dialogue_history, [])
+
+            _, missing = self._request(
+                base,
+                "/api/chat",
+                {
+                    **turn,
+                    "message": "Compará el bloque 1 de ausente.pdf con el bloque 2.",
+                },
+            )
+            self.assertEqual(missing["detail"], "compare_target_not_found")
+            _, missing = self._request(
+                base,
+                "/api/chat",
+                {
+                    **turn,
+                    "message": "Buscá autonomía en ausente.pdf.",
+                },
+            )
+            self.assertEqual(missing["detail"], "search_no_matches")
+            self.assertEqual(len(bridge.calls), 1)
+
     def test_turn_provider_is_pinned_to_the_request_and_legacy_requests_stay_local(self) -> None:
         local = NullChatProvider('{"text":"Texto mejorado"}')
         cloud = NullChatProvider('{"text":"Texto en la nube"}')
@@ -51,6 +816,77 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertTrue(cloud.calls)
             self.assertNotIn("Una pregunta privada de prueba.", str(cloud.calls))
             self.assertEqual(assistant.selected, "openai")
+
+    def test_spoken_search_after_a_sentence_uses_only_the_news_topic(self) -> None:
+        request_text = (
+            "A ver, quiero probar algo que nunca probé. "
+            "Busca en internet las principales noticias de geopolítica de hoy."
+        )
+        stt = NullSTTProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            app.set_laboratory_mode("free")
+            app.conversation.provider = model = NullChatProvider("Respuesta conversacional.")
+            app._research_service.bridge = bridge = NullExternalResearchBridge(
+                ExternalResearchResult(True, answer="Resultados de SearXNG.", provider="searxng")
+            )
+            bridge.research_news = news = Mock(wraps=bridge.research_news)
+            session = str(uuid4())
+            scope = {"laboratory_session": session, "provider": "openai"}
+
+            def chat(text: str, allowed: bool = True) -> dict:
+                try:
+                    return self._request(
+                        base, "/api/chat", {**scope, "message": text, "allow_external_research": allowed}
+                    )[1]
+                except urllib.error.HTTPError as error:
+                    with error:
+                        return json.load(error)
+
+            def speak(text: str, allowed: bool = True) -> dict:
+                stt.text = text
+                request = urllib.request.Request(
+                    f"{base}/api/dialogue/turn?filename=turn.wav&laboratory_session={session}"
+                    f"&provider=openai&allow_external_research={int(allowed)}",
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return json.load(response)
+
+            for submit in (chat, speak):
+                with self.subTest(submit=submit.__name__):
+                    bridge.calls.clear()
+                    for text in (
+                        "Ahora te leo una consigna. " + request_text.split(". ", 1)[1],
+                        "Esto es un ejemplo. Buscá en internet noticias. ¿Qué significa esa instrucción?",
+                        "Si te pidiera esto. Busca en internet las noticias de hoy.",
+                        "La consigna decía: «Buscá en internet noticias».",
+                        "No busques en internet. Busca en internet las noticias de hoy.",
+                        "Buscá en internet noticias. Pero quedate con lo de acá, sin usar internet.",
+                    ):
+                        submit(text)
+                    self.assertEqual(bridge.calls, [])
+                    self.assertEqual(
+                        submit("Me pregunto si podrías buscar en internet sobre geopolítica.")["detail"],
+                        "external_research_intent_unclear",
+                    )
+                    self.assertEqual(bridge.calls, [])
+                    self.assertEqual(submit(request_text, False)["detail"], "external_research_permission_required")
+                    self.assertEqual(bridge.calls, [])
+                    self.assertIn("desmarcada", submit("¿Por qué no podés buscar en internet?", False)["answer"])
+                    previous_model_calls = len(model.calls)
+                    found = submit(request_text)
+                    self.assertEqual(found["external_query"], "geopolítica")
+                    self.assertEqual(found["external_provider"], "searxng")
+                    news.assert_called_with("geopolítica", today=True)
+                    proof = submit("¿Por qué no buscaste en internet?")
+                    self.assertEqual(proof["detail"], "external_research_provenance")
+                    self.assertIn("geopolítica", proof["answer"])
+                    self.assertEqual(len(model.calls), previous_model_calls)
+                    self.assertEqual(bridge.calls, [("geopolítica", {})])
 
     def test_external_research_permission_is_per_request_and_prohibition_wins(self) -> None:
         affirmative = "Buscá fuentes sobre el concepto de técnica."
@@ -75,6 +911,10 @@ class WebServerIntegrationTests(unittest.TestCase):
                 self._request(base, path, {key: affirmative, "allow_external_research": True})
                 self.assertEqual(bridge.calls, [(affirmative, {})])
                 bridge.calls.clear()
+                for provider in ("gemma", "lfm"):
+                    self._request(base, path, {key: affirmative, "provider": provider, "allow_external_research": True})
+                    self.assertEqual(bridge.calls, [(affirmative, {})])
+                    bridge.calls.clear()
 
             for utterance in (*prohibitions, affirmative):
                 stt.text = utterance
@@ -86,6 +926,178 @@ class WebServerIntegrationTests(unittest.TestCase):
                 with urllib.request.urlopen(request, timeout=5.0) as response:
                     self.assertEqual(response.status, 200)
             self.assertEqual(bridge.calls, [(affirmative, {})])
+
+    def test_dialogue_resolves_the_active_document_and_clarifies_web_search_scope(self) -> None:
+        stt = NullSTTProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            model = NullChatProvider("El bloque presenta un dilema filosófico.")
+            bridge = NullExternalResearchBridge()
+            app.conversation.provider = model
+            app._research_service.bridge = bridge
+            app.set_reasoning_mode("normal")
+            app.load_text(
+                "expo",
+                "expo final.pdf",
+                make_reading_sections(("Primer tramo", "La frontera dentada."), ("Segundo tramo", "Otra idea.")),
+                prefetch=False,
+            )
+            app.add_reference_text("ref", "Consulta.txt", "Referencia separada.")
+            app.jump(2)
+
+            def speak(utterance: str) -> dict:
+                stt.text = utterance
+                request = urllib.request.Request(
+                    base + "/api/dialogue/turn?filename=turn.wav&allow_external_research=1",
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5.0) as response:
+                    return json.load(response)
+
+            spoken = speak("Mirá el bloque 1 del documento 1.")
+            self.assertTrue(spoken["ok"])
+            self.assertIn("dilema filosófico", spoken["answer"])
+            _, written = self._request(base, "/api/chat", {"message": "Mirá el bloque 1 del documento, por favor."})
+            self.assertTrue(written["ok"])
+            self.assertEqual(app.laboratory_focus_status()["doc_id"], "expo")
+            self.assertEqual(app.laboratory_focus_status()["chunk_number"], 1)
+            self.assertEqual(app.session.status()["current"], 2)
+            for messages, *_ in model.calls:
+                prompt = "\n".join(item["content"] for item in messages)
+                self.assertIn("FOCO ACTUAL DEL LABORATORIO:", prompt)
+                self.assertIn("La frontera dentada.", prompt)
+
+            missing = speak("Mirá el bloque 1 del documento 9.")
+            self.assertTrue(missing["ok"])
+            self.assertEqual(missing["detail"], "document_not_found")
+            self.assertIn("nombre", missing["answer"])
+            self.assertEqual(len(model.calls), 2)
+
+            external = speak("¿Podés buscar en internet sobre lo que dice la primera página del documento 1?")
+            self.assertEqual(external["detail"], "external_research_topic_required")
+            self.assertIn("tema", external["answer"])
+            self.assertEqual(bridge.calls, [])
+
+    def test_web_search_follows_the_last_answer_in_the_same_conversation(self) -> None:
+        request_text = "Bien, escúchame. Quiero que busques en internet información sobre esto que me acabas de decir."
+        stt = NullSTTProvider(request_text)
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            bridge = NullExternalResearchBridge()
+            app._research_service.bridge = bridge
+            app.conversation.provider = NullChatProvider(
+                "La escritura y el juicio se delegan a la inteligencia artificial."
+            )
+            app.set_reasoning_mode("normal")
+            app.load_text("d", "Original", "CONTENIDO_PRIVADO DEL DOCUMENTO.", prefetch=False)
+
+            def search_by_voice(allowed: bool) -> dict:
+                request = urllib.request.Request(
+                    f"{base}/api/dialogue/turn?filename=turn.wav&allow_external_research={int(allowed)}",
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5.0) as response:
+                    return json.load(response)
+
+            self.assertEqual(search_by_voice(True)["detail"], "external_research_topic_required")
+            self.assertEqual(bridge.calls, [])
+            self._request(base, "/api/dialogue/turn", {"text": "¿Qué implica esto para la educación?"})
+            app.conversation.provider = NullChatProvider("Kant relaciona autonomía y razón.")
+            self._request(base, "/api/chat", {"message": "¿Qué plantea Kant?"})
+            self.assertEqual(search_by_voice(False)["detail"], "external_research_permission_required")
+            self.assertEqual(bridge.calls, [])
+
+            voice_result = search_by_voice(True)
+            voice_query, snapshot = bridge.calls[-1]
+            self.assertEqual(voice_result["external_query"], voice_query)
+            self.assertIn("escritura", voice_query)
+            self.assertIn("juicio", voice_query)
+            self.assertIn("inteligencia artificial", voice_query)
+            self.assertNotIn("Kant", voice_query)
+            self.assertNotIn("CONTENIDO_PRIVADO", voice_query)
+            self.assertEqual(snapshot, {})
+
+            _, chat_result = self._request(
+                base, "/api/chat", {"message": request_text, "allow_external_research": True}
+            )
+            self.assertEqual(chat_result["external_query"], "Kant relaciona autonomía razón")
+            self.assertEqual(bridge.calls[-1], (chat_result["external_query"], {}))
+
+    def test_spoken_research_correction_uses_the_requested_block(self) -> None:
+        correction = (
+            "No, lo que te pedí es que con respecto al primer bloque del documento busques información en internet."
+        )
+        stt = NullSTTProvider()
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._start(Path(tmp), stt=stt)
+            base = f"http://127.0.0.1:{server.server_port}"
+            app = server.context.app
+            model = NullChatProvider("Conversación normal.")
+            bridge = NullExternalResearchBridge()
+            app.conversation.provider = model
+            app._research_service.bridge = bridge
+            app.set_reasoning_mode("normal")
+            first = "Inteligencia artificial y evaluación escolar. contacto@privado.example. " + (
+                "La escritura escolar exige que cada estudiante argumente su posición. " * 25
+            )
+            second = "Astronomía y espectroscopía. " + (
+                "Cada observatorio reúne mediciones separadas por distancia. " * 33
+            )
+            app.load_text("expo", "expo de prueba.pdf", f"{first}\n\n{second}", prefetch=False)
+            app.jump(2)
+
+            def speak(utterance: str, *, allowed: bool = True) -> dict:
+                stt.text = utterance
+                request = urllib.request.Request(
+                    f"{base}/api/dialogue/turn?filename=turn.wav&allow_external_research={int(allowed)}",
+                    data=b"RIFF synthetic",
+                    headers={"Content-Type": "audio/wav"},
+                )
+                with urllib.request.urlopen(request, timeout=5.0) as response:
+                    return json.load(response)
+
+            self.assertEqual(
+                speak("Bien, pero ahora de buscar información en internet.")["detail"],
+                "external_research_topic_required",
+            )
+            self.assertEqual(speak(correction, allowed=False)["detail"], "external_research_permission_required")
+            self.assertEqual(bridge.calls, [])
+            self.assertEqual(model.calls, [])
+
+            result = speak(correction)
+            query, snapshot = bridge.calls[-1]
+            self.assertTrue(result["external_research"])
+            self.assertEqual(result["external_query"], query)
+            self.assertIn("Inteligencia artificial evaluación escolar", query)
+            self.assertNotIn("contacto", query)
+            self.assertNotIn("Astronomía", query)
+            self.assertEqual(snapshot, {})
+            self.assertEqual(app.session.status()["current"], 2)
+
+            _, result = self._request(
+                base,
+                "/api/chat",
+                {
+                    "message": "Buscá en internet sobre el bloque dos de expo de prueba.pdf.",
+                    "allow_external_research": True,
+                },
+            )
+            self.assertIn("Astronomía espectroscopía", result["external_query"])
+            self.assertEqual(
+                speak("Buscá en internet sobre el bloque 1 de otro archivo.pdf.")["detail"],
+                "external_research_block_unavailable",
+            )
+            self.assertEqual(
+                speak("Buscá en internet sobre el bloque 20 del documento.")["detail"],
+                "external_research_block_unavailable",
+            )
+            self.assertEqual(len(bridge.calls), 2)
 
     def test_library_homonyms_keep_legacy_notes_separate_even_after_reopening(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,7 +1262,8 @@ class WebServerIntegrationTests(unittest.TestCase):
             existing = downloads / "Guion - editado.docx"
             existing.write_bytes(initial_bytes)
 
-            text = snapshot["text"].replace("Último párrafo del documento.", "Cierre corregido.\nLínea nueva.")
+            ending = "  Cierre   corregido.\t&copy;\nLínea nueva.\n\n\n\nÚltima línea.  "
+            text = snapshot["text"].replace("Último párrafo del documento.", ending)
             body = {**snapshot, "text": text}
             app = server.context.app
             limit = app._session_store.max_bytes
@@ -271,11 +1284,14 @@ class WebServerIntegrationTests(unittest.TestCase):
             self.assertNotEqual(copy, existing)
             self.assertEqual(existing.read_bytes(), initial_bytes)
             self.assertEqual(original.read_bytes(), initial_bytes)
-            self.assertEqual(WordDocument(copy).paragraphs[-1].text, "Cierre corregido.\nLínea nueva.")
+            self.assertEqual("\n\n".join(paragraph.text for paragraph in WordDocument(copy).paragraphs), text)
 
             _, reopened = self._request(base, "/api/reader/edit")
-            self.assertIn("Cierre corregido.\nLínea nueva.", reopened["text"])
+            self.assertEqual(reopened["text"], text)
             self.assertEqual(reopened["doc_id"], edited["doc_id"])
+            with managed_test_app(root=root / "app") as restored:
+                self.assertEqual(restored.session.status()["doc_id"], edited["doc_id"])
+                self.assertEqual(restored.session.document.text, text)
             files = set(downloads.iterdir())
             with self.assertRaises(urllib.error.HTTPError) as stale:
                 self._request(base, "/api/reader/edit", body)

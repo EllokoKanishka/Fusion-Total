@@ -4,11 +4,14 @@ import json
 import re
 import socket
 import time
+from datetime import datetime
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import environment_value
+from .laboratory_turn import read_turn_response
 from .openclaw_bridge import ExternalResearchBridge, ExternalResearchResult, OpenClawResearchBridge
 
 
@@ -40,14 +43,43 @@ class SearxngResearchBridge(ExternalResearchBridge):
     def available(self) -> bool:
         if not self.enabled or not self.base_url:
             return False
-        request = Request(self.base_url, headers={"User-Agent": "FusionReaderV2/1.0"})
+        base = self.base_url.rstrip("/").removesuffix("/search")
+        request = Request(f"{base}/config", headers={"User-Agent": "FusionReaderV2/1.0"})
         try:
             with urlopen(request, timeout=min(self.timeout_seconds, 2.0)) as response:
-                return int(getattr(response, "status", 200) or 200) < 500
-        except (HTTPError, URLError, OSError, TimeoutError, socket.timeout):
+                payload = json.load(response)
+                return isinstance(payload, dict) and isinstance(payload.get("engines"), list)
+        except (OSError, ValueError):
             return False
 
-    def research(self, request: str, snapshot: dict | None = None) -> ExternalResearchResult:
+    def research_academic(self, query: str) -> ExternalResearchResult:
+        result = self.research(query, academic=True)
+        if result.detail in {"searxng_no_results", "searxng_timeout"}:
+            fallback = self.research(query, academic=True, engines="crossref,semantic scholar")
+            if fallback.ok:
+                return fallback
+        return result
+
+    def research_news(self, query: str, *, today: bool = False) -> ExternalResearchResult:
+        result = self.research(query, news="today" if today else "recent")
+        if today and result.detail in {"searxng_no_results", "external_research_news_unconfirmed"}:
+            # Some news engines omit results or dates when SearXNG applies
+            # its day filter. Keep the date check on Panda's side.
+            fallback = self.research(query, news="today", use_engine_day_filter=False)
+            if fallback.ok:
+                return fallback
+        return result
+
+    def research(
+        self,
+        request: str,
+        snapshot: dict | None = None,
+        *,
+        academic: bool = False,
+        engines: str = "",
+        news: Literal["recent", "today"] | None = None,
+        use_engine_day_filter: bool = True,
+    ) -> ExternalResearchResult:
         del snapshot
         query = str(request or "").strip()
         started = time.perf_counter()
@@ -63,19 +95,25 @@ class SearxngResearchBridge(ExternalResearchBridge):
                 model="searxng-local",
                 query=query,
             )
-        params = urlencode(
-            {
-                "q": query,
-                "format": "json",
-                "language": "es-ES",
-            }
-        )
+        options = {"q": query, "format": "json", "language": "all" if academic else "es-ES"}
+        if academic:
+            if engines:
+                options["engines"] = engines
+            else:
+                options["categories"] = "scientific publications"
+            # Let SearXNG return the responsive engines before Panda's HTTP deadline.
+            options["timeout_limit"] = str(min(8.0, self.timeout_seconds * 0.8))
+        elif news:
+            options["categories"] = "news"
+            if news == "today" and use_engine_day_filter:
+                options["time_range"] = "day"
+        params = urlencode(options)
         endpoint = self._search_endpoint()
         search_url = f"{endpoint}?{params}"
         request_obj = Request(search_url, headers={"User-Agent": "FusionReaderV2/1.0"})
         try:
-            with urlopen(request_obj, timeout=self.timeout_seconds) as response:
-                raw_text = response.read().decode("utf-8", errors="replace")
+            raw = read_turn_response(request_obj, timeout=self.timeout_seconds, urlopen=urlopen)
+            raw_text = raw.decode("utf-8", errors="replace")
         except HTTPError:
             return self._failure(
                 query,
@@ -115,8 +153,20 @@ class SearxngResearchBridge(ExternalResearchBridge):
         results = payload.get("results") if isinstance(payload, dict) else None
         if not isinstance(results, list):
             results = []
-        sources = self._sanitize_sources(results[: self.max_results])
+        candidates = results if news == "today" else results[: self.max_results]
+        sources = self._sanitize_sources(candidates, note_chars=480 if academic else 220, include_dates=bool(news))
+        confirmed_today = True
+        if news == "today":
+            today = datetime.now().astimezone().date().isoformat()
+            dated = [source for source in sources if source.get("published_date") == today]
+            confirmed_today = bool(dated)
+            unconfirmed = [source for source in sources if not source.get("published_date")] if use_engine_day_filter else []
+            sources = dated or unconfirmed
+        sources = sources[: self.max_results]
         if not sources:
+            if news == "today":
+                msg = "Busqué en la categoría de noticias de SearXNG, pero no encontré publicaciones con fecha de hoy."
+                return self._failure(query, started, detail="searxng_no_results", answer=msg, spoken=msg)
             summary = f"No encontré resultados útiles en SearXNG local para: {query}."
             return ExternalResearchResult(
                 False,
@@ -134,13 +184,17 @@ class SearxngResearchBridge(ExternalResearchBridge):
             )
         findings = self._sanitize_findings(sources)
         summary = self._build_summary(sources)
+        if not confirmed_today:
+            summary = "SearXNG devolvió enlaces de noticias sin fecha verificable. No pude confirmar que sean de hoy."
+        elif news == "today":
+            summary = f"SearXNG devolvió {len(sources)} noticia{'s' if len(sources) != 1 else ''} con fecha de hoy."
         answer = self._format_answer(query, summary, findings, sources)
         spoken_answer = self._format_spoken_answer(summary, sources)
         return ExternalResearchResult(
             True,
             answer=answer,
             spoken_answer=spoken_answer,
-            detail="external_research_ok",
+            detail="external_research_ok" if confirmed_today else "external_research_news_unconfirmed",
             provider=self.name,
             model="searxng-local",
             duration_ms=int((time.perf_counter() - started) * 1000),
@@ -173,7 +227,9 @@ class SearxngResearchBridge(ExternalResearchBridge):
             return base
         return f"{base}/search"
 
-    def _sanitize_sources(self, results: list[object]) -> list[dict]:
+    def _sanitize_sources(
+        self, results: list[object], *, note_chars: int = 220, include_dates: bool = False
+    ) -> list[dict]:
         out: list[dict] = []
         for item in results:
             if not isinstance(item, dict):
@@ -182,7 +238,19 @@ class SearxngResearchBridge(ExternalResearchBridge):
             url = self._clean_text(item.get("url") or item.get("pretty_url") or "")
             note = self._clean_text(item.get("content") or item.get("snippet") or "")
             if title or url or note:
-                out.append({"title": title, "url": url, "note": self._clip(note, 220)})
+                source = {"title": title, "url": url, "note": self._clip(note, note_chars)}
+                engines = item.get("engines")
+                if isinstance(engines, list):
+                    names = ", ".join(name for name in engines if isinstance(name, str))
+                    if names:
+                        source["engine"] = names[:240]
+                if include_dates and isinstance(item.get("publishedDate"), str):
+                    try:
+                        stamp = datetime.fromisoformat(item["publishedDate"])
+                        source["published_date"] = stamp.astimezone().date().isoformat()
+                    except (ValueError, OverflowError):
+                        pass
+                out.append(source)
         return out
 
     def _sanitize_findings(self, sources: list[dict]) -> list[str]:
@@ -218,7 +286,8 @@ class SearxngResearchBridge(ExternalResearchBridge):
                 title = self._clean_text(source.get("title") or "Fuente")
                 note = self._clean_text(source.get("note") or "")
                 url = self._clean_text(source.get("url") or "")
-                chunk = title
+                published = source.get("published_date")
+                chunk = f"{title} ({published})" if published else title
                 if note:
                     chunk += f" | {note}"
                 if url:
@@ -265,7 +334,18 @@ class AutoExternalResearchBridge(ExternalResearchBridge):
         return bool(self._bridge_available(self.searxng) or self._bridge_available(self.openclaw))
 
     def research(self, request: str, snapshot: dict | None = None) -> ExternalResearchResult:
-        local_result = self.searxng.research(request, snapshot=snapshot)
+        return self._research(
+            lambda bridge: bridge.research(request, snapshot=snapshot),
+        )
+
+    def research_academic(self, query: str) -> ExternalResearchResult:
+        return self._research(lambda bridge: bridge.research_academic(query))
+
+    def research_news(self, query: str, *, today: bool = False) -> ExternalResearchResult:
+        return self._research(lambda bridge: bridge.research_news(query, today=today))
+
+    def _research(self, search) -> ExternalResearchResult:
+        local_result = search(self.searxng)
         if local_result.ok or local_result.detail not in {
             "searxng_unavailable",
             "searxng_timeout",
@@ -274,7 +354,7 @@ class AutoExternalResearchBridge(ExternalResearchBridge):
         }:
             return local_result
         if self._bridge_available(self.openclaw):
-            return self.openclaw.research(request, snapshot=snapshot)
+            return search(self.openclaw)
         return local_result
 
     def _bridge_available(self, bridge: ExternalResearchBridge) -> bool:

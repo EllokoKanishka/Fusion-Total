@@ -24,6 +24,7 @@ from .openclaw_bridge import (
     OpenClawResearchBridge,
 )
 from .tts import AllTalkProvider, AudioCache, TTSProvider
+from .turn_provider import DEEPSEEK_MODEL, GEMMA_MODEL, LFM_MODEL
 
 if TYPE_CHECKING:
     from http.server import ThreadingHTTPServer
@@ -51,6 +52,24 @@ def create_providers(settings: Settings) -> ProviderBundle:
                 "local": OllamaChatProvider(
                     base_url=settings.providers.ollama_url,
                     default_model=settings.providers.chat_model,
+                ),
+                "deepseek": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=DEEPSEEK_MODEL,
+                    context_length=8192,
+                ),
+                "gemma": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=GEMMA_MODEL,
+                    context_length=8192,
+                ),
+                "lfm": OllamaChatProvider(
+                    base_url=settings.providers.ollama_url,
+                    default_model=LFM_MODEL,
+                    context_length=8192,
+                    # LFM reasons even when the turn requests Normal mode.
+                    minimum_num_predict=4096,
+                    default_temperature=0.1,
                 ),
                 "openai": OpenClawChatProvider(
                     command=settings.providers.openclaw_command,

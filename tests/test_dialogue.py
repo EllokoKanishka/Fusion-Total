@@ -1,4 +1,5 @@
 import unittest
+import wave
 import tempfile
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ from fusion_reader_v2 import (
     NullChatProvider,
     NullSTTProvider,
 )
+from fusion_reader_v2.conversation import ChatResult
 from fusion_reader_v2.dialogue import is_hallucinated_transcript
 from tests.helpers import (
     test_app,
@@ -17,6 +19,7 @@ from tests.helpers import (
     HallucinatedTranscriptSTTProvider,
     FailingChatProvider,
     NullTTSProvider,
+    SyntheticWavTTSProvider,
     FailingTTSProvider,
 )
 from tests.helpers import web_source
@@ -289,12 +292,57 @@ class DialogueTests(unittest.TestCase):
         full_prompt = "".join(str(m["content"]) for m in chat_provider.calls[1][0])
         self.assertIn("Pasted", full_prompt)
 
-    def test_dialogue_shortener_closes_cut_text_without_ellipsis(self):
-        app = test_app()
-        app.dialogue_tts_max_chars = 10
-        out = app._shorten_dialogue_answer("Frase que se corta.")
-        self.assertTrue(out.endswith("."))
-        self.assertNotIn("...", out)
+    def test_dialogue_reads_every_stanza_and_the_end_of_a_long_paragraph(self):
+        stanzas = [
+            "La lámpara tiembla sobre el agua.\nUna sombra cruza la habitación.",
+            "El reloj deja caer la madrugada.\nLa ventana guarda la última luz.",
+        ]
+        paragraph = (
+            "El patio guarda las sillas, los vasos y un mantel oscuro bajo las ramas del naranjo, "
+            "donde el viento arrastra las hojas caídas entre las baldosas y hace sonar la puerta "
+            "del fondo, que alguien dejó abierta antes de volver a la calle. "
+        ) * 3 + "El último verso es «Mañana volverá el sol»."
+        answer = "\n\n".join([*stanzas, paragraph])
+        provider = SyntheticWavTTSProvider()
+        provider.max_input_chars = 110
+        app = test_app(tts=provider)
+        app.conversation = ConversationCore(NullChatProvider(answer))
+        app.set_reasoning_mode("normal")
+
+        out = app.dialogue_turn_text("Recitá el poema completo.")
+
+        self.assertEqual(out["answer"], answer)
+        self.assertEqual(out["spoken_answer"], answer)
+        self.assertTrue(out["voice_ok"])
+        pieces = [call[0] for call in provider.calls]
+        self.assertEqual(pieces[:2], stanzas)
+        self.assertEqual(" ".join(" ".join(pieces).split()), " ".join(answer.split()))
+        self.assertTrue(all(len(piece) <= provider.max_input_chars for piece in pieces))
+        with wave.open(out["audio"], "rb") as audio:
+            self.assertEqual(audio.getnframes(), sum(len(piece) * 160 for piece in pieces))
+
+        second_turn = app.dialogue_turn_text("Volvé a recitar el poema.")
+        self.assertTrue(second_turn["cached"])
+        self.assertEqual(len(provider.calls), len(pieces))
+
+    def test_dialogue_retries_when_reasoning_uses_the_whole_output_budget(self):
+        class ThinkingExhaustsBudget(NullChatProvider):
+            def chat(self, messages, model="", think=None, num_predict=None):
+                result = super().chat(messages, model=model, think=think, num_predict=num_predict)
+                if think:
+                    return ChatResult(False, model=model, detail="generation_limit")
+                return result
+
+        chat = ThinkingExhaustsBudget("Primera estrofa.\n\nÚltima estrofa.")
+        app = test_app(conversation=ConversationCore(chat))
+        app.set_reasoning_mode("thinking")
+
+        out = app.dialogue_turn_text("Recitá el poema completo.")
+
+        self.assertEqual(out["answer"], "Primera estrofa.\n\nÚltima estrofa.")
+        self.assertFalse(out["truncated"])
+        self.assertEqual([call[2]["think"] for call in chat.calls], [True, False])
+        self.assertEqual(chat.calls[0][2]["num_predict"], chat.calls[1][2]["num_predict"])
 
     def test_dialogue_barge_in_keeps_pre_roll_for_short_commands(self):
         server = web_source()

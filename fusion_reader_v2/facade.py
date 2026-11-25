@@ -12,15 +12,24 @@ import threading
 import time
 import re
 import tempfile
+import sqlite3
 import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .config import environment_value
-from .turn_provider import provider_for_turn
+from .laboratory_turn import check_laboratory_turn, turn_cancellation
+from .turn_provider import (
+    LABORATORY_LOCAL_PROVIDERS,
+    external_research_permission,
+    laboratory_generation_for_turn,
+    laboratory_session_for_turn,
+    provider_for_turn,
+)
 
 from .audio_export import (
     AudioExportJob,
@@ -42,15 +51,30 @@ from .transcript_correction import OllamaTranscriptCorrector
 from .pdf_to_docx import find_downloads_dir
 from .services.lifecycle import BackgroundLifecycleService, BackgroundShutdownContext
 from .services.notes import NotesService
-from .services.research import ResearchService
+from .services.laboratory_archive import ArchiveScope, LaboratoryArchive
+from .services.research import ResearchService, WebIntent
+from .services.source_reader import (
+    OpenedSource,
+    SourceError,
+    SourceReader,
+    public_international_headlines,
+    source_action,
+    source_candidates,
+    split_search_and_read,
+)
 from .services.reader import ReaderService
 from .services.preparation import PreparationService, new_prepare_status
-from .services.dialogue import DialogueService
+from .services.dialogue import DialogueService, LaboratoryResearch, LaboratoryResearchRequest, LaboratoryScope
 from .owned_subprocess import run_owned
 from .services.audio_export import AudioExportService
 from .services.audio import AudioService
 from .services.persistence import AtomicJSONStore
 from .services.session_persistence import SessionPersistenceService, SessionPreferences
+
+
+_ACTIVE_DOCUMENT_SELECTOR = re.compile(
+    r"(?:(?:el|este|ese|mi)\s+)?(?:principal|(?:documento|archivo|pdf)(?:\s+(?:principal|activo|actual|1|uno))?)"
+)
 
 
 def _document_transition(method):
@@ -147,7 +171,8 @@ class FusionReaderV2:
             clear_prefetch=self._clear_prefetch_queue_impl,
             reset_prefetch=self._reset_prefetch_queue_impl,
         )
-        self.dialogue_tts_max_chars = int(environment_value("FUSION_READER_DIALOGUE_TTS_MAX_CHARS", "520") or "520")
+        # Keep individual neural TTS requests comfortably below the engine's input limit.
+        self.dialogue_tts_segment_chars = 220
         self.fast_note_ack = (environment_value("FUSION_READER_FAST_NOTE_ACK", "0") or "0").strip().lower() not in {
             "0",
             "false",
@@ -172,6 +197,10 @@ class FusionReaderV2:
             "yes",
             "on",
         }
+        self.session_state_path = Path(session_state_path) if session_state_path else None
+        self._laboratory_archive = LaboratoryArchive(
+            self.session_state_path.with_suffix(".laboratory.sqlite3") if self.session_state_path else None
+        )
         self._dialogue_service = DialogueService(
             conversation=self.conversation,
             reasoning_mode=str(getattr(self.conversation, "default_reasoning_mode", "thinking") or "thinking"),
@@ -179,8 +208,8 @@ class FusionReaderV2:
             persist=lambda: self._persist_session_state(),
             trace=lambda event: self._append_dialogue_trace(event),
             services_status=lambda: self._dialogue_services_status(),
+            restore_laboratory=self._restore_laboratory_thread,
         )
-        self.session_state_path = Path(session_state_path) if session_state_path else None
         self._session_store = (
             AtomicJSONStore(self.session_state_path, schema_version=1, max_bytes=32 * 1024 * 1024)
             if self.session_state_path is not None
@@ -209,6 +238,7 @@ class FusionReaderV2:
             looks_like_note_request=self._looks_like_note_request,
         )
         self._research_service = ResearchService(self.external_research)
+        self._source_reader = SourceReader()
         self.dialogue_trace_path = (
             (self.session_state_path.parent / "dialogue_trace.jsonl") if self.session_state_path else None
         )
@@ -520,6 +550,8 @@ class FusionReaderV2:
                 "reasoning_mode",
                 "selected_provider",
                 "chat_provider",
+                "external_provider",
+                "research_detail",
                 "stt_provider",
                 "tts_provider",
             }
@@ -702,17 +734,373 @@ class FusionReaderV2:
     def _looks_like_external_research_request(self, text: str) -> bool:
         return self._research_service.is_explicit_request(text)
 
-    def _run_external_research(self, message: str) -> ExternalResearchResult:
-        return self._research_service.research(message)
+    @staticmethod
+    def _source_result(message: str, detail: str, *, ok: bool = False, source=None) -> ExternalResearchResult:
+        spoken = message.split("\n", 1)[0]
+        return ExternalResearchResult(
+            ok,
+            answer=message,
+            spoken_answer=spoken,
+            detail=detail,
+            provider="reader_source",
+            model="reader_source",
+            sources=[source.link()] if source is not None else [],
+        )
 
-    def _external_research_chat_response(self, message: str, started: float) -> dict | None:
-        if not self._looks_like_external_research_request(message):
-            return None
+    @staticmethod
+    def _source_passage(opened: OpenedSource, message: str, max_chars: int) -> str:
+        text = opened.text
+        if len(text) <= max_chars:
+            return text
+        pages = re.split(r"(?=\[Pagina\s+\d+\])", text)
+        if len(pages) < 2:
+            return text[:max_chars]
+        words = set(re.findall(r"[^\W\d_]{5,}", ResearchService.normalized_key(message)))
+        requested_page = re.search(r"\bpagina\s+(\d+)\b", ResearchService.normalized_key(message))
+        order = sorted(
+            range(len(pages)),
+            key=lambda i: len(words & set(re.findall(r"[^\W\d_]{5,}", ResearchService.normalized_key(pages[i])))),
+            reverse=True,
+        )
+        if requested_page:
+            target = f"[Pagina {requested_page[1]}]"
+            order = sorted(order, key=lambda i: not pages[i].lstrip().startswith(target))
+        selected, remaining = [], max_chars
+        for i in order:
+            if pages[i].strip():
+                selected.append((i, pages[i][:remaining]))
+                remaining -= min(len(pages[i]), remaining)
+            if remaining <= 0:
+                break
+        return "\n\n".join(page for _, page in sorted(selected))
+
+    def _run_source_action(
+        self, action: str, message: str, *, chunk_index: int | None = None, shortlist: list[dict] | None = None
+    ) -> ExternalResearchResult:
+        if external_research_permission.get() is False:
+            return self._source_result(
+                "Activá «Buscar en internet» para abrir una fuente externa.", "external_research_permission_required"
+            )
+        with self._document_lock:
+            key = self._laboratory_scope()
+            generation = self._document_generation
+            mode = self.laboratory_mode
+            if self._laboratory_document_changed():
+                return self._source_result("El documento cambió durante el turno.", "laboratory_document_changed")
+            research = self._dialogue_service.laboratory_research(key) if key is not None else None
+            last_url = research.opened_url if research is not None else ""
+            last_digest = research.opened_digest if research is not None else ""
+            sources = list(research.sources) if research is not None else []
+        candidates = source_candidates(message, sources if shortlist is None else shortlist, last_url)
+        if shortlist is not None:
+            allowed_urls = {source["url"] for source in shortlist}
+            candidates = [source for source in candidates if source["url"] in allowed_urls]
+        source = candidates[0] if len(candidates) == 1 else None
+        if source is None and candidates and action == "read":
+            index = self.conversation.choose_research_source(
+                message,
+                [
+                    {"número": i, "título": s.get("title", ""), "extracto": s.get("note", "")}
+                    for i, s in enumerate(candidates, 1)
+                ],
+            )
+            source = candidates[index] if index is not None else None
+        if source is None:
+            return self._source_result(
+                "Decime el número de la fuente o pasame el enlace público específico.",
+                "external_source_required",
+            )
+        cache_scope = key[0] if key is not None else ""
+        try:
+            opened = self._source_reader.open(cache_scope, source)
+            check_laboratory_turn()
+        except SourceError as exc:
+            return self._source_result(str(exc), "external_source_unavailable")
+        if action != "read" and opened.requested_url == last_url and last_digest and opened.digest != last_digest:
+            return self._source_result(
+                "El archivo cambió desde que lo leíste. Volvé a abrirlo antes de guardar esta versión.",
+                "external_source_changed",
+            )
+        max_chars = min(42_000, self.conversation.max_input_chars // 2) if action == "read" else 12_000
+        passage = self._source_passage(opened, message, max_chars)
+        clean = self._normalize_search_text(self._normalize_block_number(message))
+        with self._document_lock:
+            if generation != self._document_generation:
+                return self._source_result("El documento cambió durante el turno.", "laboratory_document_changed")
+            if research is not None:
+                research.opened_url = opened.requested_url
+                research.opened_digest = opened.digest
+                research.opened_context = f"{opened.title}\n{opened.url}\n{passage[:12_000]}"
+                research.opened_link = {
+                    **opened.link(),
+                    "selected_topic": source.get("topic", ""),
+                    "search_query": source.get("query", ""),
+                }
+            if action != "read":
+                return self._save_research_source(action, opened, generation)
+            target = re.search(r"\bbloque (\d{1,4})\b", clean)
+            uses_reader = mode != "free" or bool(
+                target or re.search(r"\b(?:este|el) (?:documento|texto|bloque)\b", clean)
+            )
+            cursor = self.session.cursor if chunk_index is None else chunk_index
+            block = int(target[1]) if target else cursor + 1
+            reading = self._research_block_text(block, "")[:5500] if uses_reader else ""
+        publication_date = (
+            f"Fecha de publicación: {opened.date}." if opened.date else "Fecha de publicación sin confirmar."
+        )
+        if re.search(r"\b(?:de cuando|de que fecha|cuando se publico)\b", clean) and " y " not in clean:
+            return self._source_result(
+                f"{publication_date}\n{opened.title}\n{opened.url}", "external_source_opened", ok=True, source=opened
+            )
+        explanation = self.conversation.explain_opened_source(
+            message, opened.title, passage, date=opened.date, pdf=opened.kind == "pdf", reading=reading
+        )
+        lines = [
+            explanation or f"Recuperé la fuente. Este es un fragmento: {passage[:340].strip()}",
+            opened.title,
+            publication_date,
+        ]
+        if opened.extraction:
+            lines.append(opened.extraction)
+        if opened.truncated or len(passage) < len(opened.text):
+            lines.append("La respuesta se basa en los fragmentos incluidos de la fuente.")
+        lines.append(opened.url)
+        return self._source_result("\n".join(lines), "external_source_opened", ok=True, source=opened)
+
+    def _save_research_source(self, action: str, opened: OpenedSource, generation: int) -> ExternalResearchResult:
+        if opened.kind != "pdf":
+            return self._source_result(
+                "La fuente abierta es una página web. Para guardarla como documento de apoyo necesito el PDF de la publicación.",
+                "external_source_pdf_required",
+            )
+        path = None
+        try:
+            with self._document_lock:
+                if generation != self._document_generation:
+                    return self._source_result("El documento cambió durante el turno.", "laboratory_document_changed")
+                if action in {"save", "save_reference"}:
+                    path = self._source_reader.save_pdf(opened, self.audio_export_root)
+                if action in {"reference", "save_reference"}:
+                    result = self.add_reference_text(
+                        f"public-pdf-{opened.digest}",
+                        opened.title,
+                        opened.text,
+                        source_path=str(path) if path else "",
+                        source_type="pdf",
+                    )
+                    if not result.get("ok"):
+                        raise SourceError("Panda no pudo agregar el papel como documento de apoyo.")
+        except (OSError, RuntimeError, ValueError):
+            suffix = f" El PDF quedó guardado en Descargas como «{path.name}»." if path else ""
+            return self._source_result(
+                "No pude completar el guardado o la incorporación." + suffix, "external_source_save_failed"
+            )
+        if action == "save_reference":
+            answer = f"Guardé «{path.name}» en Descargas y agregué el PDF como documento de apoyo."
+        elif action == "save":
+            answer = f"Guardé «{path.name}» en Descargas."
+        else:
+            answer = f"Agregué «{opened.title}» como documento de apoyo."
+        return self._source_result(answer, "external_source_saved", ok=True, source=opened)
+
+    def _run_external_research(
+        self, message: str, *, dialogue: bool = False, chunk_index: int | None = None, web_intent: WebIntent | None = None
+    ) -> ExternalResearchResult:
+        key = self._laboratory_scope()
+        result = self._execute_external_research(
+            message, dialogue=dialogue, chunk_index=chunk_index, web_intent=web_intent
+        )
+        check_laboratory_turn()
+        if result.answer and key is not None:
+            with self._document_lock:
+                if self._laboratory_scope() == key and not self._laboratory_document_changed():
+                    history = self._dialogue_service.laboratory_history(key)[0]
+                    question, answer = message, result.answer
+                    if key[1] == "openai" and result.sources:
+                        question = "Mostrame las fuentes públicas encontradas."
+                        answer = self._research_service.public_source_listing(result.sources)
+                    elif key[1] == "openai" and result.query and result.detail != "external_research_news_no_relevant_results":
+                        question = "Investigación externa solicitada."
+                        answer = "La búsqueda terminó sin fuentes verificables."
+                    self._dialogue_service.remember_laboratory_turn(
+                        history, question, answer, research_failed=not result.ok
+                    )
+        elif result.ok and result.answer and key is None:
+            self._dialogue_service.remember_turn(message, result.answer, dialogue=dialogue)
+        return result
+
+    def _execute_external_research(
+        self, message: str, *, dialogue: bool = False, chunk_index: int | None = None, web_intent: WebIntent | None = None
+    ) -> ExternalResearchResult:
+        if action := source_action(message):
+            return self._run_source_action(action, message, chunk_index=chunk_index)
+        with self._document_lock:
+            if self._laboratory_document_changed():
+                answer = "El documento cambió durante el turno. Repetí el pedido en el documento actual."
+                return ExternalResearchResult(
+                    False, answer=answer, spoken_answer=answer, detail="laboratory_document_changed"
+                )
+            scope = self._laboratory_history()
+            key = self._laboratory_scope()
+            cursor = self.session.cursor if chunk_index is None else chunk_index
+            prior_turns = [item for item in scope[1] if not item.get("research_failed")] if scope is not None else []
+            previous_answer = (
+                next((item["content"] for item in reversed(prior_turns) if item["role"] == "assistant"), "")
+                if scope is not None
+                else self._dialogue_service.last_assistant_answer(dialogue=dialogue)
+            )
+            previous_question = (
+                next((item["content"] for item in reversed(prior_turns) if item["role"] == "user"), "")
+                if scope is not None
+                else ""
+            )
+            request = LaboratoryResearchRequest(
+                message[:4000], cursor, previous_answer[:4000], previous_question[:1500], web_intent
+            )
+            if key is not None:
+                research = self._dialogue_service.laboratory_research(key)
+                if (
+                    research.sources
+                    and self._research_service.wants_source_links(message)
+                    and not self._research_service.is_explicit_request(message)
+                ):
+                    sources = list(research.sources)
+                    return ExternalResearchResult(
+                        True,
+                        answer=self._research_service.public_source_listing(sources),
+                        spoken_answer="Te dejo los enlaces de la búsqueda en pantalla.",
+                        detail="external_research_links",
+                        provider="reader_sources",
+                        model="reader_sources",
+                        sources=sources,
+                    )
+                if web_intent and web_intent.operation == "resume":
+                    previous = research.pending or research.previous_request
+                    if previous is None:
+                        return self._source_result("¿Qué tema querés que busque en internet?", "external_research_topic_required")
+                    if research.pending is None and research.last_search and research.last_search.ok:
+                        sources = list(research.sources)
+                        answer = "Ya busqué sobre ese tema. Te dejo las fuentes encontradas."
+                        return ExternalResearchResult(
+                            True, answer=answer, spoken_answer=answer, detail="external_research_links",
+                            provider="reader_sources", model="reader_sources", sources=sources,
+                        )
+                    request = previous
+                elif research.pending is not None and self._research_service.resumes_pending(message):
+                    pending = research.pending
+                    request = LaboratoryResearchRequest(
+                        pending.text,
+                        pending.cursor,
+                        pending.previous_answer or previous_answer,
+                        pending.previous_question or previous_question,
+                        pending.web_intent,
+                    )
+                elif self._research_service.requests_retry(message):
+                    previous = research.last_attempt
+                    if previous is None and self._research_service.explicitly_repeats_search(message):
+                        previous = research.previous_request
+                    if previous is not None:
+                        request = LaboratoryResearchRequest(
+                            previous.text, previous.cursor, previous.previous_answer, previous.previous_question,
+                            previous.web_intent,
+                        )
+                if external_research_permission.get() is False:
+                    research.pending = request
+                    research.last_attempt = None
+                else:
+                    research.pending = None
+                    research.last_attempt = request
+                    research.previous_request = request
+            else:
+                research = None
+
+        def plan_topics(request: str, passage: str) -> str:
+            plan = self.conversation.plan_research_topics(request, passage)
+            return plan if key is not None and key[2] == self._document_generation else ""
+
+        search_text, follow_up = split_search_and_read(request.text)
+        intent = request.web_intent
+        result = (
+            public_international_headlines(intent.topic, today=intent.today)
+            if intent and intent.operation == "headlines" and external_research_permission.get() is not False
+            else None
+        )
+        if result is None:
+            result = self._research_service.research(
+                search_text,
+                previous_answer=lambda: request.previous_answer,
+                previous_question=request.previous_question,
+                block_text=self._research_block_text,
+                visible_text=(
+                    (lambda: self._research_block_text(request.cursor + 1, ""))
+                    if key is None or key[3] != "free"
+                    else (lambda: "")
+                ),
+                plan_topics=plan_topics if key is not None else None,
+                review_sources=self.conversation.review_research_sources if key is not None else None,
+                news_queries=self.conversation.news_queries if key is not None else None,
+                review_news_sources=self.conversation.review_news_sources if key is not None else None,
+                web_intent=intent,
+            )
+        check_laboratory_turn()
+        if research is not None and (result.ok or (result.provider and result.query)):
+            with self._document_lock:
+                if research.last_attempt is not request:
+                    return result
+                research.opened_url = ""
+                research.opened_digest = ""
+                research.opened_context = ""
+                research.opened_link = {}
+                research.last_search = ExternalResearchResult(
+                    result.ok,
+                    detail=result.detail,
+                    provider=result.provider,
+                    query=result.query,
+                    summary=result.summary[:450],
+                    sources=self._research_service.web_sources(result.sources),
+                )
+        if result.ok and result.sources and follow_up:
+            opened = self._run_source_action("read", follow_up, chunk_index=request.cursor, shortlist=result.sources)
+            return replace(
+                result,
+                answer=f"{opened.answer}\n\nConsulta ejecutada: {result.query}",
+                spoken_answer=opened.spoken_answer,
+                detail=opened.detail,
+                sources=opened.sources or result.sources,
+            )
+        return result
+
+    def _research_block_text(self, number: int, selector: str) -> str:
+        with self._document_lock:
+            document = self.session.document
+            if self._laboratory_document_changed() or document is None or not 1 <= number <= len(document.chunks):
+                return ""
+            normalized = self._normalize_search_text(selector)
+            if (
+                normalized
+                and not _ACTIVE_DOCUMENT_SELECTOR.fullmatch(normalized)
+                and normalized
+                not in (self._normalize_search_text(document.title), self._normalize_search_text(document.doc_id))
+            ):
+                return ""
+            return document.chunks[number - 1]
+
+    def _external_research_chat_response(
+        self, message: str, started: float, chunk_index: int | None, web_intent: WebIntent | None = None
+    ) -> dict:
         snapshot = self.session.status()
-        result = self._run_external_research(message)
+        result = self._run_external_research(message, chunk_index=chunk_index, web_intent=web_intent)
+        self._append_dialogue_trace(
+            {
+                "ts": time.time(),
+                "event": "chat_research",
+                "ok": result.ok,
+                "external_provider": result.provider,
+                "research_detail": result.detail,
+                "external_source_count": len(result.sources),
+            }
+        )
         answer = str(result.answer or "").strip()
-        if result.ok:
-            self._remember_chat_turn(message, answer)
         return {
             "ok": result.ok,
             "answer": answer,
@@ -723,6 +1111,7 @@ class FusionReaderV2:
             "reasoning_passes": 1,
             "provider": result.provider or "openclaw_bridge",
             "external_research": True,
+            "external_provider": result.provider,
             "external_query": result.query or str(message or "").strip(),
             "external_summary": result.summary,
             "external_findings": list(result.findings),
@@ -743,6 +1132,8 @@ class FusionReaderV2:
             doc_id = self._normalize_search_text(record.get("doc_id") or "")
             if clean_selector == title or clean_selector == doc_id:
                 return record
+        if _ACTIVE_DOCUMENT_SELECTOR.fullmatch(clean_selector):
+            return next((record for record in records if record.get("role") == "main"), None)
         for record in records:
             haystack = " ".join(
                 [
@@ -752,6 +1143,8 @@ class FusionReaderV2:
             ).strip()
             if clean_selector and clean_selector in haystack:
                 return record
+        if re.search(r"\.(?:pdf|docx?|odt|txt|md|rtf|epub)$", clean_selector):
+            return None
         selector_terms = self._meaningful_search_terms(clean_selector)
         ranked: list[tuple[int, dict]] = []
         for record in records:
@@ -791,11 +1184,18 @@ class FusionReaderV2:
             "reason": str(reason or "").strip(),
             "updated_ts": time.time(),
         }
-        self._laboratory_focus = focus
+        scope = self._laboratory_scope()
+        if scope is None:
+            self._laboratory_focus = focus
+        else:
+            self._dialogue_service.set_laboratory_focus(scope, focus)
         return dict(focus)
 
     def laboratory_focus_status(self) -> dict:
-        return dict(self._laboratory_focus) if self._laboratory_focus else {}
+        scope = self._laboratory_scope()
+        if scope is not None:
+            return self._dialogue_service.laboratory_focus(scope)
+        return dict(self._laboratory_focus)
 
     def _focus_record(self) -> dict | None:
         focus = self.laboratory_focus_status()
@@ -956,6 +1356,7 @@ class FusionReaderV2:
         references = {item: value for item, value in self._reference_documents.items() if item != key}
         self._persistence_service.persist(references=references)
         del self._reference_documents[key]
+        self._dialogue_service.drop_laboratory_focus(key)
         if str(self._laboratory_focus.get("doc_id") or "") == str(removed.get("doc_id") or ""):
             self._laboratory_focus = {}
         return {
@@ -1037,7 +1438,7 @@ class FusionReaderV2:
             },
             "chat": {
                 **chat,
-                "ready": bool(chat.get("ok")),
+                "ready": bool(chat.get("ok")) and chat.get("model_present") is not False,
             },
             "external_research": {
                 **external,
@@ -1060,6 +1461,8 @@ class FusionReaderV2:
                 return ""
             return "No pude entender bien el audio que llegó a Dialogar. Probemos otra vez con una frase más clara."
         if stage == "chat":
+            if clean_detail == "generation_limit":
+                return "El modelo agotó su límite de generación. Probá con un pedido más acotado."
             cloud = str(provider or "").strip().lower() in {"openai", "openclaw"}
             if cloud:
                 if clean_detail == "openclaw_auth_required":
@@ -1234,7 +1637,8 @@ class FusionReaderV2:
         return out
 
     def _synthesize_cached(self, text: str) -> AudioArtifact:
-        return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language)
+        check_laboratory_turn()
+        return self._synthesize_cached_with_settings(text, self.voice.voice, self.voice.language, dialogue=True)
 
     def synthesize_for_export(self, text: str, voice: str = "", language: str = "es") -> AudioArtifact:
         """Generate cache-aware audio for an explicit, non-interactive export workflow."""
@@ -1245,17 +1649,20 @@ class FusionReaderV2:
         )
 
     def _synthesize_cached_with_settings(
-        self, text: str, voice: str, language: str, *, interactive: bool = False, prefetch_key: tuple | None = None
+        self, text: str, voice: str, language: str, *, interactive: bool = False,
+        prefetch_key: tuple | None = None, dialogue: bool = False,
     ) -> AudioArtifact:
         if not self._begin_tts_operation():
             return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
         tts_locked = False
+        cache_text = f"dialogue-full-v1\0{text}" if dialogue else text
         try:
-            cached = self.cache.get(text, voice, language)
+            cached = self.cache.get(cache_text, voice, language)
             if cached:
                 return cached
             if not interactive:
                 while True:
+                    check_laboratory_turn()
                     if not self._background_work_is_open():
                         return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
                     with self._tts_gate:
@@ -1268,7 +1675,8 @@ class FusionReaderV2:
                         continue
                     if not self._background_work_is_open():
                         return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
-                    self._tts_lock.acquire()
+                    if not self._tts_lock.acquire(timeout=0.1):
+                        continue
                     tts_locked = True
                     with self._tts_gate:
                         should_retry = self._interactive_tts_pending and not self._prefetch_key_is_promoted_locked(
@@ -1282,16 +1690,35 @@ class FusionReaderV2:
                 self._tts_lock.acquire()
                 tts_locked = True
             try:
+                check_laboratory_turn()
                 if not self._background_work_is_open():
                     return AudioArtifact(False, provider=self.tts.name, detail="shutdown_in_progress")
-                cached = self.cache.get(text, voice, language)
+                cached = self.cache.get(cache_text, voice, language)
                 if cached:
                     return cached
-                artifact = self.tts.synthesize(text, voice=voice, language=language)
-                if not artifact.ok and artifact.detail == "http_400":
-                    artifact = self._synthesize_segmented_with_settings(text, voice, language)
+                if dialogue:
+                    limit = self.dialogue_tts_segment_chars
+                    provider_limit = getattr(self.tts, "max_input_chars", 0)
+                    if provider_limit > 0:
+                        limit = min(limit, provider_limit)
+                    pieces = [
+                        piece
+                        for paragraph in re.split(r"\n\s*\n+", text.strip())
+                        for piece in self._split_text_for_tts(paragraph, limit)
+                    ]
+                else:
+                    pieces = [text]
+                if len(pieces) > 1:
+                    artifact = self._synthesize_segmented_with_settings(pieces, voice, language)
+                else:
+                    artifact = self.tts.synthesize(text, voice=voice, language=language)
+                    if not artifact.ok and artifact.detail == "http_400":
+                        segment_limit = getattr(self.tts, "max_input_chars", 0) or self.tts_segment_chars
+                        pieces = self._split_text_for_tts(text, max(80, int(segment_limit)))
+                        if len(pieces) > 1:
+                            artifact = self._synthesize_segmented_with_settings(pieces, voice, language)
                 try:
-                    return self.cache.put(text, voice, language, artifact)
+                    return self.cache.put(cache_text, voice, language, artifact)
                 except BaseException:
                     if artifact.owned_temporary and artifact.path:
                         artifact.path.unlink(missing_ok=True)
@@ -1302,11 +1729,7 @@ class FusionReaderV2:
         finally:
             self._end_tts_operation()
 
-    def _synthesize_segmented_with_settings(self, text: str, voice: str, language: str) -> AudioArtifact:
-        segment_limit = getattr(self.tts, "max_input_chars", 0) or self.tts_segment_chars
-        pieces = self._split_text_for_tts(text, max(80, int(segment_limit)))
-        if len(pieces) <= 1:
-            return AudioArtifact(False, provider=self.tts.name, detail="http_400")
+    def _synthesize_segmented_with_settings(self, pieces: list[str], voice: str, language: str) -> AudioArtifact:
         artifacts: list[AudioArtifact] = []
         paths: list[Path] = []
         output_path: Path | None = None
@@ -1314,11 +1737,15 @@ class FusionReaderV2:
         started = time.perf_counter()
         try:
             for piece in pieces:
+                check_laboratory_turn()
                 artifact = self.tts.synthesize(piece, voice=voice, language=language)
                 artifacts.append(artifact)
-                if not artifact.ok or not artifact.path:
+                if not artifact.ok:
                     return artifact
+                if not artifact.path:
+                    return AudioArtifact(False, provider=self.tts.name, detail="missing_audio_segment")
                 paths.append(Path(artifact.path))
+            check_laboratory_turn()
             fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_segmented_", suffix=".wav")
             os.close(fd)
             output_path = Path(name)
@@ -1619,7 +2046,7 @@ class FusionReaderV2:
     def voice_metrics_by_chunk(self, doc_id: str = "", limit: int = 1000) -> dict:
         return self._audio_service.by_chunk(doc_id, limit)
 
-    def reader_snapshot(self) -> dict:
+    def reader_snapshot(self, chunk_index: int | None = None) -> dict:
         document = self.session.document
         status = self.session.status()
         if not document:
@@ -1638,12 +2065,13 @@ class FusionReaderV2:
                 "laboratory_focus": self.laboratory_focus_status(),
                 "laboratory_mode": self.laboratory_mode_status(),
             }
-        cursor = self.session.cursor
         chunks = document.chunks
+        cursor = chunk_index if chunk_index is not None and 0 <= chunk_index < len(chunks) else self.session.cursor
         main_record = self._main_document_record()
         return {
             **status,
-            "current_chunk": self.session.current_chunk(),
+            "current": cursor + 1 if chunks else 0,
+            "current_chunk": chunks[cursor] if chunks else "",
             "previous_chunk": chunks[cursor - 1] if cursor > 0 else "",
             "next_chunk": chunks[cursor + 1] if cursor + 1 < len(chunks) else "",
             "document_text": document.text,
@@ -1663,8 +2091,33 @@ class FusionReaderV2:
             "laboratory_mode": self.laboratory_mode_status(),
         }
 
+    @staticmethod
+    def _normalize_block_number(text: str) -> str:
+        ordinals = (
+            "primer(?:o)?",
+            "segundo",
+            "tercer(?:o)?",
+            "cuarto",
+            "quinto",
+            "sexto",
+            "s[eé]ptimo",
+            "octavo",
+            "noveno",
+            "d[eé]cimo",
+        )
+        cardinals = ("uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez")
+        for number, (ordinal, cardinal) in enumerate(zip(ordinals, cardinals, strict=True), 1):
+            text = re.sub(
+                rf"\b(?:{ordinal}\s+bloque|bloque\s+(?:n[uú]mero\s+)?{cardinal})\b",
+                f"bloque {number}",
+                text,
+                flags=re.IGNORECASE,
+            )
+        return text
+
     def _extract_navigation_plan(self, text: str) -> dict | None:
-        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split())
+        clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split()).rstrip(" .,:;!?")
+        clean = re.sub(r"[,;]\s*por favor$", "", clean, flags=re.IGNORECASE)
         if not clean:
             return None
         normalized = self._normalize_search_text(clean)
@@ -1675,9 +2128,12 @@ class FusionReaderV2:
             return None
         plan: dict[str, object] = {}
         block_match = re.search(
-            r"(?:^|\b)(?:and[aá]|anda|ir|ite|vamos|salt[aá]|salta|mostrame|mu[eé]strame|ll[eé]vame|llevame|abr[ií]|abre|quiero\s+ver|quiero\s+ir\s+a|ver)?"
-            r".*?\b(?:bloque|chunk|parte|secci[oó]n)\s+(\d{1,4})(?:\s+(?:de|del|en)\s+(.+?))?(?=\s+y\s+(?:busca|busc[aá]|buscar|encuentra|encontr[aá]|encontrar|ubica|ubic[aá]|d[oó]nde|donde)\b|$)",
-            clean,
+            r"\b(?:bloque|chunk|parte|secci[oó]n)\s+(\d{1,4})\b(?:\s+(?:de|del|en)\s+(.+?))??"
+            r"(?=\s+y\s+(?:busca|busc[aá]|buscar|encuentra|encontr[aá]|encontrar|ubica|ubic[aá]|d[oó]nde|donde)\b"
+            r"|[, ]+a ver qu[eé] te parece$"
+            r"|\s+en\s+(?:(?:un|una|dos|tres|pocas?)\s+)?(?:lista|tabla|viñetas|p[aá]rrafos?|frases?)\b"
+            r"[^.!?]*$|$)",
+            self._normalize_block_number(clean),
             flags=re.IGNORECASE,
         )
         if block_match:
@@ -1726,32 +2182,44 @@ class FusionReaderV2:
             return query, selector
         return quoted or clean_tail, selector
 
-    def _extract_compare_plan(self, text: str) -> dict | None:
+    def _extract_compare_plan(self, text: str, *, chunk_index: int | None = None) -> dict | None:
         clean = " ".join(str(text or "").strip().replace("¿", "").replace("¡", "").split())
         if not clean:
             return None
-        if not re.search(r"\bcompar", clean, flags=re.IGNORECASE):
+        command = re.match(
+            r"^(?:(?:por favor|che|bueno|bien)[,.]?\s+)*"
+            r"(?:(?:quiero que|me gustaría que|podés|podrías|puedes)\s+)?"
+            r"(?:compará|compara|comparar|compares|comparame|compárame)\b\s+",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        if not command:
             return None
-        lowered = clean.lower()
-        if " con " not in lowered:
+        clean = clean[command.end() :]
+        if " con " not in clean.lower():
             return None
         left_raw, right_raw = re.split(r"\bcon\b", clean, maxsplit=1, flags=re.IGNORECASE)
-        left_raw = re.sub(r"^.*?\bcompar[aá]\s+", "", left_raw, flags=re.IGNORECASE).strip(" .,:;!?")
+        left_raw = left_raw.strip(" .,:;!?")
         right_raw = str(right_raw or "").strip(" .,:;!?")
         if not left_raw or not right_raw:
             return None
-        left = self._parse_compare_target(left_raw, prefer_focus=True)
-        right = self._parse_compare_target(right_raw, prefer_focus=False)
+        left = self._parse_compare_target(left_raw, prefer_focus=True, chunk_index=chunk_index)
+        right = self._parse_compare_target(right_raw, chunk_index=chunk_index)
         if not left or not right:
             return None
         return {"left": left, "right": right}
 
-    def _parse_compare_target(self, text: str, prefer_focus: bool = False) -> dict | None:
+    def _parse_compare_target(
+        self, text: str, *, prefer_focus: bool = False, chunk_index: int | None = None
+    ) -> dict | None:
         clean = str(text or "").strip(" .,:;!?")
         if not clean:
             return None
-        if re.search(r"\b(?:este|ese|actual)\s+bloque\b", clean, flags=re.IGNORECASE):
-            focus = self.laboratory_focus_status() if prefer_focus else {}
+        pointer = re.search(r"\b(?:este|ese|actual)\s+bloque\b|\bbloque\s+actual\b", clean, flags=re.IGNORECASE)
+        if pointer:
+            scoped = bool(laboratory_session_for_turn.get())
+            use_focus = pointer[0].lower().startswith("ese ") if scoped else prefer_focus
+            focus = self.laboratory_focus_status() if use_focus else {}
             if focus:
                 return {
                     "source": "focus",
@@ -1765,11 +2233,13 @@ class FusionReaderV2:
                     "source": "main",
                     "doc_id": str(status.get("doc_id") or ""),
                     "title": str(status.get("title") or ""),
-                    "chunk_number": int(status.get("current") or 0),
+                    "chunk_number": (
+                        chunk_index + 1 if scoped and chunk_index is not None else int(status.get("current") or 0)
+                    ),
                 }
         match = re.search(
             r"\b(?:bloque|chunk|parte|secci[oó]n)\s+(\d{1,4})(?:\s+(?:de|del|en)\s+(.+))?$",
-            clean,
+            self._normalize_block_number(clean),
             flags=re.IGNORECASE,
         )
         if match:
@@ -1802,8 +2272,6 @@ class FusionReaderV2:
             record = self._resolve_document_record(str(target.get("doc_id") or ""))
         if record is None:
             record = self._resolve_document_record(str(target.get("doc_selector") or ""))
-        if record is None and self.session.document:
-            record = self._resolve_document_record(str(self.session.document.doc_id))
         if not record:
             return None
         chunks = record.get("chunks")
@@ -1853,19 +2321,20 @@ class FusionReaderV2:
         ]
         return "\n".join(lines)
 
-    def _handle_compare_intent(self, text: str, dialogue: bool = False) -> dict | None:
-        plan = self._extract_compare_plan(text)
+    def _handle_compare_intent(
+        self, text: str, dialogue: bool = False, *, chunk_index: int | None = None
+    ) -> dict | None:
+        plan = self._extract_compare_plan(text, chunk_index=chunk_index)
         if not plan:
             return None
         left = self._resolve_compare_target(plan["left"])
         right = self._resolve_compare_target(plan["right"])
         if not left or not right:
             return {
-                "ok": False,
-                "answer": "",
+                "ok": True,
+                "answer": "No pude identificar los dos pasajes. Indicame de qué documento y bloque es cada uno.",
                 "model": "reader_compare",
                 "detail": "compare_target_not_found",
-                "error": "compare_target_not_found",
             }
         summary = self._compare_summary(left, right, dialogue=dialogue)
         focus_record = self._resolve_document_record(str(right.get("doc_id") or right.get("title") or ""))
@@ -1893,7 +2362,7 @@ class FusionReaderV2:
 
     def _search_chunk_matches(self, query: str, selector: str = "", limit: int = 5) -> list[dict]:
         selected_record = self._resolve_document_record(selector) if selector else None
-        records = [selected_record] if selected_record else self._all_document_records()
+        records = [selected_record] if selector else self._all_document_records()
         normalized_query = self._normalize_search_text(query)
         terms = self._meaningful_search_terms(query)
         matches: list[tuple[int, int, dict]] = []
@@ -1991,22 +2460,20 @@ class FusionReaderV2:
             selected = self._resolve_document_record(str(plan.get("focus_selector") or ""))
             if not selected:
                 return {
-                    "ok": False,
-                    "answer": "",
+                    "ok": True,
+                    "answer": "No pude identificar ese documento. Decime el nombre del archivo o pedime el bloque del documento activo.",
                     "model": "reader_navigation",
                     "detail": "document_not_found",
-                    "error": "document_not_found",
                 }
             chunk_number = int(plan.get("focus_chunk_number") or 0)
             chunks_value = selected.get("chunks")
             chunks = chunks_value if isinstance(chunks_value, list) else []
             if chunk_number < 1 or chunk_number > len(chunks):
                 return {
-                    "ok": False,
-                    "answer": "",
+                    "ok": True,
+                    "answer": f"El bloque {chunk_number} no existe en {selected['title']}. Hay {len(chunks)} bloques.",
                     "model": "reader_navigation",
                     "detail": "chunk_out_of_bounds",
-                    "error": "chunk_out_of_bounds",
                     "doc_id": selected.get("doc_id") or "",
                     "title": selected.get("title") or "",
                     "total": len(chunks),
@@ -2104,17 +2571,181 @@ class FusionReaderV2:
             }
         return None
 
+    def _laboratory_document_changed(self) -> bool:
+        generation = laboratory_generation_for_turn.get()
+        return generation is not None and generation != self._document_generation
+
+    def _prepare_laboratory_turn(
+        self, text: str, chunk_index: int | None, *, dialogue: bool
+    ) -> tuple[str, dict, tuple[dict, list[dict], list[dict] | None] | None]:
+        with self._document_lock:
+            check_laboratory_turn()
+            if self._laboratory_document_changed():
+                return (
+                    "navigation",
+                    {
+                        "ok": True,
+                        "answer": "El documento cambió durante el turno. Repetí el pedido en el documento actual.",
+                        "model": "reader_navigation",
+                        "detail": "laboratory_document_changed",
+                    },
+                    None,
+                )
+            action, result = self._laboratory_action(text, chunk_index, dialogue=dialogue)
+            key = self._laboratory_scope()
+            research = self._dialogue_service.laboratory_research(key) if key is not None else None
+            if research is not None and action != "research":
+                research.last_attempt = None
+            model_context = None
+            if action == "conversation":
+                model_context = self._laboratory_model_context(chunk_index, dialogue=dialogue)
+                model_context[0].update(result)
+            elif (
+                action in {"navigation", "compare"}
+                and result.get("ok")
+                and result.get("detail") in {"focus_block", "search_matches", "compare_blocks"}
+            ):
+                self._remember_laboratory_action(text, result.get("answer") or "", dialogue=dialogue)
+        if (
+            action == "conversation"
+            and not result
+            and model_context is not None
+            and key is not None
+            and self._research_service.may_request_web_action(text)
+        ):
+            receipt = research.last_search if research else None
+            previous_topic = (
+                receipt.query.partition(" | ")[0]
+                if receipt and receipt.detail.startswith("external_research_news")
+                else ""
+            )
+            raw = self.conversation.classify_laboratory_web_request(text, model_context[1], previous_topic)
+            if intent := self._research_service.parse_web_intent(raw):
+                previous = research.previous_request if research else None
+                if previous:
+                    intent = self._research_service.keep_news_date(intent, text, previous_topic, previous.text)
+                with self._document_lock:
+                    if self._laboratory_scope() == key and not self._laboratory_document_changed():
+                        return "research", {"web_intent": intent}, None
+        return action, result, model_context
+
+    def _laboratory_action(self, text: str, chunk_index: int | None, *, dialogue: bool) -> tuple[str, dict]:
+        note_allowed = not re.search(
+            r"\b(?:no|nunca|jamas)\s+(?:(?:lo|la|les?|me|eso|esto|quiero|que|te|pido)\s+){0,5}"
+            r"(?:guard\w*|anot\w*|tom\w*\s+notas?)\b",
+            self._normalize_search_text(text),
+        )
+        note_text = self._extract_note_command(text) if note_allowed else ""
+        if note_text:
+            started = time.perf_counter()
+            scope = self._laboratory_history()
+            history = scope[1] if scope is not None else None
+            if self._notes_service.should_create_laboratory(text, history=history) or (
+                self._notes_service.should_route_generic_to_laboratory(text, note_text, history=history)
+            ):
+                created = self._notes_service.create_laboratory(note_text, history=history)
+                if history is not None and created.get("error") == "empty_note":
+                    return "navigation", {
+                        "ok": True,
+                        "answer": "Decime qué querés guardar en la nota.",
+                        "detail": "missing_note_reference",
+                        "model": "reader_notes",
+                    }
+            else:
+                created = self.create_note(note_text, chunk_index=self._resolve_note_chunk_index(chunk_index))
+            return "note", {**created, "note_ms": int((time.perf_counter() - started) * 1000)}
+        if note_allowed and self._looks_like_note_request(text):
+            return "note_help", {}
+        if source_action(text):
+            return "research", {}
+        if self._looks_like_external_research_request(text):
+            return "research", {}
+        key = self._laboratory_scope()
+        research = self._dialogue_service.laboratory_research(key) if key is not None else None
+        if (
+            research is not None
+            and (research.pending is not None or research.previous_request is not None)
+            and self._research_service.grants_web_permission(text)
+        ):
+            return "research", {"web_intent": WebIntent("resume")}
+        if self._research_service.asks_why_no_search(text):
+            return "navigation", self._research_service.explain_search_routing(
+                permitted=external_research_permission.get() is not False,
+                result=research.last_search if research is not None else None,
+            )
+        if self._research_service.needs_search_clarification(text):
+            return "navigation", {
+                "ok": True,
+                "answer": "¿Querés que busque en internet? Decime qué tema querés buscar.",
+                "model": "reader_research",
+                "detail": "external_research_intent_unclear",
+            }
+        if research is not None:
+            if self._research_service.cancels_pending(text):
+                research.pending = None
+                research.previous_request = None
+            elif self._research_service.asks_how_researched(text) or re.match(
+                r"^(?:y )?de donde (?:lo |la )?(?:bajaste|descargaste|sacaste)\b", self._normalize_search_text(text)
+            ):
+                receipt = self._research_service.describe_last_search(research.last_search)
+                if research.opened_link:
+                    link = research.opened_link
+                    proof = f"Recuperé el contenido de «{link['title']}» desde {link['url']}."
+                    if link.get("selected_topic"):
+                        proof += f" Lo seleccioné por su relación con «{link['selected_topic']}»."
+                    elif link.get("search_query"):
+                        proof += f" Llegó como resultado de la consulta «{link['search_query']}»."
+                    else:
+                        proof += " Abrí el enlace indicado en el pedido."
+                    return "navigation", {
+                        **receipt,
+                        "answer": f"{proof}\n\n{receipt['answer']}",
+                        "spoken_answer": "Recuperé el contenido de esa fuente. Te dejé su dirección y la procedencia en el chat.",
+                        "external_sources": [link],
+                    }
+                return "navigation", receipt
+            elif (
+                self._research_service.asks_to_repeat_web_search(text)
+                and research.pending is None
+                and research.previous_request is None
+            ):
+                return "navigation", {
+                    "ok": True,
+                    "answer": "¿Qué tema querés que busque en internet?",
+                    "model": "reader_research",
+                    "detail": "external_research_topic_required",
+                }
+            elif self._research_service.is_incomplete_document_request(text):
+                cursor = self.session.cursor if chunk_index is None else chunk_index
+                research.pending = LaboratoryResearchRequest(text[:4000], cursor)
+                return "navigation", {
+                    "ok": True,
+                    "answer": "Puedo buscar fuentes sobre los temas de este bloque. Decime «buscá» para confirmar.",
+                    "detail": "external_research_confirmation",
+                    "model": "reader_research",
+                }
+            elif (
+                (research.pending is not None and self._research_service.resumes_pending(text))
+                or (research.last_attempt is not None and self._research_service.requests_retry(text))
+                or (research.previous_request is not None and self._research_service.explicitly_repeats_search(text))
+                or (research.sources and self._research_service.wants_source_links(text))
+            ):
+                return "research", {}
+        comparison = self._handle_compare_intent(text, dialogue=dialogue, chunk_index=chunk_index)
+        if comparison is not None:
+            if laboratory_session_for_turn.get() and comparison.get("comparison"):
+                return "conversation", {"laboratory_comparison": comparison["comparison"]}
+            return "compare", comparison
+        navigation = self._handle_navigation_intent(text, dialogue=dialogue)
+        if navigation is not None and not navigation.get("continue_with_llm"):
+            return "navigation", navigation
+        return "conversation", {}
+
     def chat(self, message: str, model: str = "", chunk_index: int | None = None) -> dict:
         started = time.perf_counter()
-        note_text = self._extract_note_command(message)
-        if note_text:
-            if self._should_create_laboratory_note(message) or self._should_route_generic_note_to_laboratory(
-                message, note_text
-            ):
-                created = self.create_laboratory_note(note_text)
-            else:
-                selected_chunk = self._resolve_note_chunk_index(chunk_index)
-                created = self.create_note(note_text, chunk_index=selected_chunk)
+        action, result, model_context = self._prepare_laboratory_turn(message, chunk_index, dialogue=False)
+        if action == "note":
+            created = result
             if not created.get("ok"):
                 return {
                     "ok": False,
@@ -2140,7 +2771,7 @@ class FusionReaderV2:
                 "total": self.session.status().get("total") or 0,
                 "note": note,
             }
-        if self._looks_like_note_request(message):
+        if action == "note_help":
             snapshot = self.session.status()
             return {
                 "ok": True,
@@ -2153,27 +2784,13 @@ class FusionReaderV2:
                 "current": snapshot.get("current") or 0,
                 "total": snapshot.get("total") or 0,
             }
-        comparison = self._handle_compare_intent(message, dialogue=False)
-        if comparison is not None:
-            comparison["duration_ms"] = int((time.perf_counter() - started) * 1000)
-            if comparison.get("ok"):
-                self._remember_chat_turn(message, comparison.get("answer") or "")
-            return comparison
-        external = self._external_research_chat_response(message, started)
-        if external is not None:
-            return external
-        navigation = self._handle_navigation_intent(message, dialogue=False)
-        if navigation is not None and not navigation.get("continue_with_llm"):
-            navigation["duration_ms"] = int((time.perf_counter() - started) * 1000)
-            if navigation.get("ok"):
-                self._remember_chat_turn(message, navigation.get("answer") or "")
-            return navigation
-        snapshot = self.reader_snapshot()
-        with self._chat_lock:
-            history = [] if provider_for_turn.get() == "openai" else list(self._chat_history)
-        if provider_for_turn.get() == "openai":
-            snapshot.pop("laboratory_history", None)
-            snapshot.pop("dialogue_history", None)
+        if action == "research":
+            return self._external_research_chat_response(message, started, chunk_index, result.get("web_intent"))
+        if action in {"compare", "navigation"}:
+            result["duration_ms"] = int((time.perf_counter() - started) * 1000)
+            return result
+        assert model_context is not None
+        snapshot, history, scope = model_context
         selected_model = model
         if not selected_model and self.profile == "bohemia":
             selected_model = environment_value("FUSION_READER_BOHEMIA_CHAT_MODEL") or ""
@@ -2186,13 +2803,18 @@ class FusionReaderV2:
             profile=self.profile,
             veil=self.veil,
         )
+        check_laboratory_turn()
         if result.ok:
-            self._remember_chat_turn(message, result.answer)
+            if scope is not None:
+                self._dialogue_service.remember_laboratory_turn(scope, message, result.answer)
+            else:
+                self._dialogue_service.remember_turn(message, result.answer)
         return {
             "ok": result.ok,
             "answer": result.answer,
             "model": result.model,
             "detail": result.detail,
+            "truncated": result.truncated,
             "duration_ms": result.duration_ms or int((time.perf_counter() - started) * 1000),
             "reasoning_mode": result.reasoning_mode or self.reasoning_mode,
             "reasoning_passes": result.reasoning_passes or 1,
@@ -2202,10 +2824,110 @@ class FusionReaderV2:
             "total": snapshot.get("total") or 0,
         }
 
-    def _remember_chat_turn(self, user_message: str, assistant_answer: str) -> None:
-        self._dialogue_service.remember_chat_turn(user_message, assistant_answer)
+    def _remember_laboratory_action(self, user_message: str, assistant_answer: str, *, dialogue: bool) -> None:
+        scope = self._laboratory_history()
+        if scope is not None:
+            if provider_for_turn.get() in LABORATORY_LOCAL_PROVIDERS:
+                self._dialogue_service.remember_laboratory_turn(scope[0], user_message, assistant_answer)
+            return
+        self._dialogue_service.remember_turn(user_message, assistant_answer, dialogue=dialogue)
 
-    def clear_laboratory_history(self) -> dict:
+    def _laboratory_scope(self) -> LaboratoryScope | None:
+        session = laboratory_session_for_turn.get()
+        if not session:
+            return None
+        return session, provider_for_turn.get() or "local", self._document_generation, self.laboratory_mode
+
+    def capture_laboratory_archive_scope(self) -> ArchiveScope | None:
+        with self._document_lock:
+            key = self._laboratory_scope()
+            if key is None:
+                return None
+            document = self.session.document
+            return ArchiveScope(key[0], key[1], document.doc_id if document else "", key[3])
+
+    def _restore_laboratory_thread(self, key: LaboratoryScope) -> tuple[list[dict], LaboratoryResearch]:
+        document = self.session.document
+        scope = ArchiveScope(key[0], key[1], document.doc_id if document else "", key[3])
+        try:
+            return self._laboratory_archive.restore(scope)
+        except (OSError, sqlite3.Error, ValueError):
+            return [], LaboratoryResearch()
+
+    def archive_laboratory_turn(self, scope: ArchiveScope | None, question: str, result: dict) -> dict:
+        check_laboratory_turn()
+        answer = str(result.get("answer") or "").strip()
+        if scope is None or not question.strip() or not answer:
+            return result
+        try:
+            with self._document_lock:
+                check_laboratory_turn()
+                current = self.capture_laboratory_archive_scope()
+                key = self._laboratory_scope()
+                history = (
+                    self._dialogue_service.laboratory_history(key)[1] if key is not None and current == scope else None
+                )
+                research = self._dialogue_service.laboratory_research(key) if history is not None else None
+                self._laboratory_archive.record(
+                    scope, question, answer, result.get("external_sources") or [], history, research,
+                    truncated=result.get("truncated") is True,
+                )
+        except (OSError, sqlite3.Error, ValueError):
+            return {**result, "archive_warning": "No pude guardar este turno en el historial."}
+        return result
+
+    def archived_laboratory_conversations(self) -> dict:
+        return {"ok": True, "items": self._laboratory_archive.conversations()}
+
+    def archived_laboratory_turns(self, session: str, before: int | None = None) -> dict:
+        return {"ok": True, **self._laboratory_archive.turn_page(session, before)}
+
+    def _laboratory_history(self) -> tuple[list[dict], list[dict]] | None:
+        with self._document_lock:
+            scope = self._laboratory_scope()
+            return self._dialogue_service.laboratory_history(scope) if scope is not None else None
+
+    def _laboratory_model_context(
+        self, chunk_index: int | None, *, dialogue: bool
+    ) -> tuple[dict, list[dict], list[dict] | None]:
+        with self._document_lock:
+            scope = self._laboratory_history()
+            snapshot = self.reader_snapshot(chunk_index)
+        if scope is not None:
+            snapshot["laboratory_scoped"] = True
+            snapshot["laboratory_web_enabled"] = external_research_permission.get() is not False
+            key = self._laboratory_scope()
+            research = self._dialogue_service.laboratory_research(key)
+            if research.opened_context:
+                snapshot["laboratory_opened_source"] = research.opened_context
+            last_search = research.last_search
+            if last_search is not None and last_search.provider and last_search.query:
+                snapshot["laboratory_search_source_count"] = len(last_search.sources)
+                snapshot["laboratory_search_detail"] = last_search.detail
+            return snapshot, scope[1], scope[0]
+        # Existing API callers keep their channel history. Cloud callers without
+        # a window identifier remain stateless.
+        if provider_for_turn.get() == "openai":
+            return snapshot, [], None
+        with self._chat_lock:
+            chat_history = list(self._chat_history)
+        if not dialogue:
+            return snapshot, chat_history, None
+        snapshot["laboratory_history"] = chat_history
+        with self._dialogue_lock:
+            return snapshot, list(self._dialogue_history), None
+
+    def clear_laboratory_history(self, session: str = "") -> dict:
+        if session:
+            with self._document_lock:
+                self._laboratory_archive.remove(session)
+                count = self._dialogue_service.clear_laboratory_session(session)
+            return {
+                "ok": True,
+                "cleared": True,
+                "chat_items": count,
+                "dialogue_items": 0,
+            }
         return self._dialogue_service.clear_history()
 
     def dialogue_status(self) -> dict:
@@ -2217,7 +2939,7 @@ class FusionReaderV2:
         provider = getattr(self.conversation, "provider", None)
         if provider is None:
             return {"id": "unknown", "label": "No disponible", "selected": True, "available": []}
-        selected = str(getattr(provider, "selected", "local") or "local")
+        selected = str(getattr(provider, "effective_provider", getattr(provider, "selected", "local")) or "local")
         catalog = provider.catalog() if hasattr(provider, "catalog") else []
         if not catalog:
             catalog = [
@@ -2234,12 +2956,18 @@ class FusionReaderV2:
             **active,
             "id": selected,
             "selected": True,
-            "ready": bool((health or {}).get("ok")),
+            "ready": bool((health or {}).get("ok")) and (health or {}).get("model_present") is not False,
             "connection_verified": (health or {}).get("connection_verified"),
             "detail": str((health or {}).get("detail") or ""),
             "active_provider": str((health or {}).get("active_provider") or (health or {}).get("provider") or ""),
             "available": catalog,
         }
+
+    def openai_usage_status(self) -> dict:
+        provider = getattr(self.conversation, "provider", None)
+        cloud = getattr(provider, "providers", {}).get("openai")
+        usage_status = getattr(cloud, "usage_status", None)
+        return usage_status() if callable(usage_status) else {"ok": False, "windows": [], "last_call": None}
 
     def set_chat_provider(self, provider_id: str) -> dict:
         provider = getattr(self.conversation, "provider", None)
@@ -2271,7 +2999,8 @@ class FusionReaderV2:
         return self._dialogue_service.set_reasoning_mode(mode)
 
     def set_laboratory_mode(self, mode: str) -> dict:
-        return self._dialogue_service.set_laboratory_mode(mode)
+        with self._document_lock:
+            return self._dialogue_service.set_laboratory_mode(mode)
 
     def profile_status(self) -> dict:
         return self._dialogue_service.profile_status()
@@ -2646,18 +3375,11 @@ class FusionReaderV2:
                 {**trace_event, "ok": True, "detail": "dialogue_stopped", "duration_ms": out["duration_ms"]}
             )
             return out
-        note_text = self._extract_note_command(text)
+        action, action_result, model_context = self._prepare_laboratory_turn(text, chunk_index, dialogue=True)
         intent_ms = int((time.perf_counter() - started) * 1000)
-        if note_text:
-            note_started = time.perf_counter()
-            if self._should_create_laboratory_note(text) or self._should_route_generic_note_to_laboratory(
-                text, note_text
-            ):
-                created = self.create_laboratory_note(note_text)
-            else:
-                selected_chunk = self._resolve_note_chunk_index(chunk_index)
-                created = self.create_note(note_text, chunk_index=selected_chunk)
-            note_ms = int((time.perf_counter() - note_started) * 1000)
+        if action == "note":
+            created = action_result
+            note_ms = created["note_ms"]
             if not created.get("ok"):
                 out = {
                     "ok": False,
@@ -2689,10 +3411,8 @@ class FusionReaderV2:
                 tts_started = time.perf_counter()
                 artifact = self._synthesize_cached(spoken_answer)
                 tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-            with self._dialogue_lock:
-                self._dialogue_history.append({"ts": time.time(), "role": "user", "content": text})
-                self._dialogue_history.append({"ts": time.time(), "role": "assistant", "content": spoken_answer})
-                self._dialogue_history = self._dialogue_history[-16:]
+            if not laboratory_session_for_turn.get():
+                self._dialogue_service.remember_turn(text, spoken_answer, dialogue=True)
             out = {
                 "ok": True,
                 "transcript": text,
@@ -2729,7 +3449,7 @@ class FusionReaderV2:
                 }
             )
             return out
-        if self._looks_like_note_request(text):
+        if action == "note_help":
             spoken_answer = "Sí, puedo guardar notas. Decime: tomá nota de, y lo que querés guardar."
             if self.fast_dialogue_ack:
                 artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
@@ -2771,8 +3491,8 @@ class FusionReaderV2:
                 }
             )
             return out
-        comparison = self._handle_compare_intent(text, dialogue=True)
-        if comparison is not None:
+        if action == "compare":
+            comparison = action_result
             spoken_answer = str(comparison.get("answer") or "").strip()
             if not comparison.get("ok"):
                 out = {
@@ -2791,17 +3511,13 @@ class FusionReaderV2:
                     {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
                 )
                 return out
-            if self.fast_dialogue_ack:
+            if self.fast_dialogue_ack and len(spoken_answer) <= self.dialogue_tts_segment_chars:
                 artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
                 tts_ms = 0
             else:
                 tts_started = time.perf_counter()
                 artifact = self._synthesize_cached(spoken_answer)
                 tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-            with self._dialogue_lock:
-                self._dialogue_history.append({"ts": time.time(), "role": "user", "content": text})
-                self._dialogue_history.append({"ts": time.time(), "role": "assistant", "content": spoken_answer})
-                self._dialogue_history = self._dialogue_history[-16:]
             out = {
                 "ok": True,
                 "transcript": text,
@@ -2837,36 +3553,28 @@ class FusionReaderV2:
                 }
             )
             return out
-        if self._looks_like_external_research_request(text):
+        if action == "research":
             research_started = time.perf_counter()
-            external_result = self._run_external_research(text)
-            research_ms = external_result.duration_ms or int((time.perf_counter() - research_started) * 1000)
-            spoken_answer = self._shorten_dialogue_answer(
-                str(external_result.spoken_answer or external_result.answer or "").strip()
+            external_result = self._run_external_research(
+                text, dialogue=True, chunk_index=chunk_index, web_intent=action_result.get("web_intent")
             )
-            if self.fast_dialogue_ack:
+            research_ms = external_result.duration_ms or int((time.perf_counter() - research_started) * 1000)
+            answer = str(external_result.answer or "").strip() or self._human_dialogue_error(
+                str(external_result.detail or ""), stage="external", provider=str(external_result.provider or "")
+            )
+            spoken_answer = self._dialogue_spoken_text(answer)
+            if self.fast_dialogue_ack and len(spoken_answer) <= self.dialogue_tts_segment_chars:
                 artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
                 tts_ms = 0
             else:
                 tts_started = time.perf_counter()
                 artifact = self._synthesize_cached(spoken_answer)
                 tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-            if external_result.ok and str(external_result.answer or "").strip():
-                with self._dialogue_lock:
-                    self._dialogue_history.append({"ts": time.time(), "role": "user", "content": text})
-                    self._dialogue_history.append(
-                        {"ts": time.time(), "role": "assistant", "content": str(external_result.answer or "").strip()}
-                    )
-                    self._dialogue_history = self._dialogue_history[-16:]
             out = {
                 "ok": True,
                 "transcript": text,
-                "answer": str(external_result.answer or "").strip()
-                or self._human_dialogue_error(
-                    str(external_result.detail or ""),
-                    stage="external",
-                    provider=str(external_result.provider or ""),
-                ),
+                "answer": answer,
+                "spoken_answer": spoken_answer,
                 "audio": str(artifact.path or ""),
                 "cached": artifact.cached,
                 "provider": artifact.provider,
@@ -2878,6 +3586,7 @@ class FusionReaderV2:
                 "trace": {
                     "intent_ms": intent_ms,
                     "external_ms": research_ms,
+                    "external_provider": external_result.provider,
                     "tts_ms": tts_ms,
                     "server_text_total_ms": int((time.perf_counter() - started) * 1000),
                 },
@@ -2889,6 +3598,7 @@ class FusionReaderV2:
                 "reasoning_mode_applied": reasoning["applied"],
                 "reasoning_degraded": reasoning["degraded"],
                 "external_research": True,
+                "external_provider": external_result.provider,
                 "external_query": external_result.query or text,
                 "external_summary": external_result.summary,
                 "external_findings": list(external_result.findings),
@@ -2914,7 +3624,9 @@ class FusionReaderV2:
                     "external_research": True,
                     "external_provider": str(external_result.provider or ""),
                     "external_model": str(external_result.model or ""),
-                    "chat_provider": str(external_result.provider or ""),
+                    "external_source_count": len(external_result.sources),
+                    "research_detail": external_result.detail,
+                    "chat_provider": self._active_chat_provider_name(),
                     "tts_provider": str(artifact.provider or ""),
                     "external_ms": research_ms,
                     "tts_ok": bool(artifact.ok),
@@ -2923,85 +3635,78 @@ class FusionReaderV2:
                 }
             )
             return out
-        navigation = self._handle_navigation_intent(text, dialogue=True)
-        if navigation is not None:
-            if navigation.get("continue_with_llm"):
-                trace_event["navigation_detail"] = str(navigation.get("detail") or "")
-            else:
-                spoken_answer = str(navigation.get("answer") or "").strip()
-                if not navigation.get("ok"):
-                    out = {
-                        "ok": False,
-                        "transcript": text,
-                        "answer": "",
-                        "model": navigation.get("model") or "reader_navigation",
-                        "detail": navigation.get("detail") or navigation.get("error") or "navigation_failed",
-                        "chat_ms": 0,
-                        "duration_ms": int((time.perf_counter() - started) * 1000),
-                        "reasoning_mode_requested": reasoning["requested"],
-                        "reasoning_mode_applied": reasoning["applied"],
-                        "reasoning_degraded": reasoning["degraded"],
-                    }
-                    self._append_dialogue_trace(
-                        {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
-                    )
-                    return out
-                if self.fast_dialogue_ack:
-                    artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
-                    tts_ms = 0
-                else:
-                    tts_started = time.perf_counter()
-                    artifact = self._synthesize_cached(spoken_answer)
-                    tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-                with self._dialogue_lock:
-                    self._dialogue_history.append({"ts": time.time(), "role": "user", "content": text})
-                    self._dialogue_history.append({"ts": time.time(), "role": "assistant", "content": spoken_answer})
-                    self._dialogue_history = self._dialogue_history[-16:]
+        if action == "navigation":
+            navigation = action_result
+            answer = str(navigation.get("answer") or "").strip()
+            spoken_answer = self._dialogue_spoken_text(answer)
+            if not navigation.get("ok"):
                 out = {
-                    "ok": True,
+                    "ok": False,
                     "transcript": text,
-                    "answer": spoken_answer,
-                    "audio": str(artifact.path or ""),
-                    "cached": artifact.cached,
-                    "provider": artifact.provider,
-                    "detail": navigation.get("detail") or artifact.detail,
+                    "answer": "",
                     "model": navigation.get("model") or "reader_navigation",
-                    "stt_ms": 0,
+                    "detail": navigation.get("detail") or navigation.get("error") or "navigation_failed",
                     "chat_ms": 0,
-                    "tts_ms": tts_ms,
-                    "trace": {
-                        "intent_ms": intent_ms,
-                        "tts_ms": tts_ms,
-                        "server_text_total_ms": int((time.perf_counter() - started) * 1000),
-                    },
                     "duration_ms": int((time.perf_counter() - started) * 1000),
-                    "voice_ok": artifact.ok,
-                    "laboratory_focus": navigation.get("laboratory_focus") or {},
-                    "matches": navigation.get("matches") or [],
                     "reasoning_mode_requested": reasoning["requested"],
                     "reasoning_mode_applied": reasoning["applied"],
                     "reasoning_degraded": reasoning["degraded"],
                 }
                 self._append_dialogue_trace(
-                    {
-                        **trace_event,
-                        "ok": True,
-                        "detail": str(out.get("detail") or ""),
-                        "tts_ok": bool(artifact.ok),
-                        "duration_ms": out["duration_ms"],
-                    }
+                    {**trace_event, "ok": False, "detail": out["detail"], "duration_ms": out["duration_ms"]}
                 )
                 return out
-        snapshot = self.reader_snapshot()
-        if provider_for_turn.get() == "openai":
-            snapshot.pop("laboratory_history", None)
-            snapshot.pop("dialogue_history", None)
-            history = []
-        else:
-            with self._chat_lock:
-                snapshot["laboratory_history"] = list(self._chat_history)
-            with self._dialogue_lock:
-                history = list(self._dialogue_history)
+            if self.fast_dialogue_ack and len(spoken_answer) <= self.dialogue_tts_segment_chars:
+                artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
+                tts_ms = 0
+            else:
+                tts_started = time.perf_counter()
+                artifact = self._synthesize_cached(spoken_answer)
+                tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
+            out = {
+                "ok": True,
+                "transcript": text,
+                "answer": answer,
+                "spoken_answer": spoken_answer,
+                **{
+                    key: navigation[key]
+                    for key in ("external_provider", "external_query", "external_sources")
+                    if key in navigation
+                },
+                "audio": str(artifact.path or ""),
+                "cached": artifact.cached,
+                "provider": artifact.provider,
+                "detail": navigation.get("detail") or artifact.detail,
+                "model": navigation.get("model") or "reader_navigation",
+                "stt_ms": 0,
+                "chat_ms": 0,
+                "tts_ms": tts_ms,
+                "trace": {
+                    "intent_ms": intent_ms,
+                    "tts_ms": tts_ms,
+                    "server_text_total_ms": int((time.perf_counter() - started) * 1000),
+                },
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+                "voice_ok": artifact.ok,
+                "laboratory_focus": navigation.get("laboratory_focus") or {},
+                "matches": navigation.get("matches") or [],
+                "reasoning_mode_requested": reasoning["requested"],
+                "reasoning_mode_applied": reasoning["applied"],
+                "reasoning_degraded": reasoning["degraded"],
+            }
+            self._append_dialogue_trace(
+                {
+                    **trace_event,
+                    "ok": True,
+                    "detail": str(out.get("detail") or ""),
+                    "tts_ok": bool(artifact.ok),
+                    "research_provenance": out["detail"] == "external_research_provenance",
+                    "duration_ms": out["duration_ms"],
+                }
+            )
+            return out
+        assert model_context is not None
+        snapshot, history, scope = model_context
         chat_started = time.perf_counter()
         selected_model = model
         if not selected_model and self.profile == "bohemia":
@@ -3047,27 +3752,31 @@ class FusionReaderV2:
                 }
             )
             return out
-        spoken_answer = self._shorten_dialogue_answer(chat_result.answer)
-        if self.fast_dialogue_ack:
+        check_laboratory_turn()
+        full_answer = str(chat_result.answer or "").strip()
+        spoken_answer = self._dialogue_spoken_text(full_answer)
+        if self.fast_dialogue_ack and len(spoken_answer) <= self.dialogue_tts_segment_chars:
             artifact = AudioArtifact(True, provider="text_ack", detail="fast_dialogue_ack")
             tts_ms = 0
         else:
             tts_started = time.perf_counter()
             artifact = self._synthesize_cached(spoken_answer)
             tts_ms = artifact.duration_ms or int((time.perf_counter() - tts_started) * 1000)
-        if str(spoken_answer or "").strip():
-            with self._dialogue_lock:
-                self._dialogue_history.append({"ts": time.time(), "role": "user", "content": text})
-                self._dialogue_history.append({"ts": time.time(), "role": "assistant", "content": spoken_answer})
-                self._dialogue_history = self._dialogue_history[-16:]
+        check_laboratory_turn()
+        if scope is not None:
+            self._dialogue_service.remember_laboratory_turn(scope, text, full_answer)
+        elif full_answer:
+            self._dialogue_service.remember_turn(text, full_answer, dialogue=True)
         out = {
             "ok": True,
             "transcript": text,
-            "answer": spoken_answer,
+            "answer": full_answer,
+            "spoken_answer": spoken_answer,
             "audio": str(artifact.path or ""),
             "cached": artifact.cached,
             "provider": artifact.provider,
             "detail": artifact.detail or chat_result.detail,
+            "truncated": chat_result.truncated,
             "model": chat_result.model,
             "stt_ms": 0,
             "chat_ms": chat_ms,
@@ -3142,7 +3851,15 @@ class FusionReaderV2:
             "voice_detected": _meta_text("voice_detected") in {"1", "true", "True", "yes", "si", "sí"},
             "cut_reason": _meta_text("cut_reason", "unknown"),
         }
-        transcript = self.stt.transcribe_file(path, mime=mime, language=self.voice.language)
+        check_laboratory_turn()
+        cancel = turn_cancellation.get()
+        if cancel is not None:
+            transcript = self.stt.transcribe_file_cancellable(
+                path, mime=mime, language=self.voice.language, cancel_event=cancel, request_id=uuid4().hex
+            )
+        else:
+            transcript = self.stt.transcribe_file(path, mime=mime, language=self.voice.language)
+        check_laboratory_turn()
         stt_elapsed_ms = int((time.perf_counter() - started) * 1000)
         if not transcript.ok:
             if transcript.detail == "hallucinated_transcript":
@@ -3423,19 +4140,10 @@ class FusionReaderV2:
     def shutdown_background_work(self, timeout: float = 10.0) -> dict:
         return self._lifecycle_service.shutdown(timeout)
 
-    def _shorten_dialogue_answer(self, answer: str) -> str:
-        text = " ".join(str(answer or "").split()).strip()
-        limit = max(80, self.dialogue_tts_max_chars)
-        if len(text) <= limit:
-            return text
-        clipped = text[:limit].rstrip()
-        sentence_end = max(clipped.rfind("."), clipped.rfind("?"), clipped.rfind("!"))
-        if sentence_end >= 80:
-            return clipped[: sentence_end + 1].strip()
-        word_end = clipped.rfind(" ")
-        if word_end >= 80:
-            return clipped[:word_end].rstrip().rstrip(",;:") + "."
-        return clipped.rstrip(",;:") + "."
+    @staticmethod
+    def _dialogue_spoken_text(answer: str) -> str:
+        text = re.sub(r"\[([^\]\n]+)\]\(https?://[^\s)]+\)", r"\1", answer)
+        return re.sub(r"(?:[ \t]*\|[ \t]*)?https?://[^\s<>]+", "", text).strip()
 
     def notes_summary(self) -> dict:
         result = self._notes_service.summary()

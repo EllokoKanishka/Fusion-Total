@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import socket
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 
 from fusion_reader_v2 import local_web_bridge
 from fusion_reader_v2.openclaw_bridge import ExternalResearchBridge, ExternalResearchResult
+from fusion_reader_v2.services.research import ResearchService
 
 
 class Response:
@@ -44,9 +47,12 @@ class StubBridge(ExternalResearchBridge):
 class SearxngBridgeMatrixTests(unittest.TestCase):
     def test_available_disabled_success_and_failure(self) -> None:
         self.assertFalse(local_web_bridge.SearxngResearchBridge(enabled=False).available())
-        bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local", timeout_seconds=4)
-        with mock.patch.object(local_web_bridge, "urlopen", return_value=Response({}, status=204)):
+        bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local/search", timeout_seconds=4)
+        with mock.patch.object(local_web_bridge, "urlopen", return_value=Response({"engines": []})) as open_url:
             self.assertTrue(bridge.available())
+            self.assertEqual(open_url.call_args.args[0].full_url, "http://local/config")
+        with mock.patch.object(local_web_bridge, "urlopen", return_value=Response(raw=b"<html>Open WebUI</html>")):
+            self.assertFalse(bridge.available())
         with mock.patch.object(local_web_bridge, "urlopen", side_effect=URLError("down")):
             self.assertFalse(bridge.available())
 
@@ -75,6 +81,93 @@ class SearxngBridgeMatrixTests(unittest.TestCase):
         self.assertNotIn("<b>", result.answer)
         self.assertNotIn("https://", result.spoken_answer)
         self.assertTrue(result.findings)
+
+    def test_news_for_today_prioritizes_publication_dates_and_marks_undated_results(self) -> None:
+        bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local", max_results=2)
+        now = datetime.now().astimezone()
+        old = {
+            "title": "Ayer",
+            "url": "https://example.test/ayer",
+            "publishedDate": (now - timedelta(days=1)).isoformat(),
+        }
+        undated = {"title": "Fecha pendiente", "url": "https://example.test/sin-fecha"}
+        current = {"title": "Hoy", "url": "https://example.test/hoy", "publishedDate": now.isoformat()}
+        with mock.patch.object(local_web_bridge, "urlopen") as open_url:
+            open_url.return_value = Response({"results": [old, undated, current]})
+            result = bridge.research_news("geopolítica", today=True)
+            params = parse_qs(urlsplit(open_url.call_args.args[0].full_url).query)
+            self.assertEqual(params["categories"], ["news"])
+            self.assertEqual(params["time_range"], ["day"])
+            self.assertEqual(params["q"], ["geopolítica"])
+            self.assertEqual([item["url"] for item in result.sources], [current["url"]])
+            self.assertEqual(result.sources[0]["published_date"], now.date().isoformat())
+            open_url.return_value = Response({"results": [old, undated]})
+            unconfirmed = bridge.research_news("geopolítica", today=True)
+            self.assertEqual(unconfirmed.detail, "external_research_news_unconfirmed")
+            self.assertEqual([item["url"] for item in unconfirmed.sources], [undated["url"]])
+            self.assertIn("sin fecha verificable", unconfirmed.answer)
+            self.assertIn("sin fecha verificable", unconfirmed.spoken_answer)
+
+    def test_daily_news_retries_without_the_engine_date_filter(self) -> None:
+        bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local")
+        now = datetime.now().astimezone()
+        recent = {
+            "title": "Fecha confirmada",
+            "url": "https://example.test/hoy",
+            "publishedDate": now.isoformat(),
+        }
+        earlier = {**recent, "url": "https://example.test/ayer", "publishedDate": (now - timedelta(days=1)).isoformat()}
+        unknown = {"title": "Fecha desconocida", "url": "https://example.test/incierto"}
+        with mock.patch.object(
+            local_web_bridge,
+            "urlopen",
+            side_effect=[Response({"results": []}), Response({"results": [earlier, unknown, recent]})],
+        ) as opening:
+            result = bridge.research_news("geopolítica", today=True)
+        first, second = [parse_qs(urlsplit(call.args[0].full_url).query) for call in opening.call_args_list]
+        self.assertEqual(first["time_range"], ["day"])
+        self.assertNotIn("time_range", second)
+        self.assertEqual([source["url"] for source in result.sources], [recent["url"]])
+
+    def test_daily_news_presents_only_reviewed_provider_results(self) -> None:
+        provider = local_web_bridge.SearxngResearchBridge()
+        today = datetime.now().astimezone().date().isoformat()
+        original = {"title": "Coincidencia tangencial", "url": "https://example.test/ruido", "published_date": today}
+        relevant = {"title": "Una negociación concreta", "url": "https://example.test/nota", "published_date": today}
+        review = mock.Mock(return_value='{"relevant":[2,2,99]}')
+        with mock.patch.object(
+            provider,
+            "research_news",
+            side_effect=[
+                ExternalResearchResult(True, provider="searxng", sources=[original]),
+                ExternalResearchResult(True, provider="searxng", sources=[relevant]),
+            ],
+        ) as search:
+            result = ResearchService(provider).research(
+                "Buscá las noticias de geopolítica de hoy.",
+                news_queries=lambda _topic: '{"queries":["política internacional"]}',
+                review_news_sources=review,
+            )
+        self.assertEqual(search.call_args_list, [
+            mock.call("geopolítica", today=True), mock.call("política internacional", today=True),
+        ])
+        self.assertEqual(result.query, "geopolítica | política internacional")
+        self.assertEqual([source["url"] for source in result.sources], [relevant["url"]])
+        self.assertNotIn(original["title"], result.answer)
+        self.assertIn(relevant["title"], result.spoken_answer)
+
+    def test_scientific_search_has_a_bounded_engine_deadline_and_bibliographic_fallback(self) -> None:
+        bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local", timeout_seconds=12)
+        article = {"results": [{"title": "Educación e IA", "url": "https://doi.org/10.1234/example"}]}
+        with mock.patch.object(
+            local_web_bridge, "urlopen", side_effect=[Response({"results": []}), Response(article)]
+        ) as opening:
+            self.assertTrue(bridge.research_academic("educación IA 2026").ok)
+        first, second = [parse_qs(urlsplit(call.args[0].full_url).query) for call in opening.call_args_list]
+        self.assertEqual(first["categories"], ["scientific publications"])
+        self.assertLess(float(first["timeout_limit"][0]), 12)
+        self.assertEqual(second["engines"], ["crossref,semantic scholar"])
+        self.assertEqual(first["q"], second["q"])
 
     def test_research_external_failure_matrix(self) -> None:
         bridge = local_web_bridge.SearxngResearchBridge(base_url="http://local")

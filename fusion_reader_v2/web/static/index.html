@@ -121,15 +121,25 @@
           <select id="veilSelect" class="compact-select" aria-label="Velo"></select>
           <select id="chatProviderSelect" class="compact-select" aria-label="Modelo de inteligencia">
             <option value="local">IA: Local 14B</option>
-            <option value="openai">IA: OpenAI</option>
+            <option value="deepseek">IA: DeepSeek R1 32B</option>
+            <option value="gemma">IA: Gemma 4 26B Q4</option>
+            <option value="lfm">IA: LFM2.5 24B Q4</option>
+            <option value="openai" selected>IA: OpenAI</option>
           </select>
+          <details id="openaiUsageMenu" class="skins-menu">
+            <summary>Uso de OpenAI</summary>
+            <div class="skins-menu-options openai-usage-panel">
+              <div id="openaiUsageStatus" role="status"></div>
+              <button id="openaiUsageRefresh" class="compact-btn" type="button">Actualizar uso</button>
+            </div>
+          </details>
           <select id="voiceSelect" class="compact-select" aria-label="Voz"></select>
         </div>
         <div id="ttsChip" class="status"><span id="ttsDot" class="dot"></span><span id="ttsStatus">TTS sin comprobar</span></div>
         <div id="sttChip" class="status"><span id="sttDot" class="dot"></span><span id="sttStatus">STT sin comprobar</span></div>
       </header>
 
-      <section class="reader">
+      <section id="readerPane" class="reader">
         <div id="chunk" class="chunk empty" tabindex="0">Subí un TXT o MD para empezar.</div>
         <div id="readerEditor" class="reader-editor" hidden>
           <textarea id="readerEditText" class="reader-edit-text" aria-label="Texto completo del documento" spellcheck="true"></textarea>
@@ -180,17 +190,22 @@
       </section>
     </main>
 
-    <section class="lab">
-      <h2><button id="labToggle" class="lab-toggle" type="button" aria-expanded="true" aria-controls="labContent">Laboratorio</button></h2>
+    <section class="lab" aria-labelledby="labToggle">
+      <div class="panel-switches" role="group" aria-label="Paneles visibles">
+        <button id="labToggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="labContent">Laboratorio</button>
+        <button id="readerToggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="readerPane readerControls">Lector</button>
+      </div>
       <div id="labContent" class="lab-content">
         <div id="labFocus" class="lab-focus"><strong>Foco del laboratorio</strong>Sin foco activo.</div>
+        <button id="laboratoryOlder" class="compact-btn" type="button" hidden>Cargar turnos anteriores</button>
         <div id="chatLog" class="chat-log" aria-live="polite">
           <div class="chat-msg system">Cargá un documento y preguntame por lo que está en pantalla.</div>
         </div>
         <textarea id="chatInput" class="chat-input" placeholder="Escribí sobre el texto actual..."></textarea>
         <div class="lab-toolbar">
           <button id="sendChatBtn" class="primary compact-btn">Enviar</button>
-          <label class="toggle compact-toggle"><input id="allowExternalResearch" type="checkbox" autocomplete="off"> Buscar en internet (una consulta)</label>
+          <button id="cancelChatBtn" class="compact-btn" type="button" hidden>Cancelar respuesta</button>
+          <label class="toggle compact-toggle"><input id="allowExternalResearch" type="checkbox" autocomplete="off"> Buscar en internet</label>
           <button id="clearLabHistoryBtn" class="compact-btn" type="button">Borrar historial</button>
           <button id="dialogueBtn" class="primary compact-btn">Dialogar</button>
           <button id="freeModeBtn" class="mode-toggle-btn compact-btn" type="button">Modo libre</button>
@@ -290,6 +305,14 @@
             <a id="mediaAudioDownload" href="#" class="upload-info download-link is-hidden" download>Descargar audio castellano</a>
           </div>
         </div>
+      </section>
+      <section class="laboratory-conversations" aria-labelledby="laboratoryConversationsTitle">
+        <div class="laboratory-conversation-heading">
+          <h2 id="laboratoryConversationsTitle">Conversaciones</h2>
+          <button id="newLabConversation" type="button" class="compact-btn">Nueva</button>
+        </div>
+        <p id="laboratoryConversationsInfo" class="sub" role="status"></p>
+        <ul id="laboratoryConversations" class="laboratory-conversation-list"></ul>
       </section>
     </aside>
     <section id="dictationWorkspace" class="dictation-workspace" aria-labelledby="dictationTitle" hidden>

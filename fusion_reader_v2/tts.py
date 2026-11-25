@@ -20,6 +20,7 @@ from pathlib import Path
 from .config import environment_value
 from .network import is_local_endpoint_host
 from .owned_subprocess import run_owned
+from .laboratory_turn import LaboratoryTurnCancelled, read_turn_response, turn_cancellation
 
 
 def _truthy(value: str | None, default: bool = True) -> bool:
@@ -372,14 +373,18 @@ class AllTalkProvider(TTSProvider):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = json.loads(read_turn_response(req, timeout=self.timeout_seconds, urlopen=urllib.request.urlopen))
             audio_ref = data.get("output_file_url") or data.get("audio_url") or data.get("file_url")
             if not audio_ref:
                 return AudioArtifact(False, provider=self.name, detail="no_audio_url")
             audio_url = self._audio_url(str(audio_ref))
-            with urllib.request.urlopen(audio_url, timeout=self.timeout_seconds) as audio_resp:
-                audio = audio_resp.read()
+            if turn_cancellation.get() is None:
+                with urllib.request.urlopen(audio_url, timeout=self.timeout_seconds) as audio_resp:
+                    audio = audio_resp.read()
+            else:
+                audio = read_turn_response(
+                    urllib.request.Request(audio_url), timeout=self.timeout_seconds, urlopen=urllib.request.urlopen
+                )
             fd, name = tempfile.mkstemp(prefix="fusion_reader_v2_alltalk_", suffix=".wav")
             os.close(fd)
             path = Path(name)
@@ -396,6 +401,8 @@ class AllTalkProvider(TTSProvider):
                 source_url=audio_url,
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
+        except LaboratoryTurnCancelled:
+            raise
         except urllib.error.HTTPError as e:
             return AudioArtifact(
                 False,

@@ -9,7 +9,7 @@ const block = source.slice(source.indexOf('function stopDialoguePlaybackForTyped
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
-async function fixture({ capture, Context, api, fetch } = {}) {
+async function fixture({ capture, Context, api, fetch, researchToggle } = {}) {
   const { createDialogueState } = await import(pathToFileURL(path.resolve('fusion_reader_v2/web/static/js/dialogue.mjs')).href);
   const audio = await import(pathToFileURL(path.resolve('fusion_reader_v2/web/static/js/audio.mjs')).href);
   const dialogue = createDialogueState();
@@ -27,15 +27,17 @@ async function fixture({ capture, Context, api, fetch } = {}) {
   }
   const messages = [];
   const context = {
-    dialogue, chatProviderChoice: 'local', ...audio, Blob, URLSearchParams, AbortController, Float32Array, Uint8Array,
+    dialogue, chatProviderChoice: 'local', laboratorySession: 'test-window',
+    status: { document_generation: 1, laboratory_mode: { mode: 'document' } }, ...audio, Blob, URLSearchParams, AbortController, Float32Array, Uint8Array,
     performance: { now: () => now }, navigator: { mediaDevices: { getUserMedia: capture || (async () => stream) } },
-    document: { hidden: false }, window: { AudioContext: Context || AudioContext,
+    document: { hidden: false, getElementById: id => id === 'allowExternalResearch' ? researchToggle : null }, window: { AudioContext: Context || AudioContext,
       setTimeout(fn, ms) { const id = ++timerId; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); } },
     requestAnimationFrame: () => 1, cancelAnimationFrame() {},
     els: { dialoguePlayer: player, dialogueBtn: {} },
     setDialogueInfo() {}, currentReasoningLabel: () => 'Normal', laboratoryModeSummary: () => 'Libre',
     currentReasoningMode: () => 'normal', visibleChunkIndex: () => 0,
     addChatMessage(role, text) { messages.push([role, text]); return { isConnected: true, remove() {} }; },
+    addLaboratoryAnswer(data) { messages.push(['assistant', data.answer]); },
     refresh: async () => {}, refreshNotes: async () => {}, log() {}, dialogueModeSummary: () => '',
     fmtMs: () => '', formatDialogueTrace: () => '', renderGracefulResearchFailure: () => false,
     api: api || (async () => ({ ok: true, answer: 'Respuesta', audio_url: '/reply.wav' })),
@@ -45,6 +47,30 @@ async function fixture({ capture, Context, api, fetch } = {}) {
   vm.createContext(context); vm.runInContext(block, context);
   return { ...context, context, stream, track, player, messages, timers, setNow(value) { now = value; } };
 }
+
+test('typed dialogue and audio retain research permission until it is disabled', async () => {
+  const researchToggle = { checked: true };
+  const submitted = [];
+  const reply = { ok: true, answer: 'Respuesta' };
+  const f = await fixture({
+    researchToggle,
+    api: async (_route, payload) => { submitted.push(payload.allow_external_research); return reply; },
+    fetch: async url => {
+      submitted.push(new URLSearchParams(url.split('?')[1]).get('allow_external_research') === '1');
+      return { ok: true, json: async () => reply };
+    },
+  });
+  f.dialogue.active = true;
+  f.dialogue.stream = f.stream;
+  await f.sendTypedDialogue('Buscá información');
+  f.beginDialogueRecording();
+  await f.sendDialogueAudio(new Blob(['x'.repeat(2000)]), 'audio/wav');
+  assert.equal(researchToggle.checked, true);
+  researchToggle.checked = false;
+  await f.sendTypedDialogue('Otra búsqueda');
+  assert.deepEqual(submitted, [true, true, false]);
+  f.stopDialogue();
+});
 
 test('stopping dialogue invalidates a late typed response even if transport ignores abort', async () => {
   const request = deferred();
@@ -63,6 +89,8 @@ test('stale audio response cannot play or clear the processing state of a new tu
   const f = await fixture({ fetch: async (url, options) => { signal = options.signal; return { ok: true, json: () => first.promise }; },
     api: route => route === '/api/dialogue/turn' ? second.promise : Promise.resolve({}) });
   f.dialogue.active = true;
+  f.dialogue.stream = f.stream;
+  f.beginDialogueRecording();
   const audio = f.sendDialogueAudio(new Blob(['x'.repeat(2000)]), 'audio/wav');
   await tick();
   f.stopDialogue();
@@ -76,6 +104,18 @@ test('stale audio response cannot play or clear the processing state of a new tu
   second.resolve({ ok: true, answer: 'Nueva', audio_url: '/new.wav' });
   await typed;
   assert.equal(f.player.plays, 1);
+  f.stopDialogue();
+});
+
+test('switching provider during a recording keeps that audio on the device', async () => {
+  let uploads = 0;
+  const f = await fixture({ fetch: async () => { uploads++; } });
+  f.dialogue.active = true;
+  f.dialogue.stream = f.stream;
+  f.beginDialogueRecording();
+  f.context.chatProviderChoice = 'openai';
+  await f.sendDialogueAudio(new Blob(['x'.repeat(2000)]), 'audio/wav');
+  assert.equal(uploads, 0);
   f.stopDialogue();
 });
 
@@ -131,4 +171,25 @@ test('hidden dialogue page releases the microphone through its real visibility l
   listener();
   assert.equal(f.dialogue.active, false);
   assert.ok(f.track.calls >= 1);
+});
+
+test('failed provider selection keeps the confirmed model and invalidates old voice work', async () => {
+  const modelSwitch = source.slice(source.indexOf('async function setChatProvider('),
+      source.indexOf('async function setProfileMode('));
+  const requested = deferred();
+  const f = await fixture({ api: route => route === '/api/chat/provider' ? requested.promise : Promise.resolve({}) });
+  f.dialogue.active = true;
+  const original = f.context.beginDialogueTurn();
+  f.context.changingChatProvider = false;
+  f.context.els.chatProviderSelect = { disabled: false, value: 'openai' };
+  f.context.invalidateLaboratoryTurn = () => f.context.stopDialogue();
+  vm.runInContext(modelSwitch, f.context);
+  const changing = f.context.setChatProvider('openai');
+  assert.equal(f.context.chatProviderChoice, 'local');
+  assert.equal(original.controller.signal.aborted, true);
+  requested.resolve({ ok: false, error: 'Fallo de prueba' });
+  await changing;
+  assert.equal(f.context.chatProviderChoice, 'local');
+  assert.equal(f.context.els.chatProviderSelect.value, 'local');
+  assert.equal(f.context.els.chatProviderSelect.disabled, false);
 });

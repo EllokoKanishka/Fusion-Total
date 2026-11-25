@@ -7,7 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import unquote
 
-from fusion_reader_v2.documents import converted_document_id, import_document_bytes, safe_filename
+from fusion_reader_v2.documents import ImportedDocument, converted_document_id, doc_id_for_filename, safe_filename
 from fusion_reader_v2.reader import chunk_selection_utf16
 from fusion_reader_v2.web.errors import APIError
 from fusion_reader_v2.web.downloads import unique_download_target
@@ -127,9 +127,14 @@ def save_edited_document(context: WebContext, payload: dict) -> dict:
     data = output.getvalue()
     with context.import_publication({"document_generation": generation}):
         target = unique_download_target(context, f"{stem} - editado.docx")
-        imported = import_document_bytes(target.name, data)
-        if not imported.text:
-            raise APIError("empty_document_edit", "La copia tiene que contener texto.")
+        # The editor text is the source for both the Word copy and the reader session.
+        imported = ImportedDocument(
+            doc_id=doc_id_for_filename(target.name),
+            title=target.name,
+            text=text,
+            source_type="docx",
+            detail="copia de Word editada",
+        )
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".panda-edit-") as temporary:
             temporary.write(data)
             temporary.flush()

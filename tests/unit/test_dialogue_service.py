@@ -25,7 +25,7 @@ class DialogueServiceTests(unittest.TestCase):
                 "external_research": {},
             },
         )
-        service.remember_chat_turn("hola", "respuesta")
+        service.remember_turn("hola", "respuesta")
         self.assertEqual(len(service.chat_history), 2)
         self.assertEqual(service.set_profile("bohemia")["mode"], "bohemia")
         self.assertEqual(service.set_laboratory_mode("free")["mode"], "free")

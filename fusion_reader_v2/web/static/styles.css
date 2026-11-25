@@ -275,20 +275,72 @@ main {
 .lab-content[hidden] {
   display: none;
 }
-.lab-toggle {
+.laboratory-conversations {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.laboratory-conversation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.laboratory-conversation-list {
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.laboratory-conversation-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: start;
+}
+.laboratory-conversation-list .laboratory-conversation-delete {
+  width: auto;
+  text-align: center;
+}
+.laboratory-conversation-list button {
+  width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.laboratory-conversation-list button[aria-current="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.panel-switches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.panel-toggle {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 24px;
-  padding: 3px 6px 3px 2px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-size: inherit;
-  font-weight: inherit;
-  cursor: pointer;
+  min-height: 30px;
+  padding: 4px 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.1;
 }
-.lab-toggle::before {
+.panel-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+.panel-toggle[aria-expanded="false"]:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.panel-toggle::before {
   content: "";
   width: 6px;
   height: 6px;
@@ -296,12 +348,27 @@ main {
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-.lab-toggle[aria-expanded="false"]::before {
+.panel-toggle[aria-expanded="false"]::before {
   transform: rotate(-45deg);
 }
-.lab-toggle:focus-visible {
+.panel-toggle:focus-visible {
   outline: 2px solid var(--accent-2);
   outline-offset: 2px;
+}
+.app.reader-collapsed > main {
+  grid-template-rows: auto;
+  min-height: 0;
+}
+.app.reader-collapsed .reader,
+.app.reader-collapsed .controls {
+  display: none;
+}
+.app.reader-collapsed .lab-content {
+  grid-template-rows: fit-content(25%) minmax(0, 1fr) auto auto;
+}
+.app.reader-collapsed .lab-focus {
+  min-height: 0;
+  overflow: auto;
 }
 .app.lab-collapsed .lab {
   grid-template-rows: auto;
@@ -309,11 +376,17 @@ main {
   padding-block: 5px;
 }
 @media (min-width: 981px) {
+  .app.reader-collapsed:not(.dictation-open) {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
   .app.lab-collapsed:not(.dictation-open) {
     grid-template-rows: minmax(0, 1fr) auto;
   }
 }
 @media (max-width: 980px) {
+  .app.reader-collapsed > .lab {
+    height: max(450px, 80dvh);
+  }
   .app.lab-collapsed:not(.dictation-open) {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto;
@@ -324,9 +397,6 @@ main {
 }
 html[data-skin="neon"] .app.lab-collapsed .lab {
   clip-path: none;
-}
-html[data-skin="neon"] .app.lab-collapsed .lab h2::after {
-  content: none;
 }
 h1, h2 {
   margin: 0;
@@ -1298,6 +1368,18 @@ textarea {
   background: var(--surface-deep);
   box-shadow: 0 10px 24px rgba(0, 0, 0, .36);
 }
+.openai-usage-panel {
+  width: min(270px, 75vw);
+  line-height: 1.4;
+  padding: 10px;
+  font-size: 12px;
+}
+.openai-usage-panel p {
+  margin: 0 0 6px;
+}
+.openai-usage-panel button {
+  justify-self: start;
+}
 .skins-menu-options button {
   min-height: 25px;
   padding: 4px 7px;
@@ -1383,6 +1465,13 @@ html[data-skin="neon"] .skins-menu-options {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    flex-wrap: nowrap;
+  }
+  .title {
+    flex: none;
+  }
+  .header-selectors {
+    margin-inline: 0;
   }
   .status {
     white-space: normal;
@@ -1393,6 +1482,7 @@ html[data-skin="neon"] .skins-menu-options {
   }
   .dialogue-info,
   .reasoning-caption {
+    max-width: 100%;
     white-space: normal;
   }
 }
@@ -1920,12 +2010,6 @@ html[data-skin="neon"] .lab {
   padding: 15px 18px;
   border-radius: 5px 18px 5px 18px;
   background: linear-gradient(135deg, rgba(9, 9, 22, .97), rgba(21, 8, 34, .96));
-}
-html[data-skin="neon"] .lab h2::after {
-  content: " / CONVERSACIÓN ANCLADA";
-  color: #98b7c9;
-  font: 700 9px/1 "IBM Plex Mono", monospace;
-  letter-spacing: .14em;
 }
 html[data-skin="neon"] .lab-focus,
 html[data-skin="neon"] .chat-log,

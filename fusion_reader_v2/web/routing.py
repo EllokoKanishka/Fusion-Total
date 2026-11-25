@@ -35,12 +35,12 @@ class Router:
 
     def dispatch_get(self, responder, path: str, raw_path: str) -> bool:
         handlers = (
-            lambda: handle_health_get(responder, path),
+            lambda: handle_health_get(responder, path, raw_path),
             lambda: handle_audio_get(responder, path, raw_path),
             lambda: handle_preparation_get(responder, path),
             lambda: handle_reading_get(responder, path, raw_path),
             lambda: handle_notes_get(responder, path, raw_path),
-            lambda: handle_dialogue_get(responder, path),
+            lambda: handle_dialogue_get(responder, path, raw_path),
             lambda: handle_dictation_get(responder, path),
             lambda: handle_tools_get(responder, path, raw_path),
             lambda: handle_media_get(responder, path),
@@ -89,6 +89,9 @@ def create_router() -> Router:
         "/api/notes",
         "/api/notes/legacy",
         "/api/dialogue/status",
+        "/api/chat/openai/usage",
+        "/api/laboratory/conversations",
+        "/api/laboratory/conversation",
         "/api/dictation/assistant",
         "/api/import-status",
         "/api/media/status",

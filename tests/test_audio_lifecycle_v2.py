@@ -442,9 +442,9 @@ class AudioLifecycleFrontendTests(unittest.TestCase):
                 "if (dialogue.active) {",
             ),
             "clearLaboratoryHistory()": (
-                "async function clearLaboratoryHistory()",
+                "async function clearLaboratoryHistory(session",
                 "function dialogueMimeType()",
-                "const data = await api('/api/laboratory/reset', {});",
+                "await api('/api/laboratory/reset',",
             ),
         }
         for name, (start_marker, end_marker, first_action) in blocks.items():

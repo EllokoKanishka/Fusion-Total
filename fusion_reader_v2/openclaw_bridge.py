@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import environment_copy, environment_value
 from .owned_subprocess import run_owned
+from .laboratory_turn import check_laboratory_turn, turn_cancellation
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,12 @@ class ExternalResearchBridge:
             False, detail="not_implemented", provider=self.name, query=str(request or "").strip()
         )
 
+    def research_academic(self, query: str) -> ExternalResearchResult:
+        return self.research(query, snapshot={})
+
+    def research_news(self, query: str, *, today: bool = False) -> ExternalResearchResult:
+        return self.research(query, snapshot={})
+
 
 class NullExternalResearchBridge(ExternalResearchBridge):
     name = "null_external_research"
@@ -59,6 +66,9 @@ class NullExternalResearchBridge(ExternalResearchBridge):
 
 class OpenClawResearchBridge(ExternalResearchBridge):
     name = "openclaw_bridge"
+
+    def research_academic(self, query: str) -> ExternalResearchResult:
+        return self.research(f"Bibliografía académica sobre {query}", snapshot={})
 
     def __init__(
         self,
@@ -147,6 +157,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_seconds + 5.0,
+                    cancel_event=turn_cancellation.get(),
                     env=env,
                     check=False,
                 )
@@ -160,6 +171,7 @@ class OpenClawResearchBridge(ExternalResearchBridge):
                     query=query,
                     duration_ms=int((time.perf_counter() - started) * 1000),
                 )
+            check_laboratory_turn()
             raw = (proc.stdout or proc.stderr or "").strip()
             parsed = self._extract_json_payload(raw)
             if not parsed:
@@ -242,7 +254,6 @@ class OpenClawResearchBridge(ExternalResearchBridge):
         meta = meta_value if isinstance(meta_value, dict) else {}
         agent_meta_value = meta.get("agentMeta")
         agent_meta = agent_meta_value if isinstance(agent_meta_value, dict) else {}
-        provider = str(agent_meta.get("provider") or self.name)
         model = str(agent_meta.get("model") or self.agent)
         payloads_value = result.get("payloads")
         payloads = payloads_value if isinstance(payloads_value, list) else []
@@ -254,10 +265,6 @@ class OpenClawResearchBridge(ExternalResearchBridge):
         combined_text = "\n".join(text_parts).strip()
         inner = self._extract_json_payload(combined_text)
         parsed = inner if isinstance(inner, dict) else {}
-        summary = str(parsed.get("summary") or "").strip()
-        findings = self._sanitize_findings(parsed.get("findings"))
-        sources = self._sanitize_sources(parsed.get("sources"))
-        suggested = str(parsed.get("suggested_followup") or "").strip()
         stop_reason = str(result.get("stopReason") or "").strip().lower()
         detail = str(parsed.get("error") or "").strip()
         ok = bool(parsed.get("ok")) if parsed else bool(payload.get("status") == "ok")
@@ -266,26 +273,31 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             ok = False
             if not detail:
                 detail = "bridge_rate_limit" if "rate limit" in combined_lower else "bridge_error"
-        if not summary:
-            summary = combined_text or (
-                "Investigacion externa completada." if ok else "No pude completar la investigacion externa."
+        if ok:
+            # The agent payload contains generated text. The CLI response does
+            # not provide a trusted record of the search calls and their hits.
+            return ExternalResearchResult(
+                False,
+                answer="OpenClaw respondió, pero no expuso un registro verificable de búsqueda. No confirmé sus fuentes.",
+                spoken_answer="OpenClaw respondió, pero no pude verificar sus fuentes.",
+                detail="openclaw_search_unverified",
+                provider=self.name,
+                model=model,
+                duration_ms=duration_ms,
+                query=query,
+                raw_text=raw_text,
             )
-        if not ok:
-            summary, detail = self._humanize_failure(summary, detail, combined_text or raw_text)
-        answer = self._format_answer(query, summary, findings, sources, suggested, ok=ok)
-        spoken_answer = self._format_spoken_answer(summary, findings, ok=ok)
+        summary, detail = self._humanize_failure("", detail, combined_text or raw_text)
         return ExternalResearchResult(
-            ok=ok,
-            answer=answer,
-            spoken_answer=spoken_answer,
-            detail=detail or ("external_research_ok" if ok else "external_research_failed"),
-            provider=provider,
+            False,
+            answer=summary,
+            spoken_answer=re.sub(r"https?://\S+", "", summary).strip(),
+            detail=detail,
+            provider=self.name,
             model=model,
             duration_ms=duration_ms or int(meta.get("durationMs") or 0),
-            query=str(parsed.get("query") or query).strip(),
+            query=query,
             summary=summary,
-            findings=findings,
-            sources=sources,
             raw_text=raw_text,
         )
 
@@ -339,74 +351,6 @@ class OpenClawResearchBridge(ExternalResearchBridge):
             "Salí a investigar afuera, pero hubo un problema en OpenClaw y no pude completar la búsqueda externa.",
             detail or "external_research_failed",
         )
-
-    def _format_answer(
-        self, query: str, summary: str, findings: list[str], sources: list[dict], suggested: str, *, ok: bool
-    ) -> str:
-        lines = []
-        if ok:
-            lines.append(f"Sali a investigar afuera sobre: {query}.")
-        else:
-            lines.append("Intente salir a investigar afuera, pero hubo un problema.")
-        if summary:
-            lines.append(summary)
-        if findings:
-            lines.append("Hallazgos:")
-            for finding in findings[:5]:
-                lines.append(f"- {finding}")
-        if sources:
-            lines.append("Fuentes:")
-            for source in sources[:5]:
-                title = str(source.get("title") or "Fuente").strip()
-                url = str(source.get("url") or "").strip()
-                note = str(source.get("note") or "").strip()
-                chunk = title
-                if note:
-                    chunk += f" | {note}"
-                if url:
-                    chunk += f" | {url}"
-                lines.append(f"- {chunk}")
-        if suggested and ok:
-            lines.append(f"Seguimiento sugerido: {suggested}")
-        return "\n".join(line for line in lines if line).strip()
-
-    def _format_spoken_answer(self, summary: str, findings: list[str], *, ok: bool) -> str:
-        pieces = []
-        pieces.append(
-            summary if summary else ("Investigacion externa lista." if ok else "La investigacion externa fallo.")
-        )
-        if findings:
-            pieces.append(" ".join(findings[:2]))
-        text = " ".join(piece.strip() for piece in pieces if piece.strip())
-        text = re.sub(r"https?://\S+", "", text).strip()
-        return text or ("Investigacion externa lista." if ok else "La investigacion externa fallo.")
-
-    def _sanitize_findings(self, value: object) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        out: list[str] = []
-        for item in value:
-            text = " ".join(str(item or "").split()).strip()
-            if text:
-                out.append(text)
-        return out
-
-    def _sanitize_sources(self, value: object) -> list[dict]:
-        if not isinstance(value, list):
-            return []
-        out: list[dict] = []
-        for item in value:
-            if isinstance(item, dict):
-                title = " ".join(str(item.get("title") or "").split()).strip()
-                url = " ".join(str(item.get("url") or "").split()).strip()
-                note = " ".join(str(item.get("note") or "").split()).strip()
-            else:
-                title = " ".join(str(item or "").split()).strip()
-                url = ""
-                note = ""
-            if title or url or note:
-                out.append({"title": title, "url": url, "note": note})
-        return out
 
     def _extract_json_payload(self, text: str) -> dict | None:
         clean = str(text or "").strip()

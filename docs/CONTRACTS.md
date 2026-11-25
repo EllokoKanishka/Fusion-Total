@@ -36,8 +36,8 @@ conversion symbols exported by `fusion_reader_v2.__init__` remain available.
 - document chat and explicit external research;
 - text/audio dialogue and reset;
 - dictation text interpretation and ephemeral audio transcription;
-- explicit dialogue-provider selection (`local` or `openai`) through
-  `POST /api/chat/provider`; the selected value is session-persistent;
+- explicit dialogue-provider selection through `POST /api/chat/provider`;
+  available IDs are published in the Laboratory provider catalog;
 - laboratory anchor, profile, veil, and reasoning modes;
 - deterministic background shutdown.
 
@@ -82,12 +82,78 @@ Model selection for browser turns:
   `provider` for the entire turn. The browser starts a new window without
   cloud consent and includes its provider selection in every turn.
 - Requests without an explicit provider cannot inherit an OpenAI preference.
-  Cloud reader turns omit the shared chat and dialogue history.
+  Chat and both dialogue endpoints accept a UUIDv4 `laboratory_session`.
+  Recent turns and the selected Laboratory focus stay in memory within that
+  session, provider, document generation and Laboratory mode. Cloud reader turns without a
+  session omit prior turns. Passing the visible `document_generation` lets
+  the server reject a turn captured before a document change.
+- Resetting with `laboratory_session` clears that window's histories. The
+  browser issues a new UUID for subsequent turns.
 - External research in the web API requires `allow_external_research: true`
   for chat and typed dialogue, or `allow_external_research=1` for audio
-  dialogue. The browser clears the permission after each submitted turn.
-  An affirmative search request is still required. The bridge receives
-  only the query, and a prohibition takes precedence over the permission.
+  dialogue. The browser sends the current setting on each request and
+  remembers it locally until the user switches it off.
+  An affirmative search request is still required. It can follow a separate
+  spoken sentence. Framed examples, quotations, and prohibitions do not
+  authorize a search. Uncertain requests receive a clarification. Panda keeps
+  the searchable portion of an independent request, with its original accents.
+  Questions about whether Panda can or did search use the turn permission
+  and the research record, independently of the conversational model.
+  SearXNG news requests use its news category. For «hoy», Panda asks for a
+  one-day window and checks the reported date in the local timezone. Without
+  dated results for today, any shown undated links are identified as unconfirmed.
+  An academic request can follow an instruction about which passage to use.
+  References such as «esos puntos» use the preceding scoped conversation.
+  A browser session can resume a pending request when permission is granted
+  on a later turn. An immediate retry uses the previous request and its
+  original context. For a request about the passage, the selected
+  model proposes up to three short queries. SearXNG uses its scientific
+  publications category. The selected model checks the titles and snippets
+  against the topic. A request for one article that connects the preceding
+  topics searches for their intersection. Each candidate is assessed
+  against all the requested themes. A covered theme requires a matching
+  excerpt from the candidate and partial coverage is identified.
+  Panda only presents URLs returned by the search provider.
+  Research replies expose the actual external provider in `external_provider`.
+  Voice replies expose the full written answer and a separate spoken summary.
+  The last search remains available in the same laboratory scope after
+  intervening conversation. Provenance questions return the recorded queries,
+  sources, and selection topics without calling a conversational model or
+  repeating the search. SearXNG hits retain their query and engine when known.
+  Search retrieves titles, excerpts and URLs. PDF download and full-text
+  reading are distinct operations. Generated OpenClaw fallback output without
+  search receipts does not count as verified external results.
+  Today's news can use two bounded query variants to improve coverage. The
+  displayed hits retain the search provider's publication dates. Relevance
+  review can select only from those results.
+  For a follow-up in an OpenAI session, Panda keeps public source titles and
+  links from successful research and an outcome when a search found no useful
+  sources. Raw provider queries and snippets stay out of the conversational
+  history. A pending request can be resumed in the same conversation after
+  permission is granted, including after restart.
+- Indirect requests to consult the web may be classified by the selected
+  model into a bounded search action. Panda validates the action and checks
+  web permission before execution. General geopolitics headline requests can
+  retrieve dates and article links from the public UN News peace and security
+  section. Opening one of those links still runs through the public source
+  reader.
+- A request to open a search hit or a public URL uses Panda's source reader.
+  A page summary is based on retrieved article text. A publication date is
+  reported when exposed by the publisher. The result includes the final URL.
+  A PDF in a publisher's metadata is followed through the same public URL
+  boundary. Search, reading the source and saving it have distinct outcomes.
+  An explicit save writes the retrieved PDF under the configured Downloads
+  directory. An explicit request to incorporate it uses the reader's document
+  import path and adds a reference without changing the main document.
+- `GET /api/laboratory/conversations` returns the local conversation titles and
+  their last activity. `GET /api/laboratory/conversation?session=<uuid>` returns
+  up to 30 recent turns in chronological order, with source links.
+  Pass the returned `next_before` as `before` to retrieve the previous page.
+  A response cut by the model's generation limit carries `truncated: true`,
+  including after reopening. Completed written and transcribed audio turns
+  go into the same local archive. The model's
+  restored context remains scoped by conversation, provider, document and
+  laboratory mode. Clearing a conversation removes it from the archive.
 
 Dictation routes:
 

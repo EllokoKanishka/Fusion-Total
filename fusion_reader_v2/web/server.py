@@ -20,7 +20,9 @@ from fusion_reader_v2.documents import safe_filename
 from fusion_reader_v2.network import http_base_url
 from fusion_reader_v2.observability import configure_logging, get_logger
 from fusion_reader_v2.owned_subprocess import run_owned
-from fusion_reader_v2.turn_provider import use_turn_provider
+from fusion_reader_v2.laboratory_turn import LaboratoryTurnCancelled, laboratory_cancellation
+from fusion_reader_v2.resources import resource_work
+from fusion_reader_v2.turn_provider import LABORATORY_PROVIDERS, use_turn_provider
 from fusion_reader_v2.web.errors import APIError, error_response
 from fusion_reader_v2.web.context import WebContext
 from fusion_reader_v2.web.routes.documents import (
@@ -503,6 +505,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
+        if urlparse(self.path).path in {"/api/chat", "/api/dialogue/turn"}:
+            with laboratory_cancellation(self.connection) as cancel, resource_work(0, cancel):
+                self._post()
+        else:
+            self._post()
+
+    def _post(self) -> None:
         try:
             self._check_local_request()
             parsed = urlparse(self.path)
@@ -554,19 +563,24 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     with use_turn_provider(
                         (params.get("provider") or [""])[0],
-                        {"local", "openai"},
+                        LABORATORY_PROVIDERS,
                         "local",
                         allow_external_research=(params.get("allow_external_research") or [""])[0] == "1",
+                        laboratory_session=(params.get("laboratory_session") or [""])[0],
+                        laboratory_generation=int(value)
+                        if (value := params.get("document_generation", [""])[0])
+                        else None,
                     ):
+                        scope = self.app.capture_laboratory_archive_scope()
+                        result = self.app.dialogue_turn_audio(
+                            tmp_path,
+                            mime=content_type,
+                            model=str((params.get("model") or [""])[0]),
+                            chunk_index=chunk_index,
+                            audio_meta=audio_meta,
+                        )
                         self._result(
-                            200,
-                            self.app.dialogue_turn_audio(
-                                tmp_path,
-                                mime=content_type,
-                                model=str((params.get("model") or [""])[0]),
-                                chunk_index=chunk_index,
-                                audio_meta=audio_meta,
-                            ),
+                            200, self.app.archive_laboratory_turn(scope, str(result.get("transcript") or ""), result)
                         )
                 finally:
                     tmp_path.unlink(missing_ok=True)
@@ -583,6 +597,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if ROUTER.dispatch_post(self, path, payload):
                 return
+        except LaboratoryTurnCancelled:
+            self.close_connection = True
+            return
         except Exception as exc:
             self._request_error(exc)
             return
@@ -641,6 +658,7 @@ def main() -> None:
             models_dir=settings.resources.models_dir,
             port=settings.resources.private_ollama_port,
             reserve_mib=settings.resources.reserve_mib,
+            command=[settings.resources.ollama_bin, "serve"] if settings.resources.ollama_bin else None,
         )
         if settings.resources.ollama_mode == "dedicated"
         else None
